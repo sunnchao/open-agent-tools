@@ -1,0 +1,40 @@
+{
+  "name": "open-agent-tools",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "dev": "pnpm -r --parallel --if-present run dev",
+    "build": "pnpm -r --if-present run build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm -r --if-present run test",
+    "clean": "pnpm -r --if-present run clean",
+    "typecheck": "pnpm -r --if-present run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "@types/node": "^22.16.5",
+    "eslint": "^9.32.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.38.0"
+  },
+  "engines": {
+    "node": ">=22.5",
+    "pnpm": ">=10"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.3",
+    "@langchain/openai": "^1.5.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^16.6.1",
+    "langsmith": "^0.8.9"
+  }
+}

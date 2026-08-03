@@ -1,0 +1,41 @@
+{
+  "lc": 1,
+  "type": "constructor",
+  "id": [
+    "langchain_core",
+    "prompt_values",
+    "ChatPromptValue"
+  ],
+  "kwargs": {
+    "messages": [
+      {
+        "lc": 1,
+        "type": "constructor",
+        "id": [
+          "langchain_core",
+          "messages",
+          "SystemMessage"
+        ],
+        "kwargs": {
+          "content": "You are a helpful assistant. 但是你只知道有关 红楼梦 的内容，其它内容请拒绝一切回答。并以当前时间结尾。2026/7/27 19:15:29",
+          "additional_kwargs": {},
+          "response_metadata": {}
+        }
+      },
+      {
+        "lc": 1,
+        "type": "constructor",
+        "id": [
+          "langchain_core",
+          "messages",
+          "HumanMessage"
+        ],
+        "kwargs": {
+          "content": "你好，我想知道《西游记》的行数",
+          "additional_kwargs": {},
+          "response_metadata": {}
+        }
+      }
+    ]
+  }
+}

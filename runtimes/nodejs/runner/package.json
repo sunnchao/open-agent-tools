@@ -1,0 +1,24 @@
+{
+  "name": "@open-agent-tools/mcp-nodejs-runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "mcp-nodejs-runner": "./dist/cli.js"
+  },
+  "scripts": {
+    "prebuild": "pnpm --filter @open-agent-tools/mcp-contracts build",
+    "build": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm --filter @open-agent-tools/mcp-contracts build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "pretest": "pnpm --filter @open-agent-tools/mcp-contracts build",
+    "test": "tsx --test --test-concurrency=1",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@open-agent-tools/mcp-contracts": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}

@@ -1,0 +1,270 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Make antd Sider children a full-height flex column */
+.ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Chat column layout helpers */
+.chat-main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  flex: 1;
+}
+
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px 8px;
+  position: relative;
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+
+.session-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.session-item--active {
+  background: rgba(22, 119, 255, 0.18);
+}
+
+.session-item__title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.session-item__actions {
+  display: none;
+  flex-shrink: 0;
+}
+
+.session-item:hover .session-item__actions,
+.session-item--active .session-item__actions {
+  display: flex;
+  gap: 0;
+}
+
+.msg-row {
+  display: flex;
+  margin-bottom: 12px;
+}
+
+.msg-row--user {
+  justify-content: flex-end;
+}
+
+.msg-row--assistant,
+.msg-row--tool {
+  justify-content: flex-start;
+}
+
+.msg-bubble {
+  max-width: min(720px, 92%);
+}
+
+.msg-bubble--user {
+  background: rgba(22, 119, 255, 0.18);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+
+.msg-bubble--assistant {
+  width: 100%;
+  max-width: min(820px, 100%);
+}
+
+.msg__caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: caret-blink 1s step-end infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.tool-legacy {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+}
+
+.ui-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.tool-call-pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.tool-call-pre--error {
+  color: #ff7875;
+}
+
+.markdown {
+  font-size: 14px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.markdown > *:first-child {
+  margin-top: 0;
+}
+
+.markdown > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown pre,
+.markdown blockquote,
+.markdown table {
+  margin: 0 0 0.75em;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 1em 0 0.5em;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.markdown h1 {
+  font-size: 1.4em;
+}
+.markdown h2 {
+  font-size: 1.2em;
+}
+.markdown h3 {
+  font-size: 1.05em;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.4em;
+}
+
+.markdown a {
+  color: #69b1ff;
+}
+
+.markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.markdown pre {
+  position: relative;
+  padding: 28px 12px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow-x: auto;
+}
+
+.markdown pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.markdown .code-lang {
+  position: absolute;
+  top: 6px;
+  left: 10px;
+  font-size: 11px;
+  opacity: 0.55;
+  text-transform: lowercase;
+}
+
+.markdown .code-copy {
+  position: absolute !important;
+  top: 4px;
+  right: 4px;
+}
+
+.markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.markdown th {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.markdown blockquote {
+  border-left: 3px solid rgba(255, 255, 255, 0.2);
+  padding-left: 12px;
+  opacity: 0.9;
+}
+
+.markdown hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  margin: 1em 0;
+}

@@ -1,0 +1,39 @@
+.idea
+.vscode
+.omo
+.claude
+.workbuddy
+.planning
+.open-agent-tools
+.codegraph
+
+node_modules
+dist
+build
+coverage
+.turbo
+.superpowers
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+*.sqlite
+*.sqlite-journal
+apps/server/data/
+
+# PDF 解析生成产物（含 metadata.source，勿提交）
+apps/server/src/llm/langchains/pdf-content*.json
+
+# 本地 MCP 配置（含 token，勿提交；模板见 mcp.example.json）
+apps/cli/mcp.json
+
+# 自动生成的备份/脚本
+scripts/*.bak
+
+runtimes/**/fixtures/*
+
+temp
+
+docs/**

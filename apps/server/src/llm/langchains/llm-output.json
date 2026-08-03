@@ -1,0 +1,40 @@
+{
+  "lc": 1,
+  "type": "constructor",
+  "id": [
+    "langchain_core",
+    "messages",
+    "AIMessage"
+  ],
+  "kwargs": {
+    "id": "cht000d0895@dx19fa3497b0bb9cb312",
+    "content": "抱歉，我只了解有关《红楼梦》的内容，对于《西游记》的相关问题无法回答。\n\n2026/7/27 19:15:29",
+    "additional_kwargs": {},
+    "response_metadata": {
+      "tokenUsage": {
+        "promptTokens": 71,
+        "completionTokens": 39,
+        "totalTokens": 110
+      },
+      "finish_reason": "stop",
+      "model_provider": "openai",
+      "model_name": "xopqwen36v35b"
+    },
+    "type": "ai",
+    "tool_calls": [],
+    "invalid_tool_calls": [],
+    "usage_metadata": {
+      "output_tokens": 39,
+      "input_tokens": 71,
+      "total_tokens": 110,
+      "input_token_details": {
+        "audio": 0,
+        "cache_read": 0
+      },
+      "output_token_details": {
+        "audio": 0,
+        "reasoning": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "@open-agent-tools/mcp-control-plane",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "prebuild": "pnpm --filter @open-agent-tools/mcp-auth build && pnpm --filter @open-agent-tools/mcp-contracts build",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "pretypecheck": "pnpm --filter @open-agent-tools/mcp-auth build && pnpm --filter @open-agent-tools/mcp-contracts build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "pretest": "pnpm --filter @open-agent-tools/mcp-auth build && pnpm --filter @open-agent-tools/mcp-contracts build",
+    "test": "tsx --test --test-concurrency=1",
+    "clean": "rm -rf dist",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "@open-agent-tools/mcp-auth": "workspace:*",
+    "@open-agent-tools/mcp-contracts": "workspace:*",
+    "@aws-sdk/client-s3": "^3.883.0",
+    "@aws-sdk/s3-request-presigner": "^3.883.0",
+    "bullmq": "^5.58.5",
+    "dotenv": "^16.6.1",
+    "drizzle-orm": "^0.44.5",
+    "express": "^5.1.0",
+    "ioredis": "^5.7.0",
+    "jose": "^6.1.0",
+    "pg": "^8.16.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/pg": "^8.15.5",
+    "drizzle-kit": "^0.31.4"
+  }
+}

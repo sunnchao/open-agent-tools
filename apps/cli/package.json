@@ -1,0 +1,41 @@
+{
+  "name": "@open-agent-tools/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "open-agent-tools": "./dist/index.js"
+  },
+  "scripts": {
+    "predev": "pnpm --filter @open-agent-tools/deepagent build",
+    "dev": "tsx watch src/index.ts",
+    "prebuild": "pnpm --filter @open-agent-tools/deepagent build",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "pretypecheck": "pnpm --filter @open-agent-tools/deepagent build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "pretest": "pnpm --filter @open-agent-tools/deepagent build",
+    "test": "tsx --test src/*.test.ts src/**/*.test.ts",
+    "render:demo": "tsx scripts/markdown-demo.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.3",
+    "@langchain/openai": "^1.5.5",
+    "@open-agent-tools/deepagent": "workspace:*",
+    "@open-agent-tools/shared": "workspace:*",
+    "chalk": "^6.0.0",
+    "dotenv": "^16.6.1",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
+    "ora": "^9.4.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/marked-terminal": "^6.1.1"
+  }
+}

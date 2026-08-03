@@ -1,0 +1,13 @@
+Welcome to the open-agent-tools MCP server!
+
+This text resource is exposed over the Model Context Protocol (MCP) so that
+clients can read static, read-only content from the server.
+
+Available example resources:
+  - open-agent-tools://resources/welcome.txt   (this file, text/plain)
+  - open-agent-tools://resources/readme.md     (project docs, text/markdown)
+  - open-agent-tools://resources/diagram.svg   (architecture diagram, image/svg+xml)
+  - open-agent-tools://resources/logo.png      (project logo, image/png)
+  - open-agent-tools://reports/{status}        (dynamic resource template, application/json)
+
+Use resources/list to discover them and resources/read to fetch their contents.

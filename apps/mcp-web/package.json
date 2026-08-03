@@ -1,0 +1,32 @@
+{
+  "name": "@open-agent-tools/mcp-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 4300",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4300",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@open-agent-tools/mcp-contracts": "workspace:*",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.5",
+    "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^25.0.1",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.9"
+  }
+}

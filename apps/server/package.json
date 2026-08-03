@@ -1,0 +1,39 @@
+{
+  "name": "@open-agent-tools/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "tsx --test src/*.test.ts src/**/*.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@open-agent-tools/shared": "workspace:*",
+    "@langchain/anthropic": "^1.5.2",
+    "@langchain/community": "^1.1.29",
+    "@langchain/core": "^1.2.3",
+    "@langchain/langgraph": "^1.4.8",
+    "@langchain/openai": "^1.5.5",
+    "@langchain/textsplitters": "^1.0.1",
+    "chalk": "^6.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "langchain": "^1.5.4",
+    "openai": "^6.48.0",
+    "pdf-parse": "^1.1.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.3"
+  }
+}
