@@ -1,10 +1,10 @@
-# Agent Demo MCP 管理平台
+# open-agent-tools MCP 管理平台
 
 [English](./README_EN.md)
 
-本仓库是一个 pnpm + TypeScript Monorepo。本 README 重点介绍本次新增的 MCP 管理平台：管理员可以配置、构建、发布和回滚托管 MCP 服务，MCP 客户端通过 API Key 和细粒度授权访问已发布的 Tools 与 Prompts。
+本仓库是一个 pnpm + TypeScript Monorepo。本 README 重点介绍 MCP 管理平台：管理员可以配置、构建、发布和回滚托管 MCP 服务，MCP 客户端通过 API Key 和细粒度授权访问已发布的 Tools 与 Prompts。
 
-仓库中的 `apps/cli`、`apps/server` 和 `apps/web` 是原有 Agent/Chat 示例，与 MCP 管理平台可以独立运行。
+仓库中的 `apps/cli`（CLI Agent）、`apps/server` 和 `apps/web` 是独立的 Agent/Chat 示例，与 MCP 管理平台可以独立运行。
 
 ## 当前能力
 
@@ -77,6 +77,7 @@ docs/superpowers/
 
 | 组件            | 中文文档                                     | English                                            |
 | --------------- | -------------------------------------------- | -------------------------------------------------- |
+| CLI Agent       | [README](./apps/cli/README.md)               | [README_EN](./apps/cli/README_EN.md)               |
 | Control Plane   | [README](./apps/mcp-control-plane/README.md) | [README_EN](./apps/mcp-control-plane/README_EN.md) |
 | MCP Gateway     | [README](./apps/mcp-server/README.md)        | [README_EN](./apps/mcp-server/README_EN.md)        |
 | MCP Worker      | [README](./apps/mcp-worker/README.md)        | [README_EN](./apps/mcp-worker/README_EN.md)        |

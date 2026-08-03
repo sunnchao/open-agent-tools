@@ -1,10 +1,10 @@
-# Agent Demo MCP Management Platform
+# open-agent-tools MCP Management Platform
 
 [中文](./README.md)
 
-This repository is a pnpm and TypeScript monorepo. This README focuses on the newly added MCP management platform, where administrators configure, build, publish, and roll back managed MCP services. MCP clients access published Tools and Prompts through API Keys and fine-grained grants.
+This repository is a pnpm and TypeScript monorepo. This README focuses on the MCP management platform, where administrators configure, build, publish, and roll back managed MCP services. MCP clients access published Tools and Prompts through API Keys and fine-grained grants.
 
-The existing `apps/cli`, `apps/server`, and `apps/web` directories are separate Agent/Chat demos and can run independently of the MCP platform.
+The `apps/cli` (CLI Agent), `apps/server`, and `apps/web` directories are separate Agent/Chat demos and can run independently of the MCP platform.
 
 ## Current capabilities
 
@@ -77,6 +77,7 @@ docs/superpowers/
 
 | Component       | English                                            | 中文文档                                     |
 | --------------- | -------------------------------------------------- | -------------------------------------------- |
+| CLI Agent       | [README_EN](./apps/cli/README_EN.md)               | [README](./apps/cli/README.md)               |
 | Control Plane   | [README_EN](./apps/mcp-control-plane/README_EN.md) | [README](./apps/mcp-control-plane/README.md) |
 | MCP Gateway     | [README_EN](./apps/mcp-server/README_EN.md)        | [README](./apps/mcp-server/README.md)        |
 | MCP Worker      | [README_EN](./apps/mcp-worker/README_EN.md)        | [README](./apps/mcp-worker/README.md)        |
