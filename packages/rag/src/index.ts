@@ -1,6 +1,6 @@
 import type { EmbeddingsInterface } from "@langchain/core/embeddings";
 import { SqliteVectorStore } from "./store.js";
-import { ingestBuffer, ingestMany, type IngestOptions } from "./ingest.js";
+import { DEFAULT_SEPARATORS, ingestBuffer, ingestMany, type IngestOptions } from "./ingest.js";
 import { retrieve, type RetrieveOptions } from "./retriever.js";
 import type { ChunkInfo, IngestResult, RetrievalResult } from "./types.js";
 
@@ -17,6 +17,7 @@ export { SqliteVectorStore, type SqliteStoreOptions } from "./store.js";
 export { reciprocalRankFusion, formatChunks, type RetrieveOptions } from "./retriever.js";
 export { cosine, escapeFtsQuery, sha1 } from "./utils.js";
 export { TextFileLoader, PdfFileLoader } from "./loaders.js";
+export { DEFAULT_SEPARATORS } from "./ingest.js";
 
 export interface RagOptions {
   /** 必填时启用向量检索；缺省则退化为纯 BM25 关键词检索（无 API Key 环境可用）。 */
@@ -25,6 +26,7 @@ export interface RagOptions {
   dbPath?: string;
   chunkSize?: number;
   chunkOverlap?: number;
+  separators?: string[];
 }
 
 /** RAG 引擎门面：入库 + 混合检索 + 知识库管理。 */
@@ -39,6 +41,7 @@ export class Rag {
       embeddings: opts.embeddings,
       chunkSize: opts.chunkSize ?? 500,
       chunkOverlap: opts.chunkOverlap ?? 50,
+      separators: opts.separators ? [...opts.separators] : [...DEFAULT_SEPARATORS],
     };
   }
 
@@ -50,7 +53,7 @@ export class Rag {
   /** 从内存 Buffer 入库（Web 上传），幂等。 */
   async ingestBuffers(
     files: Array<{ name: string; data: Uint8Array }>,
-    options: Pick<IngestOptions, "chunkSize" | "chunkOverlap"> = {},
+    options: Pick<IngestOptions, "chunkSize" | "chunkOverlap" | "separators"> = {},
   ): Promise<IngestResult> {
     const ingestOptions = { ...this.ingestOpts, ...options };
     let total = 0;

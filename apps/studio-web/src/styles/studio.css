@@ -906,6 +906,34 @@ select:focus-visible {
   resize: vertical;
 }
 
+.separator-field textarea {
+  min-height: 132px;
+  overflow-x: auto;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.studio-field .field-help {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--studio-muted);
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.studio-field .field-error {
+  display: block;
+  color: #b33a32;
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.separator-field.is-invalid textarea {
+  border-color: #cf7a74;
+}
+
 .studio-field input:focus,
 .studio-field textarea:focus,
 .studio-field select:focus {

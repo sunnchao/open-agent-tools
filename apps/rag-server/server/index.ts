@@ -4,7 +4,8 @@ import cors from "cors";
 import express, { type Request, type Response } from "express";
 import multer from "multer";
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
-import { Rag } from "@open-agent-tools/rag";
+import { DEFAULT_SEPARATORS, Rag } from "@open-agent-tools/rag";
+import { parseSeparators } from "./chunk-settings.js";
 
 loadEnv({ path: resolve(import.meta.dirname, "../.env") });
 loadEnv({ path: resolve(import.meta.dirname, "../.env.local"), override: true });
@@ -15,6 +16,7 @@ const baseURL = process.env.OPENAI_API_BASE_URL;
 const dbPath = resolve(import.meta.dirname, process.env.RAG_DB_PATH ?? "../rag.db");
 const defaultChunkSize = Number(process.env.RAG_CHUNK_SIZE) || 500;
 const defaultChunkOverlap = Number(process.env.RAG_CHUNK_OVERLAP) || 50;
+const defaultSeparators = parseSeparators(process.env.RAG_SEPARATORS, DEFAULT_SEPARATORS);
 
 // 有 Key 则启用向量检索 + LLM 生成；无 Key 自动退化为 BM25 关键词检索（可离线演示）。
 const embeddings = apiKey
@@ -36,6 +38,7 @@ const rag = new Rag({
   dbPath,
   chunkSize: defaultChunkSize,
   chunkOverlap: defaultChunkOverlap,
+  separators: defaultSeparators,
 });
 
 const app = express();
@@ -57,6 +60,7 @@ function clampTopK(value: unknown): number {
 function uploadChunkSettings(body: Record<string, unknown>): {
   chunkSize: number;
   chunkOverlap: number;
+  separators: string[];
 } {
   const requestedSize = Number(body.chunkSize);
   const requestedOverlap = Number(body.chunkOverlap);
@@ -71,7 +75,11 @@ function uploadChunkSettings(body: Record<string, unknown>): {
       Number.isFinite(requestedOverlap) ? requestedOverlap : defaultChunkOverlap,
     ),
   );
-  return { chunkSize, chunkOverlap };
+  return {
+    chunkSize,
+    chunkOverlap,
+    separators: parseSeparators(body.separators, defaultSeparators),
+  };
 }
 
 app.get("/api/health", (_req: Request, res: Response) => {
@@ -85,10 +93,17 @@ app.post("/api/documents", upload.array("files"), async (req: Request, res: Resp
     res.status(400).json({ error: "no files uploaded (field name: files)" });
     return;
   }
+  let chunkSettings: ReturnType<typeof uploadChunkSettings>;
+  try {
+    chunkSettings = uploadChunkSettings(req.body as Record<string, unknown>);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
   try {
     const result = await rag.ingestBuffers(
       files.map((f) => ({ name: f.originalname, data: new Uint8Array(f.buffer) })),
-      uploadChunkSettings(req.body as Record<string, unknown>),
+      chunkSettings,
     );
     res.status(201).json(result);
   } catch (e) {
@@ -109,6 +124,7 @@ app.get("/api/documents", (_req: Request, res: Response) => {
     llmAvailable: Boolean(llm),
     chunkSize: defaultChunkSize,
     chunkOverlap: defaultChunkOverlap,
+    separators: defaultSeparators,
   });
 });
 

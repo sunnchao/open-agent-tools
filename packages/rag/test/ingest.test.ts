@@ -95,3 +95,25 @@ test("Rag 门面：单次上传可覆盖分块设置", async () => {
   rag.close();
   cleanup();
 });
+
+test("Rag 门面：单次上传可覆盖分段标识符", async () => {
+  const { dir, cleanup } = tmpDir();
+  const rag = new Rag({
+    dbPath: join(dir, "rag.db"),
+    chunkSize: 8,
+    chunkOverlap: 0,
+    separators: ["#"],
+  });
+
+  await rag.ingestBuffers(
+    [{ name: "separators.txt", data: new TextEncoder().encode("alpha|bravo|charlie") }],
+    { separators: ["|"] },
+  );
+
+  assert.deepEqual(
+    rag.listChunks("separators.txt").map((chunk) => chunk.content),
+    ["alpha", "|bravo", "|charlie"],
+  );
+  rag.close();
+  cleanup();
+});

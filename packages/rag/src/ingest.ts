@@ -5,12 +5,16 @@ import type { Chunk, IngestResult, VectorStore } from "./types.js";
 import { sha1 } from "./utils.js";
 import { loaderFor, loaderForName } from "./loaders.js";
 
+export const DEFAULT_SEPARATORS = ["\n\n", "\n", "。", "！", "？", ". ", " "] as const;
+
 export interface IngestOptions {
   store: VectorStore;
   /** 缺省时退化为纯 BM25 关键词入库（不存向量），便于无 API Key 环境演示。 */
   embeddings?: EmbeddingsInterface;
   chunkSize?: number;
   chunkOverlap?: number;
+  /** 递归切分时按顺序匹配的分段标识符。 */
+  separators?: string[];
 }
 
 /** 从本地路径入库一份文档，返回写入的分块数。幂等：先清该 source 旧数据。 */
@@ -39,7 +43,7 @@ async function ingestDocuments(
   const splitter = new RecursiveCharacterTextSplitter({
     chunkSize: opts.chunkSize ?? 500,
     chunkOverlap: opts.chunkOverlap ?? 50,
-    separators: ["\n\n", "\n", "。", "！", "？", ". ", " "],
+    separators: opts.separators ?? [...DEFAULT_SEPARATORS],
   });
   const chunks = await splitter.splitDocuments(docs);
   opts.store.removeBySource(source); // 幂等重灌
@@ -66,10 +70,7 @@ function normalizeSource(path: string): string {
 }
 
 /** 便捷组合：批量路径入库并返回统计。 */
-export async function ingestMany(
-  paths: string[],
-  opts: IngestOptions,
-): Promise<IngestResult> {
+export async function ingestMany(paths: string[], opts: IngestOptions): Promise<IngestResult> {
   let total = 0;
   for (const p of paths) {
     total += await ingestPath(p, opts);

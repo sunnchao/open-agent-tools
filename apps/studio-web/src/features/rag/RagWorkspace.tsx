@@ -25,23 +25,29 @@ import {
 interface RagSettings {
   chunkSize: number;
   chunkOverlap: number;
+  separators: string[];
   topK: number;
   generate: boolean;
 }
 
+const defaultSeparators = ["\n\n", "\n", "。", "！", "？", ". ", " "];
+
 const defaultSettings: RagSettings = {
-  chunkSize: 500,
+  chunkSize: 1024,
   chunkOverlap: 50,
+  separators: defaultSeparators,
   topK: 5,
   generate: true,
 };
 
 export function RagWorkspace() {
   const fileInput = useRef<HTMLInputElement>(null);
+  const settingsInitialized = useRef(false);
   const [stats, setStats] = useState<DocumentStats | null>(null);
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const [chunks, setChunks] = useState<ChunkInfo[]>([]);
   const [settings, setSettings] = useState<RagSettings>(defaultSettings);
+  const [separatorText, setSeparatorText] = useState(() => separatorsToText(defaultSeparators));
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [busy, setBusy] = useState<"loading" | "upload" | "query" | null>("loading");
@@ -52,11 +58,16 @@ export function RagWorkspace() {
     try {
       const next = await listDocuments();
       setStats(next);
-      setSettings((current) => ({
-        ...current,
-        chunkSize: next.chunkSize ?? current.chunkSize,
-        chunkOverlap: next.chunkOverlap ?? current.chunkOverlap,
-      }));
+      if (!settingsInitialized.current) {
+        setSettings((current) => ({
+          ...current,
+          chunkSize: next.chunkSize ?? current.chunkSize,
+          chunkOverlap: next.chunkOverlap ?? current.chunkOverlap,
+          separators: next.separators ?? current.separators,
+        }));
+        if (next.separators) setSeparatorText(separatorsToText(next.separators));
+        settingsInitialized.current = true;
+      }
       setSelectedSource((current) => current ?? next.sources[0]?.source ?? null);
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
@@ -82,8 +93,14 @@ export function RagWorkspace() {
       );
   }, [selectedSource]);
 
+  const separatorError = validateSeparators(settings.separators);
+
   const upload = async (files: File[]) => {
     if (files.length === 0) return;
+    if (separatorError) {
+      setNotice({ type: "error", text: separatorError });
+      return;
+    }
     setBusy("upload");
     setNotice(null);
     try {
@@ -183,7 +200,7 @@ export function RagWorkspace() {
           <button
             className="studio-button primary"
             type="button"
-            disabled={busy === "upload"}
+            disabled={busy === "upload" || Boolean(separatorError)}
             onClick={() => fileInput.current?.click()}
           >
             <CloudUploadOutlined /> {busy === "upload" ? "入库中..." : "上传文档"}
@@ -291,7 +308,7 @@ export function RagWorkspace() {
               <NumberField
                 label="分块长度"
                 value={settings.chunkSize}
-                min={100}
+                min={1}
                 max={4000}
                 step={50}
                 onChange={(chunkSize) => setSettings({ ...settings, chunkSize })}
@@ -304,6 +321,29 @@ export function RagWorkspace() {
                 step={10}
                 onChange={(chunkOverlap) => setSettings({ ...settings, chunkOverlap })}
               />
+              <label
+                className={`studio-field separator-field${separatorError ? " is-invalid" : ""}`}
+              >
+                <span>
+                  分段标识符
+                  <small>{settings.separators.length}/20</small>
+                </span>
+                <textarea
+                  className="mono-input"
+                  rows={7}
+                  value={separatorText}
+                  aria-invalid={Boolean(separatorError)}
+                  onChange={(event) => {
+                    const nextText = event.target.value;
+                    setSeparatorText(nextText);
+                    setSettings({ ...settings, separators: separatorsFromText(nextText) });
+                  }}
+                />
+                <small className="field-help">
+                  一行一个，按顺序匹配。支持 \n、\t、\s（空格）。
+                </small>
+                {separatorError ? <small className="field-error">{separatorError}</small> : null}
+              </label>
             </div>
             <div className="settings-group">
               <h2>召回策略</h2>
@@ -346,6 +386,44 @@ export function RagWorkspace() {
       </div>
     </section>
   );
+}
+
+function separatorsToText(separators: readonly string[]): string {
+  return separators
+    .map((separator) =>
+      separator
+        .replaceAll("\\", "\\\\")
+        .replaceAll("\n", "\\n")
+        .replaceAll("\r", "\\r")
+        .replaceAll("\t", "\\t")
+        .replaceAll(" ", "\\s"),
+    )
+    .join("\n");
+}
+
+function separatorsFromText(value: string): string[] {
+  const separators = value
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0)
+    .map((line) =>
+      line.replace(/\\(\\|n|r|t|s)/g, (_match, escape: string) => {
+        if (escape === "n") return "\n";
+        if (escape === "r") return "\r";
+        if (escape === "t") return "\t";
+        if (escape === "s") return " ";
+        return "\\";
+      }),
+    );
+  return separators.filter((separator, index) => separators.indexOf(separator) === index);
+}
+
+function validateSeparators(separators: readonly string[]): string | null {
+  if (separators.length === 0) return "请至少配置一个分段标识符";
+  if (separators.length > 20) return "分段标识符不能超过 20 个";
+  if (separators.some((separator) => Array.from(separator).length > 32)) {
+    return "单个分段标识符不能超过 32 个字符";
+  }
+  return null;
 }
 
 function NumberField({

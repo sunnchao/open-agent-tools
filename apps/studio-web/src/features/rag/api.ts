@@ -5,6 +5,7 @@ export interface DocumentStats {
   llmAvailable: boolean;
   chunkSize: number;
   chunkOverlap: number;
+  separators: string[];
 }
 
 export interface ChunkInfo {
@@ -53,12 +54,13 @@ export function deleteDocument(source: string): Promise<{ ok: true }> {
 
 export function uploadDocuments(
   files: File[],
-  settings: { chunkSize: number; chunkOverlap: number },
+  settings: { chunkSize: number; chunkOverlap: number; separators: string[] },
 ): Promise<{ files: number; chunks: number }> {
   const form = new FormData();
   files.forEach((file) => form.append("files", file));
   form.append("chunkSize", String(settings.chunkSize));
   form.append("chunkOverlap", String(settings.chunkOverlap));
+  form.append("separators", JSON.stringify(settings.separators));
   return request("/documents", { method: "POST", body: form });
 }
 
