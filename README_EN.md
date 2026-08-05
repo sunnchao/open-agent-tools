@@ -4,7 +4,7 @@
 
 This repository is a pnpm and TypeScript monorepo. This README focuses on the MCP management platform, where administrators configure, build, publish, and roll back managed MCP services. MCP clients access published Tools and Prompts through API Keys and fine-grained grants.
 
-The `apps/cli` (CLI Agent), `apps/server`, and `apps/web` directories are separate Agent/Chat demos and can run independently of the MCP platform.
+`apps/studio-web` is the unified visual surface for Agent Chat, MCP administration, RAG knowledge bases, and workflow orchestration. `apps/cli` and `apps/server` can still run independently.
 
 ## Current capabilities
 
@@ -14,7 +14,7 @@ The `apps/cli` (CLI Agent), `apps/server`, and `apps/web` directories are separa
 - Upload Node.js Tool ZIP archives, validate archive/npm package structure, run `npm ci`, and run an optional build.
 - Build and push digest-addressed OCI images, generate CycloneDX SBOMs, and scan images with Trivy.
 - Execute Tools in isolated Docker containers; validate and render Prompts directly in the Gateway.
-- Keep MCP Web and the administration API temporarily anonymous, with every visitor acting as an administrator.
+- Keep Studio Web and the administration API temporarily anonymous, with every visitor acting as an administrator.
 - Issue one-time-visible API Keys for MCP clients and authorize by service, scope, Tool name, and Prompt name.
 - Expose `tools/list`, `tools/call`, `prompts/list`, and `prompts/get` over Streamable HTTP.
 - Provide a React administration console for service, Tool, Prompt, build, and version workflows.
@@ -27,7 +27,8 @@ The managed runtime currently supports Node.js 20, ESM, and npm only. Python, Ja
 Administrator
     |
     v
-MCP Web (4300) ---> Control Plane (4200) ---> PostgreSQL
+Studio Web (5173) ---> Control Plane (4200) ---> PostgreSQL
+        |             -> RAG Server (4001) ---> SQLite
                           |                  -> Redis / BullMQ
                           |                  -> S3 / MinIO
                           v
@@ -47,7 +48,8 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
 | Control Plane  | `@open-agent-tools/mcp-control-plane` | Anonymous admin API, service versions, client Keys/Grants, upload and build orchestration     |
 | MCP Gateway    | `@open-agent-tools/mcp-server`        | MCP protocol endpoint, API Key authentication, scope checks, Tool calls, and Prompt rendering |
 | MCP Worker     | `@open-agent-tools/mcp-worker`        | ZIP inspection, dependency installation, image build/scan, and Tool container execution       |
-| MCP Web        | `@open-agent-tools/mcp-web`           | React administration console                                                                  |
+| Studio Web     | `@open-agent-tools/studio-web`        | Unified React workspace for Agent, MCP, RAG, and workflows                                    |
+| RAG Server     | `@open-agent-tools/rag-server`        | Document ingestion, SQLite indexing, hybrid retrieval, and optional LLM answers               |
 | Contracts      | `@open-agent-tools/mcp-contracts`     | Shared Zod contracts for manifests, Prompts, jobs, and Runner I/O                             |
 | Auth           | `@open-agent-tools/mcp-auth`          | API Key generation, parsing, hashing, and verification                                        |
 | Node.js Runner | `@open-agent-tools/mcp-nodejs-runner` | Loads handlers inside Tool containers and validates MCP results                               |
@@ -59,7 +61,8 @@ apps/
   mcp-control-plane/       Admin API and PostgreSQL migrations
   mcp-server/              Dynamic MCP Gateway
   mcp-worker/              Build and execution Worker
-  mcp-web/                 React administration application
+  studio-web/              Unified React workspace
+  rag-server/              RAG HTTP API and SQLite data
 packages/
   mcp-auth/                MCP API Key contract
   mcp-contracts/           Cross-service data contracts
@@ -81,7 +84,8 @@ docs/superpowers/
 | Control Plane   | [README_EN](./apps/mcp-control-plane/README_EN.md) | [README](./apps/mcp-control-plane/README.md) |
 | MCP Gateway     | [README_EN](./apps/mcp-server/README_EN.md)        | [README](./apps/mcp-server/README.md)        |
 | MCP Worker      | [README_EN](./apps/mcp-worker/README_EN.md)        | [README](./apps/mcp-worker/README.md)        |
-| MCP Web         | [README_EN](./apps/mcp-web/README_EN.md)           | [README](./apps/mcp-web/README.md)           |
+| Studio Web      | [README_EN](./apps/studio-web/README_EN.md)        | [README](./apps/studio-web/README.md)        |
+| RAG Server      | [README](./apps/rag-server/README.md)              | -                                            |
 | MCP Auth        | [README_EN](./packages/mcp-auth/README_EN.md)      | [README](./packages/mcp-auth/README.md)      |
 | MCP Contracts   | [README_EN](./packages/mcp-contracts/README_EN.md) | [README](./packages/mcp-contracts/README.md) |
 | Node.js Runtime | [README_EN](./runtimes/nodejs/README_EN.md)        | [README](./runtimes/nodejs/README.md)        |
@@ -173,15 +177,15 @@ In addition to PostgreSQL, Redis, and S3 settings, the Worker requires:
 | `EXECUTION_CONCURRENCY` | Tool execution concurrency, default `4`                            |
 | `BUILD_CONCURRENCY`     | Inspection/build concurrency, default `2`                          |
 
-### MCP Web
+### Studio Web
 
-The development server proxies `/api` to `http://localhost:4200`:
+The development server proxies the MCP administration API, Gateway, and RAG API to ports `4200`, `4100`, and `4001` respectively:
 
 ```bash
-pnpm --filter @open-agent-tools/mcp-web dev
+pnpm --filter @open-agent-tools/studio-web dev
 ```
 
-MCP Web currently performs no authentication and reads no browser Token. The Control Plane also handles every administration request as an anonymous `admin`. This mode is suitable only for local development or a trusted network and must not be exposed directly to the public internet.
+Studio Web currently performs no authentication and reads no browser Token. The Control Plane also handles every administration request as an anonymous `admin`. This mode is suitable only for local development or a trusted network and must not be exposed directly to the public internet.
 
 ## Database migrations
 
@@ -215,14 +219,16 @@ After provisioning dependencies, setting environment variables, applying migrati
 ```bash
 pnpm --filter @open-agent-tools/mcp-control-plane dev
 pnpm --filter @open-agent-tools/mcp-server dev
-pnpm --filter @open-agent-tools/mcp-web dev
+pnpm --filter @open-agent-tools/rag-server dev
+pnpm --filter @open-agent-tools/studio-web dev
 ```
 
 Start the Worker separately using the environment-loading command shown above. Default endpoints:
 
 | Service              | URL                                                |
 | -------------------- | -------------------------------------------------- |
-| MCP Web              | `http://localhost:4300`                            |
+| Studio Web           | `http://localhost:5173`                            |
+| RAG Server Health    | `http://localhost:4001/api/health`                 |
 | Control Plane Health | `http://localhost:4200/health`                     |
 | MCP Gateway Health   | `http://localhost:4100/health`                     |
 | MCP Service Endpoint | `http://localhost:4100/mcp/services/{serviceSlug}` |
@@ -377,7 +383,7 @@ pnpm --filter @open-agent-tools/mcp-auth test
 pnpm --filter @open-agent-tools/mcp-control-plane test
 pnpm --filter @open-agent-tools/mcp-server test
 pnpm --filter @open-agent-tools/mcp-worker test
-pnpm --filter @open-agent-tools/mcp-web test
+pnpm --filter @open-agent-tools/studio-web test
 pnpm --filter @open-agent-tools/mcp-nodejs-runner test
 ```
 
@@ -405,7 +411,7 @@ Docker E2E tests also require a local Docker daemon and a pre-built test Runner 
 - Managed Tools support Node.js 20 ESM/npm only. Python, Java, Yarn, pnpm Tool packages, Bun, and user-supplied Dockerfiles are not supported.
 - Managed MCP Resources and remote MCP service proxying are not implemented.
 - The administration console now provides Builds, Clients/Access, and Audit views; a dedicated Executions page is still pending.
-- MCP Web and the Control Plane currently have no identity authentication or user isolation and must not be exposed directly to the public internet.
+- Studio Web and the Control Plane currently have no identity authentication or user isolation and must not be exposed directly to the public internet.
 - The repository has no one-command Docker Compose or Kubernetes deployment manifest.
 - Node.js 20 has reached upstream end-of-life. Production rollout requires a security exception or migration to a supported LTS with a corresponding runtime-contract update.
 

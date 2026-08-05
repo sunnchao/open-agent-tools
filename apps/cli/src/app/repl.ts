@@ -1,7 +1,7 @@
 import { HumanMessage } from "@langchain/core/messages";
 import chalk from "chalk";
 import { handleCommand } from "../commands/commands.ts";
-import { getPrompt } from "../ui/cliUi.ts";
+import { createSlashCommandPicker, getPrompt } from "../ui/cliUi.ts";
 import { createLineInput } from "../ui/keyboard.ts";
 import { buildSystemPrompt } from "../prompt/prompt.ts";
 import { createSession, addMessage } from "../store/db.ts";
@@ -11,6 +11,7 @@ import type { Runtime } from "./runtime.ts";
 export async function replLoop(runtime: Runtime): Promise<void> {
   const { rl, cli, memoryStore, callbacks } = runtime;
   const inputLine = createLineInput(rl);
+  const pickSlashCommand = createSlashCommandPicker(rl);
 
   while (true) {
     const input = await inputLine(getPrompt(cli.currentSession));
@@ -25,7 +26,13 @@ export async function replLoop(runtime: Runtime): Promise<void> {
       return;
     }
 
-    if (await handleCommand(input, cli)) {
+    // 斜杠命令：已知命令直接执行；输入 `/` 或未知前缀时打开 ↑/↓ 菜单
+    if (trimmed.startsWith("/")) {
+      const handled = trimmed !== "/" && (await handleCommand(input, cli));
+      if (!handled) {
+        const selected = await pickSlashCommand(trimmed);
+        if (selected) await handleCommand(selected, cli);
+      }
       continue;
     }
 

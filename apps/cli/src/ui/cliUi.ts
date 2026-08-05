@@ -1,6 +1,12 @@
 import readline from "node:readline";
 import { listConfiguredServers, trustStore } from "@open-agent-tools/deepagent";
 import chalk from "chalk";
+import {
+  filterSlashCommands,
+  slashCommandSignature,
+  type SlashCommandDef,
+  SLASH_COMMANDS,
+} from "../commands/commands.ts";
 import type { PermissionDecision } from "../tools/permissions.ts";
 import type { Session } from "../store/db.ts";
 import { createClearRenderedLinesSequence } from "./terminal.ts";
@@ -13,7 +19,7 @@ export function createAsk(rl: readline.Interface): (question: string) => Promise
 }
 
 /**
- * 交互式菜单选择：用 ↑/↓ 上下切换、Enter 确认，不依赖输入文字。
+ * 交互式菜单选择：用 ↑/↓ 上下切换、Enter 确认，Esc 取消（返回 -1）。
  * 选择完成后恢复行模式，避免影响后续行输入。
  */
 export function createMenuSelect(
@@ -21,6 +27,11 @@ export function createMenuSelect(
 ): (title: string, options: string[]) => Promise<number> {
   return (title, options) =>
     new Promise((resolve) => {
+      if (options.length === 0) {
+        resolve(-1);
+        return;
+      }
+
       let index = 0;
       // 当前已输出的行数（按 \n 拆分后的行数）
       let renderedLines = 0;
@@ -62,6 +73,9 @@ export function createMenuSelect(
         } else if (key.name === "return" || key.sequence === "\r" || key.sequence === "\n") {
           finish();
           resolve(index);
+        } else if (key.name === "escape" || key.sequence === "\x1b") {
+          finish();
+          resolve(-1);
         } else if (key.ctrl && key.name === "c") {
           triggerSigint(finish);
         }
@@ -70,6 +84,56 @@ export function createMenuSelect(
       close = openKeypress(rl, onKey);
       render();
     });
+}
+
+/** 把斜杠命令格式化为菜单行：左对齐签名 + 说明。 */
+function formatSlashCommandLabel(cmd: SlashCommandDef, maxSig: number): string {
+  const sig = slashCommandSignature(cmd);
+  return `${sig.padEnd(maxSig + 2)}${cmd.description}`;
+}
+
+/**
+ * 斜杠命令菜单选择器。
+ * 根据用户已输入的 `/...` 过滤候选，↑/↓ 选择、Enter 确认、Esc 取消。
+ * 需要参数的命令确认后再询问参数，返回可直接交给 handleCommand 的完整命令串。
+ */
+export function createSlashCommandPicker(
+  rl: readline.Interface,
+): (query: string) => Promise<string | null> {
+  const select = createMenuSelect(rl);
+  const ask = createAsk(rl);
+
+  return async (query: string): Promise<string | null> => {
+    let candidates = filterSlashCommands(query);
+    if (candidates.length === 0) {
+      console.log(chalk.dim(`未知命令: ${query.trim() || "/"}，展示全部命令`));
+      candidates = [...SLASH_COMMANDS];
+    }
+
+    const maxSig = Math.max(...candidates.map((c) => slashCommandSignature(c).length));
+    const labels = candidates.map((c) => formatSlashCommandLabel(c, maxSig));
+    const title =
+      chalk.bold("选择命令") + chalk.gray("（↑/↓ 切换，Enter 确认，Esc 取消）");
+
+    const index = await select(title, labels);
+    if (index < 0 || index >= candidates.length) return null;
+
+    const chosen = candidates[index]!;
+    if (!chosen.argsPrompt) return chosen.name;
+
+    const args = (
+      await ask(
+        chalk.cyan(`${chosen.name} `) + chalk.dim(`${chosen.argsPrompt}: `),
+      )
+    ).trim();
+
+    if (!args) {
+      if (chosen.argsOptional) return chosen.name;
+      console.log(chalk.dim("已取消（未输入参数）"));
+      return null;
+    }
+    return `${chosen.name} ${args}`;
+  };
 }
 
 /** 危险工具权限确认：菜单上下切换选择，不依赖输入文字。 */

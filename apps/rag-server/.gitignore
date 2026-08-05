@@ -1,0 +1,7 @@
+.env
+.env.local
+rag.db
+rag.db-shm
+rag.db-wal
+dist/
+node_modules/

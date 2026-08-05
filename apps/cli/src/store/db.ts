@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import type { BaseMessage } from "@langchain/core/messages";
 
-export type Role = "user" | "assistant" | "system" | "tool";
+export type Role = "user" | "assistant" | "system" | "tool" | "reasoning";
 export type MessageStatus = "streaming" | "complete" | "error";
 
 export interface Message {
@@ -17,17 +17,26 @@ export interface Message {
   tool_name?: string;
 }
 
+/** 会话累计的模型 token 用量。 */
+export interface SessionUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
 export interface Session {
   id: string;
   title: string;
   messages: Message[];
   updatedAt: number;
+  usage?: SessionUsage;
 }
 
 export interface SessionSummary {
   id: string;
   title: string;
   updatedAt: number;
+  usage?: SessionUsage;
 }
 
 const DEFAULT_DB_PATH = resolve(import.meta.dirname, "../../data/chat.sqlite");
@@ -48,13 +57,16 @@ export function openDb(path = getDbPath()): DatabaseSync {
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New chat',
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-      role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'tool')),
+      role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'tool', 'reasoning')),
       content TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL,
       status TEXT,
@@ -82,6 +94,7 @@ export function openDb(path = getDbPath()): DatabaseSync {
   `);
 
   migrateMessagesTable(db);
+  migrateSessionsTable(db);
 
   return db;
 }
@@ -101,7 +114,52 @@ function migrateMessagesTable(database: DatabaseSync): void {
     database.exec(`ALTER TABLE messages ADD COLUMN tool_name TEXT`);
   }
 
+  // SQLite 无法 ALTER CHECK 约束：旧库的 role CHECK 不含 'reasoning'，
+  // 需重建 messages 表以允许推理内容落库。
+  const schema = database
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'`)
+    .get() as { sql: string } | undefined;
+  if (schema && !schema.sql.includes("'reasoning'")) {
+    database.exec(`
+      CREATE TABLE messages_new (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'tool', 'reasoning')),
+        content TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        status TEXT,
+        position INTEGER NOT NULL,
+        tool_call_id TEXT,
+        tool_name TEXT
+      );
+      INSERT INTO messages_new (id, session_id, role, content, created_at, status, position, tool_call_id, tool_name)
+        SELECT id, session_id, role, content, created_at, status, position, tool_call_id, tool_name FROM messages;
+      DROP TABLE messages;
+      ALTER TABLE messages_new RENAME TO messages;
+    `);
+    database.exec(
+      `CREATE INDEX IF NOT EXISTS idx_messages_session_position ON messages(session_id, position)`,
+    );
+  }
+
   database.exec(`DROP TABLE IF EXISTS messages_migration_backup`);
+}
+
+function migrateSessionsTable(database: DatabaseSync): void {
+  const columns = new Set(
+    (database.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    ),
+  );
+  if (!columns.has("input_tokens")) {
+    database.exec(`ALTER TABLE sessions ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!columns.has("output_tokens")) {
+    database.exec(`ALTER TABLE sessions ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!columns.has("reasoning_tokens")) {
+    database.exec(`ALTER TABLE sessions ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0`);
+  }
 }
 
 export function closeDb(): void {
@@ -116,16 +174,42 @@ function autoTitle(content: string): string {
   return trimmed.length > 32 ? `${trimmed.slice(0, 32)}…` : trimmed || "New chat";
 }
 
+function usageFromRow(row: {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}): SessionUsage {
+  return {
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    reasoningTokens: row.reasoningTokens,
+  };
+}
+
 export function listSessions(): SessionSummary[] {
   const database = openDb();
   const rows = database
     .prepare(
-      `SELECT id, title, updated_at AS updatedAt
+      `SELECT id, title, updated_at AS updatedAt,
+              input_tokens AS inputTokens, output_tokens AS outputTokens,
+              reasoning_tokens AS reasoningTokens
        FROM sessions
        ORDER BY updated_at DESC`,
     )
-    .all() as Array<{ id: string; title: string; updatedAt: number }>;
-  return rows;
+    .all() as Array<{
+    id: string;
+    title: string;
+    updatedAt: number;
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+  }>;
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    updatedAt: row.updatedAt,
+    usage: usageFromRow(row),
+  }));
 }
 
 export function getSession(id: string): Session | null {
@@ -139,6 +223,15 @@ export function getSession(id: string): Session | null {
     .get(id) as { id: string; title: string; updatedAt: number } | undefined;
 
   if (!session) return null;
+
+  const usage = database
+    .prepare(
+      `SELECT input_tokens AS inputTokens, output_tokens AS outputTokens,
+              reasoning_tokens AS reasoningTokens
+       FROM sessions
+       WHERE id = ?`,
+    )
+    .get(id) as { inputTokens: number; outputTokens: number; reasoningTokens: number };
 
   const messages = database
     .prepare(
@@ -162,6 +255,7 @@ export function getSession(id: string): Session | null {
     id: session.id,
     title: session.title,
     updatedAt: session.updatedAt,
+    usage: usageFromRow(usage),
     messages: messages.map((m) => ({
       id: m.id,
       role: m.role,
@@ -174,6 +268,19 @@ export function getSession(id: string): Session | null {
   };
 }
 
+/** 累加会话的模型 token 用量（会话级累计，跨轮持续增长）。 */
+export function addSessionUsage(sessionId: string, usage: SessionUsage): void {
+  const database = openDb();
+  database
+    .prepare(
+      `UPDATE sessions
+       SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?,
+           reasoning_tokens = reasoning_tokens + ?
+       WHERE id = ?`,
+    )
+    .run(usage.inputTokens, usage.outputTokens, usage.reasoningTokens, sessionId);
+}
+
 export function createSession(input?: { id?: string; title?: string }): Session {
   const database = openDb();
   const id = input?.id ?? randomUUID();
@@ -184,7 +291,13 @@ export function createSession(input?: { id?: string; title?: string }): Session 
     .prepare(`INSERT INTO sessions (id, title, updated_at) VALUES (?, ?, ?)`)
     .run(id, title, updatedAt);
 
-  return { id, title, messages: [], updatedAt };
+  return {
+    id,
+    title,
+    messages: [],
+    updatedAt,
+    usage: { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 },
+  };
 }
 
 export function renameSession(id: string, title: string): Session | null {

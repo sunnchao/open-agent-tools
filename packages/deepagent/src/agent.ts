@@ -7,18 +7,9 @@ import {
 } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import {
-  Command,
-  MemorySaver,
-  INTERRUPT,
-  isInterrupted,
-} from "@langchain/langgraph";
+import { Command, MemorySaver, INTERRUPT, isInterrupted } from "@langchain/langgraph";
 import type { HITLRequest, InterruptOnConfig } from "langchain";
-import {
-  createDeepAgent,
-  StateBackend,
-  type AnyBackendProtocol,
-} from "deepagents";
+import { createDeepAgent, StateBackend, type AnyBackendProtocol } from "deepagents";
 import { contentToString, dumpLlmIO } from "./utils.ts";
 import { DANGEROUS_TOOLS } from "./constants.ts";
 
@@ -28,9 +19,20 @@ export interface ToolCallLike {
   id?: string;
 }
 
+/** 一轮对话（含内部多轮模型调用）的 token 用量汇总。 */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
 export interface AgentCallbacks {
   /** 流式输出助手文本片段。 */
   onToken?: (text: string) => void;
+  /** 流式输出模型推理片段（OpenAI 兼容 API 的 reasoning_content），与 content 互斥分段到达。 */
+  onReasoning?: (text: string) => void;
+  /** 一轮对话结束时的 token 用量汇总（agentic loop 内所有模型调用累加）。 */
+  onUsage?: (usage: TokenUsage) => void;
   /** 模型决定调用某工具。 */
   onToolCall?: (tc: ToolCallLike) => void;
   /** 工具执行完成（成功/失败均触发）。 */
@@ -75,11 +77,7 @@ export class Agent {
   private readonly interruptOn: Record<string, boolean | InterruptOnConfig>;
   private readonly mcpToolNames: ReadonlySet<string>;
 
-  constructor(
-    model: BaseChatModel,
-    tools: StructuredToolInterface[],
-    options: AgentOptions = {},
-  ) {
+  constructor(model: BaseChatModel, tools: StructuredToolInterface[], options: AgentOptions = {}) {
     this.checkpointer = new MemorySaver();
     this.interruptOn = options.interruptOn ?? {};
     this.mcpToolNames = new Set(
@@ -114,6 +112,7 @@ export class Agent {
     const inputMessages: BaseMessage[] = [new SystemMessage(systemPrompt), ...history];
 
     let answer = "";
+    const usage: TokenUsage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
     const toolCallChunks = new Map<string, AIMessageChunk>();
     const announcedToolCalls = new Set<string>();
     let nextInput: { messages: BaseMessage[] } | Command = { messages: inputMessages };
@@ -145,6 +144,16 @@ export class Agent {
         }
         if (!AIMessage.isInstance(message)) continue;
 
+        const messageUsage = message.usage_metadata;
+        if (messageUsage) {
+          usage.inputTokens += messageUsage.input_tokens ?? 0;
+          usage.outputTokens += messageUsage.output_tokens ?? 0;
+          usage.reasoningTokens += messageUsage.output_token_details?.reasoning ?? 0;
+        }
+
+        const reasoning = getReasoningContent(message);
+        if (reasoning) cb.onReasoning?.(reasoning);
+
         const text = contentToString(message.content);
         if (text) {
           cb.onToken?.(text);
@@ -156,7 +165,8 @@ export class Agent {
         toolCallChunks.set(streamKey, aggregated);
         for (const toolCall of aggregated.tool_calls ?? []) {
           if (!toolCall.name || this.shouldInterrupt(toolCall.name)) continue;
-          const key = toolCall.id || `${streamKey}:${toolCall.name}:${JSON.stringify(toolCall.args)}`;
+          const key =
+            toolCall.id || `${streamKey}:${toolCall.name}:${JSON.stringify(toolCall.args)}`;
           if (announcedToolCalls.has(key)) continue;
           announcedToolCalls.add(key);
 
@@ -220,6 +230,10 @@ export class Agent {
 
     if (process.env.DEBUG) dumpLlmIO(inputMessages, added);
 
+    if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+      cb.onUsage?.(usage);
+    }
+
     // 最终回复文本：取最后一个 AIMessage 的文本（answer 已含流式 token，作为兜底）
     for (let i = added.length - 1; i >= 0; i -= 1) {
       const msg = added[i];
@@ -238,6 +252,16 @@ export class Agent {
     const config = this.interruptOn[toolName];
     return config === true || typeof config === "object";
   }
+}
+
+/**
+ * 从 AIMessage(Chunk) 提取推理内容片段。
+ * langchain-openai 会把 OpenAI 兼容 API 的 delta.reasoning_content 逐块放进
+ * additional_kwargs.reasoning_content（非流式则为 message.reasoning_content）。
+ */
+function getReasoningContent(message: AIMessage): string | undefined {
+  const raw = (message.additional_kwargs as { reasoning_content?: unknown }).reasoning_content;
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
 }
 
 /** agent.stream 在 streamMode 元组 + subgraphs 模式下的迭代元素类型。 */

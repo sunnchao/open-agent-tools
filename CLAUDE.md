@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a pnpm + TypeScript monorepo (`open-agent-tools`). It contains two independent areas:
 
 1. **MCP Management Platform** — administrators configure, build, publish, and roll back managed MCP services. MCP clients access published Tools and Prompts through API Keys and fine-grained grants.
-2. **Agent/Chat Demos** — `apps/cli`, `apps/server`, and `apps/web` are standalone Agent/Chat examples that run independently of the MCP platform.
+2. **Agent and Studio surfaces** — `apps/studio-web` unifies Agent Chat, MCP, RAG, and workflow UIs; `apps/cli` and `apps/server` remain standalone Agent/Chat surfaces.
 
 The workspace globs are `apps/*`, `packages/*`, and `runtimes/*/*`.
 
@@ -19,7 +19,8 @@ The MCP platform is a layered system:
 Administrator
     |
     v
-MCP Web (4300) ---> Control Plane (4200) ---> PostgreSQL
+Studio Web (5173) ---> Control Plane (4200) ---> PostgreSQL
+        |             -> RAG Server (4001) ---> SQLite
                           |                  -> Redis / BullMQ
                           |                  -> S3 / MinIO
                           v
@@ -34,15 +35,16 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
                   MCP Worker
 ```
 
-| Component | Package | Responsibility |
-| --------- | ------- | -------------- |
-| Control Plane | `@open-agent-tools/mcp-control-plane` | Anonymous admin API, service versions, client Keys/Grants, upload and build orchestration |
-| MCP Gateway | `@open-agent-tools/mcp-server` | MCP protocol endpoint, API Key auth, scope checks, Tool calls, Prompt rendering |
-| MCP Worker | `@open-agent-tools/mcp-worker` | ZIP inspection, dependency install, image build/scan, Tool container execution |
-| MCP Web | `@open-agent-tools/mcp-web` | React administration console |
-| Contracts | `@open-agent-tools/mcp-contracts` | Shared Zod contracts for manifests, Prompts, jobs, and Runner I/O |
-| Auth | `@open-agent-tools/mcp-auth` | API Key generation, parsing, hashing, verification |
-| Node.js Runner | `@open-agent-tools/mcp-nodejs-runner` | Loads handlers inside Tool containers and validates MCP results |
+| Component      | Package                               | Responsibility                                                                            |
+| -------------- | ------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Control Plane  | `@open-agent-tools/mcp-control-plane` | Anonymous admin API, service versions, client Keys/Grants, upload and build orchestration |
+| MCP Gateway    | `@open-agent-tools/mcp-server`        | MCP protocol endpoint, API Key auth, scope checks, Tool calls, Prompt rendering           |
+| MCP Worker     | `@open-agent-tools/mcp-worker`        | ZIP inspection, dependency install, image build/scan, Tool container execution            |
+| Studio Web     | `@open-agent-tools/studio-web`        | React administration console                                                              |
+| RAG Server     | `@open-agent-tools/rag-server`        | Document ingestion, retrieval, and optional LLM answer API                                |
+| Contracts      | `@open-agent-tools/mcp-contracts`     | Shared Zod contracts for manifests, Prompts, jobs, and Runner I/O                         |
+| Auth           | `@open-agent-tools/mcp-auth`          | API Key generation, parsing, hashing, verification                                        |
+| Node.js Runner | `@open-agent-tools/mcp-nodejs-runner` | Loads handlers inside Tool containers and validates MCP results                           |
 
 The `packages/deepagent` package is a LangGraph-driven Deep Agent adapter used by `apps/cli`. It wraps `createDeepAgent` from `deepagents`, adds HITL interrupt handling, tool-call streaming callbacks, and MCP/time/memory tools.
 
@@ -75,7 +77,7 @@ pnpm --filter @open-agent-tools/mcp-auth test
 pnpm --filter @open-agent-tools/mcp-control-plane test
 pnpm --filter @open-agent-tools/mcp-server test
 pnpm --filter @open-agent-tools/mcp-worker test
-pnpm --filter @open-agent-tools/mcp-web test
+pnpm --filter @open-agent-tools/studio-web test
 pnpm --filter @open-agent-tools/mcp-nodejs-runner test
 ```
 
@@ -101,7 +103,8 @@ Each component starts separately (root `pnpm dev` also starts unrelated demos, s
 ```bash
 pnpm --filter @open-agent-tools/mcp-control-plane dev   # port 4200
 pnpm --filter @open-agent-tools/mcp-server dev          # port 4100
-pnpm --filter @open-agent-tools/mcp-web dev             # port 4300
+pnpm --filter @open-agent-tools/rag-server dev             # port 4001
+pnpm --filter @open-agent-tools/studio-web dev             # port 5173
 ```
 
 The Worker reads process env directly (not `.env`). In Bash/Zsh:
@@ -133,6 +136,7 @@ Control Plane and Gateway must use the same database, or the Gateway cannot see 
 ## Administration API
 
 All admin endpoints are under `/api/admin/mcp`:
+
 - `/services` — service CRUD, disable, version listing
 - `/services/:serviceId/versions/:versionId/tools` — Tool CRUD
 - `/services/:serviceId/versions/:versionId/prompts` — Prompt CRUD and preview
@@ -161,7 +165,7 @@ The Gateway uses stateless Streamable HTTP; `GET` and `DELETE` return `405 Metho
 
 - Managed Tools support Node.js 20 ESM/npm only. Python, Java, Yarn, pnpm Tool packages, Bun, and user-supplied Dockerfiles are not supported.
 - Managed MCP Resources and remote MCP service proxying are not implemented.
-- MCP Web and Control Plane have no identity authentication or user isolation — suitable only for localhost/trusted networks.
+- Studio Web and Control Plane have no identity authentication or user isolation — suitable only for localhost/trusted networks.
 - No Docker Compose or Kubernetes deployment manifest is included.
 - Node.js 20 has reached upstream end-of-life; production rollout requires a security exception or migration to a supported LTS.
 
@@ -173,10 +177,12 @@ The Gateway uses stateless Streamable HTTP; `GET` and `DELETE` return `405 Metho
 ## Component READMEs
 
 Each component has its own README (Chinese and English) with deeper detail:
+
 - [Control Plane](./apps/mcp-control-plane/README.md)
 - [MCP Gateway](./apps/mcp-server/README.md)
 - [MCP Worker](./apps/mcp-worker/README.md)
-- [MCP Web](./apps/mcp-web/README.md)
+- [Studio Web](./apps/studio-web/README.md)
+- [RAG Server](./apps/rag-server/README.md)
 - [MCP Auth](./packages/mcp-auth/README.md)
 - [MCP Contracts](./packages/mcp-contracts/README.md)
 - [Node.js Runtime](./runtimes/nodejs/README.md)

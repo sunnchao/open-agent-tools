@@ -14,6 +14,16 @@ export function createClearRenderedLinesSequence(lineCount: number): string {
   return `\r${moveToFirstLine}${clearLines}${moveToFirstLine}\r`;
 }
 
+/** 把 token 数格式化为可读字符串（>=1000 显示 k，如 1234 → 1.2k）。 */
+export function formatTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 1000) {
+    const value = n / 1000;
+    return `${value >= 100 ? Math.round(value) : value.toFixed(1)}k`;
+  }
+  return String(n);
+}
+
 /** ANSI 转义序列（如 chalk 生成的 \x1b[31m）。 */
 // eslint-disable-next-line no-control-regex -- 有意匹配 ANSI 转义序列（ESC 控制字符）
 const ANSI_ESCAPE = /\x1b\[[0-9;]*[A-Za-z]/g;

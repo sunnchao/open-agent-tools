@@ -4,7 +4,7 @@
 
 本仓库是一个 pnpm + TypeScript Monorepo。本 README 重点介绍 MCP 管理平台：管理员可以配置、构建、发布和回滚托管 MCP 服务，MCP 客户端通过 API Key 和细粒度授权访问已发布的 Tools 与 Prompts。
 
-仓库中的 `apps/cli`（CLI Agent）、`apps/server` 和 `apps/web` 是独立的 Agent/Chat 示例，与 MCP 管理平台可以独立运行。
+`apps/studio-web` 是统一的可视化入口，整合 Agent Chat、MCP 管理、RAG 知识库和工作流编排；`apps/cli` 与 `apps/server` 仍可独立运行。
 
 ## 当前能力
 
@@ -14,7 +14,7 @@
 - 上传 Node.js Tool ZIP 包，校验归档与 npm 包结构，执行 `npm ci` 和可选构建。
 - 构建、推送和摘要固定 OCI 镜像，生成 CycloneDX SBOM，并通过 Trivy 扫描镜像。
 - 通过隔离 Docker 容器执行 Tool；Prompt 由 Gateway 直接校验参数并渲染。
-- MCP Web 与管理 API 暂时匿名开放，任何访问者都以管理员权限操作。
+- Studio Web 与管理 API 暂时匿名开放，任何访问者都以管理员权限操作。
 - 为 MCP 客户端签发一次性可见的 API Key，按服务、Scope、Tool 名称和 Prompt 名称授权。
 - 通过 Streamable HTTP 提供 `tools/list`、`tools/call`、`prompts/list` 和 `prompts/get`。
 - 提供 React 管理界面，用于服务、Tool、Prompt、构建和版本操作。
@@ -27,7 +27,8 @@
 Administrator
     |
     v
-MCP Web (4300) ---> Control Plane (4200) ---> PostgreSQL
+Studio Web (5173) ---> Control Plane (4200) ---> PostgreSQL
+        |             -> RAG Server (4001) ---> SQLite
                           |                  -> Redis / BullMQ
                           |                  -> S3 / MinIO
                           v
@@ -47,7 +48,8 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
 | Control Plane  | `@open-agent-tools/mcp-control-plane` | 匿名管理 API、服务版本、客户端 Key/Grant、上传和构建调度        |
 | MCP Gateway    | `@open-agent-tools/mcp-server`        | MCP 协议入口、API Key 鉴权、Scope 检查、Tool 调用与 Prompt 渲染 |
 | MCP Worker     | `@open-agent-tools/mcp-worker`        | ZIP 检查、依赖安装、镜像构建/扫描、Tool 容器执行                |
-| MCP Web        | `@open-agent-tools/mcp-web`           | React 管理端                                                    |
+| Studio Web     | `@open-agent-tools/studio-web`        | Agent、MCP、RAG 与工作流统一 React 工作台                       |
+| RAG Server     | `@open-agent-tools/rag-server`        | 文档入库、SQLite 索引、混合检索与可选 LLM 回答                  |
 | Contracts      | `@open-agent-tools/mcp-contracts`     | Manifest、Prompt、任务和 Runner I/O 的共享 Zod 契约             |
 | Auth           | `@open-agent-tools/mcp-auth`          | API Key 生成、解析、哈希和校验                                  |
 | Node.js Runner | `@open-agent-tools/mcp-nodejs-runner` | 在 Tool 容器内加载 handler 并校验 MCP 返回值                    |
@@ -59,7 +61,8 @@ apps/
   mcp-control-plane/       管理 API 与 PostgreSQL 迁移
   mcp-server/              动态 MCP Gateway
   mcp-worker/              构建和执行 Worker
-  mcp-web/                 管理端 React 应用
+  studio-web/              统一 React 工作台
+  rag-server/              RAG HTTP API 与 SQLite 数据
 packages/
   mcp-auth/                MCP API Key 契约
   mcp-contracts/           跨服务共享数据契约
@@ -81,7 +84,8 @@ docs/superpowers/
 | Control Plane   | [README](./apps/mcp-control-plane/README.md) | [README_EN](./apps/mcp-control-plane/README_EN.md) |
 | MCP Gateway     | [README](./apps/mcp-server/README.md)        | [README_EN](./apps/mcp-server/README_EN.md)        |
 | MCP Worker      | [README](./apps/mcp-worker/README.md)        | [README_EN](./apps/mcp-worker/README_EN.md)        |
-| MCP Web         | [README](./apps/mcp-web/README.md)           | [README_EN](./apps/mcp-web/README_EN.md)           |
+| Studio Web      | [README](./apps/studio-web/README.md)        | [README_EN](./apps/studio-web/README_EN.md)        |
+| RAG Server      | [README](./apps/rag-server/README.md)        | -                                                  |
 | MCP Auth        | [README](./packages/mcp-auth/README.md)      | [README_EN](./packages/mcp-auth/README_EN.md)      |
 | MCP Contracts   | [README](./packages/mcp-contracts/README.md) | [README_EN](./packages/mcp-contracts/README_EN.md) |
 | Node.js Runtime | [README](./runtimes/nodejs/README.md)        | [README_EN](./runtimes/nodejs/README_EN.md)        |
@@ -173,15 +177,15 @@ pnpm --filter @open-agent-tools/mcp-worker dev
 | `EXECUTION_CONCURRENCY` | Tool 执行并发，默认 `4`                       |
 | `BUILD_CONCURRENCY`     | 检查/构建并发，默认 `2`                       |
 
-### MCP Web
+### Studio Web
 
-开发服务器会把 `/api` 代理到 `http://localhost:4200`：
+开发服务器把 MCP 管理 API、Gateway 和 RAG API 分别代理到 `4200`、`4100` 和 `4001`：
 
 ```bash
-pnpm --filter @open-agent-tools/mcp-web dev
+pnpm --filter @open-agent-tools/studio-web dev
 ```
 
-MCP Web 当前不做鉴权，不读取浏览器 Token；Control Plane 也将所有管理请求作为匿名 `admin` 处理。该模式只适用于本机开发或受信网络，不能直接暴露到公网。
+Studio Web 当前不做鉴权，不读取浏览器 Token；Control Plane 也将所有管理请求作为匿名 `admin` 处理。该模式只适用于本机开发或受信网络，不能直接暴露到公网。
 
 ## 数据库迁移
 
@@ -215,14 +219,16 @@ docker inspect --format='{{index .RepoDigests 0}}' registry.example.com/mcp-node
 ```bash
 pnpm --filter @open-agent-tools/mcp-control-plane dev
 pnpm --filter @open-agent-tools/mcp-server dev
-pnpm --filter @open-agent-tools/mcp-web dev
+pnpm --filter @open-agent-tools/rag-server dev
+pnpm --filter @open-agent-tools/studio-web dev
 ```
 
 Worker 按前面的环境加载方式单独启动。默认地址：
 
 | 服务                 | 地址                                               |
 | -------------------- | -------------------------------------------------- |
-| MCP Web              | `http://localhost:4300`                            |
+| Studio Web           | `http://localhost:5173`                            |
+| RAG Server Health    | `http://localhost:4001/api/health`                 |
 | Control Plane Health | `http://localhost:4200/health`                     |
 | MCP Gateway Health   | `http://localhost:4100/health`                     |
 | MCP Service Endpoint | `http://localhost:4100/mcp/services/{serviceSlug}` |
@@ -377,7 +383,7 @@ pnpm --filter @open-agent-tools/mcp-auth test
 pnpm --filter @open-agent-tools/mcp-control-plane test
 pnpm --filter @open-agent-tools/mcp-server test
 pnpm --filter @open-agent-tools/mcp-worker test
-pnpm --filter @open-agent-tools/mcp-web test
+pnpm --filter @open-agent-tools/studio-web test
 pnpm --filter @open-agent-tools/mcp-nodejs-runner test
 ```
 
@@ -405,7 +411,7 @@ Docker E2E 还需要本机 Docker daemon 和已构建的测试 Runner 镜像。
 - 仅支持托管 Node.js 20 ESM/npm Tool；不支持 Python、Java、Yarn、pnpm Tool 包、Bun 或自定义 Dockerfile。
 - 不支持托管 MCP Resources，也未完成远程 MCP 服务代理。
 - 管理端已提供 Builds、Clients/Access 和 Audit 操作视图；独立 Executions 页面仍需补全。
-- MCP Web 与 Control Plane 当前没有身份认证或用户隔离，不适合直接暴露到公网。
+- Studio Web 与 Control Plane 当前没有身份认证或用户隔离，不适合直接暴露到公网。
 - 仓库未提供一键式 Docker Compose 或 Kubernetes 部署清单。
 - Node.js 20 已结束上游生命周期；生产上线前应完成安全例外审批或升级到受支持的 LTS，并同步更新运行时契约。
 

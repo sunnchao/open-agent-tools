@@ -82,7 +82,11 @@ export async function createRuntime(): Promise<Runtime> {
     logAudit({ ...entry, sessionId: cli.currentSession?.id ?? null });
   };
 
-  const callbacks = createAgentCallbacks({ cli, permissionManager });
+  const callbacks = createAgentCallbacks({
+    cli,
+    permissionManager,
+    modelName: process.env.OPENAI_API_MODEL || "Qwen3.6-35B-A3B",
+  });
 
   const runtime: Runtime = {
     rl,

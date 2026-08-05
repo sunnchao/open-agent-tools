@@ -29,6 +29,99 @@ import {
 } from "../store/context.ts";
 import type { MemoryStore } from "../store/memory.ts";
 import { handleMemoryCommand } from "./memoryCommands.ts";
+import { formatTokens } from "../ui/terminal.ts";
+
+/** 斜杠命令目录项：用于菜单选择与 /help 展示。 */
+export interface SlashCommandDef {
+  /** 可执行命令名，如 `/new`、`/mcp trust`。 */
+  name: string;
+  /** 简短中文说明。 */
+  description: string;
+  /** 展示用参数提示，如 `<id>`。 */
+  argsHint?: string;
+  /** 选择后提示用户输入参数的文案；有值表示需要额外参数。 */
+  argsPrompt?: string;
+  /** 参数可留空（如 /mcp trust 留空表示信任全部）。 */
+  argsOptional?: boolean;
+}
+
+/**
+ * 全部可菜单选择的斜杠命令。
+ * 带参数的命令在菜单确认后会再询问参数，再交给 handleCommand 执行。
+ */
+export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
+  { name: "/new", description: "创建新会话" },
+  { name: "/list", description: "列出所有会话" },
+  {
+    name: "/load",
+    description: "加载指定会话（支持部分 ID）",
+    argsHint: "<id>",
+    argsPrompt: "会话 ID",
+  },
+  { name: "/info", description: "查看当前会话详情（模型/用量）" },
+  {
+    name: "/delete",
+    description: "删除指定会话",
+    argsHint: "<id>",
+    argsPrompt: "会话 ID",
+  },
+  { name: "/tools", description: "列出当前可用工具（含来源 mcp:server）" },
+  { name: "/mcp", description: "查看已配置的 MCP server 信任状态" },
+  {
+    name: "/mcp trust",
+    description: "信任某个 MCP server 并重新加载",
+    argsHint: "[name]",
+    argsPrompt: "MCP server 名称（留空=信任全部）",
+    argsOptional: true,
+  },
+  {
+    name: "/mcp untrust",
+    description: "取消信任某个 MCP server",
+    argsHint: "<name>",
+    argsPrompt: "MCP server 名称",
+  },
+  { name: "/audit", description: "查看工具调用审计日志" },
+  {
+    name: "/init",
+    description: `扫描仓库并生成项目上下文 (${CONTEXT_FILE_NAME})`,
+  },
+  { name: "/context", description: "查看当前已加载的项目上下文" },
+  { name: "/memory", description: "查看长期记忆命令" },
+  { name: "/help", description: "显示此帮助" },
+];
+
+/** 菜单/帮助里展示的命令签名（含参数提示）。 */
+export function slashCommandSignature(cmd: SlashCommandDef): string {
+  return cmd.argsHint ? `${cmd.name} ${cmd.argsHint}` : cmd.name;
+}
+
+/**
+ * 按用户输入过滤斜杠命令。
+ * query 为 `/` 或空时返回全部；否则按命令名/说明做前缀或包含匹配。
+ */
+export function filterSlashCommands(query: string): SlashCommandDef[] {
+  const raw = query.trim();
+  const q = raw.replace(/^\//, "").toLowerCase().trim();
+  if (!q) return [...SLASH_COMMANDS];
+
+  return SLASH_COMMANDS.filter((cmd) => {
+    const name = cmd.name.slice(1).toLowerCase(); // 去掉前导 /
+    const signature = slashCommandSignature(cmd).slice(1).toLowerCase();
+    return (
+      name.startsWith(q) ||
+      signature.startsWith(q) ||
+      name.includes(q) ||
+      cmd.description.toLowerCase().includes(q)
+    );
+  });
+}
+
+/** 会话 usage 的紧凑展示（无用量时为 ""）。 */
+function usageLabel(input: number, output: number, reasoning: number): string {
+  if (input <= 0 && output <= 0) return "";
+  const reasoningPart = reasoning > 0 ? ` · 推理 ${formatTokens(reasoning)}` : "";
+  return ` ${chalk.dim(`⇅ ${formatTokens(input)}/${formatTokens(output)}${reasoningPart} tokens`)}`;
+}
 
 /**
  * 跨命令共享的可变状态与依赖。
@@ -76,10 +169,69 @@ export async function handleCommand(input: string, ctx: CliContext): Promise<boo
       for (const s of sessions) {
         const prefix = ctx.currentSession?.id === s.id ? chalk.green("→") : " ";
         const date = new Date(s.updatedAt).toLocaleString("zh-CN");
+        const usage = usageLabel(
+          s.usage?.inputTokens ?? 0,
+          s.usage?.outputTokens ?? 0,
+          s.usage?.reasoningTokens ?? 0,
+        );
         console.log(
-          `${prefix} ${chalk.cyan(s.id.slice(0, 8))} ${s.title} ${chalk.dim(`(${date})`)}`,
+          `${prefix} ${chalk.cyan(s.id.slice(0, 8))} ${s.title} ${chalk.dim(`(${date})`)}${usage}`,
         );
       }
+      console.log();
+    }
+    return true;
+  }
+
+  if (trimmed === "/info") {
+    const session = ctx.currentSession;
+    if (!session) {
+      console.log(chalk.dim("当前无会话。输入 /new 创建，或 /load <id> 加载已有会话。"));
+      return true;
+    }
+    const count = session.messages.length;
+    const reasoningCount = session.messages.filter((m) => m.role === "reasoning").length;
+    const toolCount = session.messages.filter((m) => m.role === "tool").length;
+    const assistantCount = session.messages.filter((m) => m.role === "assistant").length;
+    const userCount = session.messages.filter((m) => m.role === "user").length;
+    const usage = session.usage ?? { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+    const totalTokens = usage.inputTokens + usage.outputTokens;
+
+    console.log(chalk.bold("\n会话信息:"));
+    console.log(`  会话 ID: ${chalk.cyan(session.id)}`);
+    console.log(`  标题: ${session.title}`);
+    console.log(`  模型: ${chalk.cyan(process.env.OPENAI_API_MODEL || "Qwen3.6-35B-A3B")}`);
+    console.log(`  最近更新: ${new Date(session.updatedAt).toLocaleString("zh-CN")}`);
+    console.log();
+
+    console.log(chalk.bold(`  消息统计 (${count}):`));
+    console.log(
+      `    用户 ${userCount} · 助手 ${assistantCount} · 工具 ${toolCount} · 推理 ${reasoningCount}`,
+    );
+    console.log();
+
+    console.log(chalk.bold("  累计模型用量:"));
+    console.log(
+      `    输入 ${chalk.dim(formatTokens(usage.inputTokens))} tokens · ` +
+        `输出 ${chalk.dim(formatTokens(usage.outputTokens))} tokens · ` +
+        `推理 ${chalk.dim(formatTokens(usage.reasoningTokens))} tokens · ` +
+        `总计 ${chalk.dim(formatTokens(totalTokens))} tokens`,
+    );
+    if (totalTokens > 0) {
+      const reasoningPct =
+        totalTokens > 0 ? Math.round((usage.reasoningTokens / totalTokens) * 100) : 0;
+      console.log(
+        `    精确值: ${usage.inputTokens} / ${usage.outputTokens} / ${usage.reasoningTokens} ` +
+          chalk.dim(`(推理占比 ${reasoningPct}%)`),
+      );
+    }
+    console.log();
+
+    const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant");
+    if (lastAssistant) {
+      const preview = lastAssistant.content.replace(/\s+/g, " ").slice(0, 60);
+      console.log(chalk.bold("  最后回复:"));
+      console.log(`    ${chalk.dim(preview)}${lastAssistant.content.length > 60 ? "…" : ""}`);
       console.log();
     }
     return true;
@@ -227,22 +379,14 @@ export async function handleCommand(input: string, ctx: CliContext): Promise<boo
 
   if (trimmed === "/help") {
     console.log(chalk.bold("\n可用命令:"));
-    console.log(`  ${chalk.cyan("/new")}           - 创建新会话`);
-    console.log(`  ${chalk.cyan("/list")}          - 列出所有会话`);
-    console.log(`  ${chalk.cyan("/load <id>")}     - 加载指定会话（支持部分 ID）`);
-    console.log(`  ${chalk.cyan("/delete <id>")}   - 删除指定会话`);
-    console.log(`  ${chalk.cyan("/tools")}         - 列出当前可用工具（含来源 mcp:server）`);
-    console.log(`  ${chalk.cyan("/mcp")}           - 查看已配置的 MCP server 信任状态`);
-    console.log(`  ${chalk.cyan("/mcp trust <name>")} - 信任某个 MCP server 并重新加载`);
-    console.log(`  ${chalk.cyan("/mcp untrust <name>")} - 取消信任某个 MCP server`);
-    console.log(`  ${chalk.cyan("/audit")}         - 查看工具调用审计日志`);
-    console.log(
-      `  ${chalk.cyan("/init")}          - 扫描仓库并生成项目上下文 (${CONTEXT_FILE_NAME})`,
-    );
-    console.log(`  ${chalk.cyan("/context")}       - 查看当前已加载的项目上下文`);
-    console.log(`  ${chalk.cyan("/memory")}        - 查看长期记忆命令`);
-    console.log(`  ${chalk.cyan("/help")}          - 显示此帮助`);
-    console.log(`  ${chalk.cyan("exit")}           - 退出程序\n`);
+    console.log(chalk.dim("  提示: 输入 / 后回车可打开菜单，用 ↑/↓ 选择命令\n"));
+    const maxSig = Math.max(...SLASH_COMMANDS.map((c) => slashCommandSignature(c).length), 4);
+    for (const cmd of SLASH_COMMANDS) {
+      const sig = slashCommandSignature(cmd);
+      console.log(`  ${chalk.cyan(sig.padEnd(maxSig))}  - ${cmd.description}`);
+    }
+    console.log(`  ${chalk.cyan("exit".padEnd(maxSig))}  - 退出程序`);
+    console.log();
     return true;
   }
 

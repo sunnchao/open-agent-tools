@@ -18,7 +18,7 @@ import { tool } from "@langchain/core/tools";
 import type { InterruptOnConfig } from "langchain";
 import { LocalShellBackend } from "deepagents";
 import { z } from "zod";
-import { Agent, type AgentCallbacks, type AgentOptions } from "./agent.ts";
+import { Agent, type AgentCallbacks, type AgentOptions, type TokenUsage } from "./agent.ts";
 
 /** 测试夹具：一个响应元素——纯文本，或带 tool_calls 的 AIMessage。 */
 type TestResponse = string | AIMessage;
@@ -74,6 +74,18 @@ class TestChatModel extends BaseChatModel {
   ): AsyncGenerator<ChatGenerationChunk> {
     const response = this.next();
     if (response instanceof AIMessage) {
+      // 模拟 OpenAI 兼容 API：reasoning_content 先于 content/tool_calls 以独立 chunk 到达
+      const reasoning = (response.additional_kwargs as { reasoning_content?: unknown })
+        .reasoning_content;
+      if (typeof reasoning === "string" && reasoning) {
+        yield new ChatGenerationChunk({
+          message: new AIMessageChunk({
+            content: "",
+            additional_kwargs: { reasoning_content: reasoning },
+          }),
+          text: "",
+        });
+      }
       if (response.tool_calls?.length) {
         // 流式路径：把 tool_calls 转成 tool_call_chunks 逐块输出
         for (const tc of response.tool_calls) {
@@ -87,6 +99,12 @@ class TestChatModel extends BaseChatModel {
             text: "",
           });
         }
+        if (response.usage_metadata) {
+          yield new ChatGenerationChunk({
+            message: new AIMessageChunk({ content: "", usage_metadata: response.usage_metadata }),
+            text: "",
+          });
+        }
         return;
       }
       const text = typeof response.content === "string" ? response.content : "";
@@ -94,6 +112,13 @@ class TestChatModel extends BaseChatModel {
         message: new AIMessageChunk({ content: response.content }),
         text,
       });
+      // 模拟 langchain-openai：流式末尾单独 yield 一个携带 usage_metadata 的空 content chunk
+      if (response.usage_metadata) {
+        yield new ChatGenerationChunk({
+          message: new AIMessageChunk({ content: "", usage_metadata: response.usage_metadata }),
+          text: "",
+        });
+      }
       return;
     }
     yield new ChatGenerationChunk({
@@ -103,14 +128,11 @@ class TestChatModel extends BaseChatModel {
   }
 }
 
-const sampleTool = tool(
-  async ({ value }: { value: string }) => `echo:${value}`,
-  {
-    name: "sample_tool",
-    description: "test stub",
-    schema: z.object({ value: z.string() }),
-  },
-);
+const sampleTool = tool(async ({ value }: { value: string }) => `echo:${value}`, {
+  name: "sample_tool",
+  description: "test stub",
+  schema: z.object({ value: z.string() }),
+});
 
 const mcpSampleTool = tool(async () => "mcp-result", {
   name: "mcp_sample_tool",
@@ -179,6 +201,74 @@ describe("Agent.runTurn (deepagents)", () => {
     const answer = await agent.runTurn(history, "system prompt");
     assert.equal(answer, "done");
     assert.ok(history.some((m) => m.getType() === "ai"));
+  });
+
+  it("推理内容经 onReasoning 流式转发，不混入 onToken 文本", async () => {
+    const { agent, history } = makeAgent([
+      new AIMessage({
+        content: "final answer",
+        additional_kwargs: { reasoning_content: "第一步: 拆解问题\n第二步: 得出结论" },
+      }),
+    ]);
+    const tokens: string[] = [];
+    const reasoning: string[] = [];
+    const answer = await agent.runTurn(history, "system prompt", {
+      onToken: (text) => tokens.push(text),
+      onReasoning: (text) => reasoning.push(text),
+    });
+
+    assert.equal(answer, "final answer");
+    assert.deepEqual(tokens, ["final answer"]);
+    assert.deepEqual(reasoning, ["第一步: 拆解问题\n第二步: 得出结论"]);
+  });
+
+  it("无推理内容时 onReasoning 不触发", async () => {
+    const { agent, history } = makeAgent(["plain answer"]);
+    const reasoning: string[] = [];
+    await agent.runTurn(history, "system prompt", {
+      onReasoning: (text) => reasoning.push(text),
+    });
+    assert.deepEqual(reasoning, []);
+  });
+
+  it("onUsage 汇总整轮 agentic loop 的 token 用量（含推理 token）", async () => {
+    const { agent, history } = makeAgent([
+      new AIMessage({
+        content: "",
+        tool_calls: [{ name: "sample_tool", args: { value: "x" }, id: "call_u1" }],
+        usage_metadata: {
+          input_tokens: 100,
+          output_tokens: 20,
+          total_tokens: 120,
+          output_token_details: { reasoning: 5 },
+        },
+      }),
+      new AIMessage({
+        content: "done",
+        usage_metadata: {
+          input_tokens: 80,
+          output_tokens: 30,
+          total_tokens: 110,
+          output_token_details: { reasoning: 10 },
+        },
+      }),
+    ]);
+    const usages: TokenUsage[] = [];
+    const answer = await agent.runTurn(history, "system prompt", {
+      onUsage: (usage) => usages.push(usage),
+    });
+
+    assert.equal(answer, "done");
+    assert.deepEqual(usages, [{ inputTokens: 180, outputTokens: 50, reasoningTokens: 15 }]);
+  });
+
+  it("无 usage 信息时不触发 onUsage", async () => {
+    const { agent, history } = makeAgent(["plain"]);
+    const usages: TokenUsage[] = [];
+    await agent.runTurn(history, "system prompt", {
+      onUsage: (usage) => usages.push(usage),
+    });
+    assert.deepEqual(usages, []);
   });
 
   it("危险工具调用被批准：触发 onToolCall/onToolStart/onToolResult 与 allowed 审计", async () => {

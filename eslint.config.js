@@ -34,10 +34,18 @@ export default tseslint.config(
     },
   },
   {
-    files: ["apps/web/src/**/*.{ts,tsx}"],
+    files: ["apps/studio-web/src/**/*.{ts,tsx}"],
     languageOptions: {
       globals: {
         ...globals.browser,
+      },
+    },
+  },
+  {
+    files: ["apps/rag-server/server/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
       },
     },
   },
