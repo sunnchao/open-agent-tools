@@ -23,6 +23,8 @@ function createLocalSession(): Session {
     messages: [],
     updatedAt: Date.now(),
     resources: emptyChatResources(),
+    providerId: undefined,
+    model: undefined,
   };
 }
 
@@ -120,6 +122,8 @@ export function useChatSessions() {
       messages: [],
       updatedAt: Date.now(),
       resources: emptyChatResources(),
+      providerId: undefined,
+      model: undefined,
     };
     setSessions((prev) => [s, ...prev]);
     setActiveId(s.id);
@@ -314,6 +318,20 @@ export function useChatSessions() {
     [],
   );
 
+  /** 更新会话的模型路由（Provider + 模型）。 */
+  const updateSessionRouting = useCallback(
+    (sessionId: string, routing: { providerId?: string; model?: string }) => {
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId
+            ? { ...session, ...routing, updatedAt: Date.now() }
+            : session,
+        ),
+      );
+    },
+    [],
+  );
+
   return {
     ready,
     sessions,
@@ -330,5 +348,6 @@ export function useChatSessions() {
     updateToolCall,
     removeMessage,
     updateSessionResources,
+    updateSessionRouting,
   };
 }

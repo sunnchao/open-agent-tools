@@ -86,6 +86,10 @@ export interface Session {
   messages: Message[];
   updatedAt: number;
   resources: ChatResourceBinding;
+  /** 会话级模型路由：选中的 Provider id（缺省走服务端 default）。 */
+  providerId?: string;
+  /** 会话级模型名；缺省时服务端回退到 Provider 的第一个模型。 */
+  model?: string;
 }
 
 /** 发送给服务端的消息形态——剥离仅前端使用的字段。 */

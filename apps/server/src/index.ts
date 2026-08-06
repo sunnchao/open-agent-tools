@@ -61,6 +61,10 @@ initializeProviders();
 
 app.use(cors({ origin: webOrigin }));
 app.use(express.json({ limit: "2mb" }));
+app.use((req, res, next) => {
+  console.log("Time", Date.now());
+  next();
+});
 
 // 请求级 trace:所有端点进出、状态码与耗时(health 探活静默,避免刷屏)
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -297,9 +301,21 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       .json({ error: providerId ? "provider not found" : "default provider is unavailable" });
     return;
   }
-  const openai = createProviderClient(selectedProvider);
-  const selectedModel =
-    model || selectedProvider.models[0] || process.env.OPENAI_API_MODEL || "gpt-4o-mini";
+  let openai: ReturnType<typeof createProviderClient>;
+  try {
+    openai = createProviderClient(selectedProvider);
+  } catch (error) {
+    const missingCredentials = error instanceof Error && /missing credentials/i.test(error.message);
+    const message = missingCredentials
+      ? `Provider「${selectedProvider.name}」未配置 API Key，请在「设置」中为该 Provider 填写 API Key`
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    logTrace("chat.provider_unavailable", { providerId: selectedProvider.id, error: message }, "warn");
+    res.status(400).json({ error: message });
+    return;
+  }
+  const selectedModel = model || selectedProvider.models[0] || "gpt-4o-mini";
   try {
     bindings = normalizeResourceBindings(resources);
   } catch (error) {

@@ -393,6 +393,10 @@ async function runNode(
       const complete =
         deps.completeLlm ??
         (async (resolvedProvider, value) => {
+          if (!resolvedProvider.apiKey)
+            throw new Error(
+              `Provider「${resolvedProvider.name}」未配置 API Key，请在「设置」中为该 Provider 填写 API Key`,
+            );
           const client = createProviderClient(resolvedProvider);
           const response = await client.chat.completions.create(
             {

@@ -3,10 +3,13 @@ import { emptyChatResources, type Session } from "../types.js";
 const STORAGE_KEY = "open-agent-tools.chat.v1";
 
 export function normalizeSession(
-  session: Omit<Session, "resources"> & Partial<Pick<Session, "resources">>,
+  session: Omit<Session, "resources" | "providerId" | "model"> &
+    Partial<Pick<Session, "resources" | "providerId" | "model">>,
 ): Session {
   return {
     ...session,
+    providerId: typeof session.providerId === "string" && session.providerId ? session.providerId : undefined,
+    model: typeof session.model === "string" && session.model ? session.model : undefined,
     resources: {
       mcpTools: Array.isArray(session.resources?.mcpTools) ? session.resources.mcpTools : [],
       rag: {

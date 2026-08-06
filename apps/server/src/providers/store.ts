@@ -187,41 +187,16 @@ export function updateProvider(
 export function deleteProvider(id: string): "deleted" | "not_found" | "default" {
   const current = getRow(id);
   if (!current) return "not_found";
-  if (current.is_default === 1) return "default";
+  // 默认 Provider（id 为 "default" 或标记为 is_default）不可删除，
+  // 因为 /api/chat 与 Workflow LLM 节点在未指定 providerId 时会路由到它。
+  if (current.id === "default" || current.is_default === 1) return "default";
   openDb().prepare(`DELETE FROM providers WHERE id = ?`).run(id);
   return "deleted";
 }
 
-export function ensureDefaultProvider(): Provider {
-  const existing = getProvider("default");
-  if (existing) return existing;
-  const model = process.env.OPENAI_API_MODEL?.trim() || "gpt-4o-mini";
-  const baseUrl = process.env.OPENAI_API_BASE_URL?.trim() || "https://api.openai.com/v1";
-  const input: ProviderInput = {
-    id: "default",
-    name: "OpenAI",
-    baseUrl,
-    models: [model],
-    enabled: true,
-    apiKey: process.env.OPENAI_API_KEY?.trim() || null,
-  };
-  const normalized = normalizeInput(input);
-  const timestamp = now();
-  const encrypted = normalized.apiKey ? encryptProviderKey(normalized.apiKey) : null;
-  openDb()
-    .prepare(
-      `INSERT INTO providers (id, name, base_url, api_key_enc, models_json, enabled, is_default, created_at, updated_at)
-       VALUES ('default', ?, ?, ?, ?, 1, 1, ?, ?)`,
-    )
-    .run(
-      normalized.name,
-      normalized.baseUrl,
-      encrypted,
-      JSON.stringify(normalized.models),
-      timestamp,
-      timestamp,
-    );
-  return getProvider("default")!;
+export function ensureDefaultProvider(): Provider | null {
+  // Provider 完全由设置页面管理，不再从环境变量注入默认 Provider。
+  return getProvider("default");
 }
 
 export function createProviderClient(provider: ProviderWithKey): OpenAI {
@@ -249,6 +224,6 @@ export async function fetchProviderModels(id: string): Promise<string[]> {
     .filter(Boolean);
 }
 
-export function initializeProviders(): Provider {
+export function initializeProviders(): Provider | null {
   return ensureDefaultProvider();
 }

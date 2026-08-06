@@ -7,7 +7,6 @@ import { closeDb } from "../db.js";
 import {
   createProvider,
   deleteProvider,
-  ensureDefaultProvider,
   fetchProviderModels,
   getProvider,
   listProviders,
@@ -38,9 +37,14 @@ afterEach(() => {
 
 describe("provider store", () => {
   it("creates the default provider and masks encrypted keys", () => {
-    process.env.OPENAI_API_KEY = "sk-secret-value";
-    process.env.OPENAI_API_MODEL = "gpt-test";
-    const provider = ensureDefaultProvider();
+    const provider = createProvider({
+      id: "default",
+      name: "OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-secret-value",
+      models: ["gpt-test"],
+      enabled: true,
+    });
     assert.equal(provider.id, "default");
     assert.equal(provider.apiKeyMasked, "sk***lue");
     assert.equal(getProvider("default")?.apiKey, "sk-secret-value");
@@ -62,7 +66,12 @@ describe("provider store", () => {
   });
 
   it("supports CRUD while preserving the default", () => {
-    ensureDefaultProvider();
+    createProvider({
+      id: "default",
+      name: "OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+      models: ["gpt-4o-mini"],
+    });
     const provider = createProvider({
       name: "Local",
       baseUrl: "http://localhost:11434/v1",

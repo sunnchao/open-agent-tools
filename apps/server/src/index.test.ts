@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
 import { closeDb } from "./db.js";
+import { createProvider } from "./providers/store.js";
 
 let server: Server;
 let origin: string;
@@ -18,6 +19,14 @@ before(async () => {
   process.env.PROVIDER_KEYS_ENCRYPTION_KEY =
     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
   const { app } = await import("./index.js");
+  // Provider 不再由环境变量注入，测试需显式 seed 一个默认 Provider。
+  createProvider({
+    id: "default",
+    name: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    models: ["gpt-4o-mini"],
+    enabled: true,
+  });
   server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();

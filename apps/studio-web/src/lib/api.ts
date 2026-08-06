@@ -119,6 +119,8 @@ export function streamChat(
     sessionId?: string;
     userMessage?: { id?: string; content: string };
     resources?: ChatResourceBinding;
+    /** 指定走哪个已配置的 Provider（缺省由服务端路由到 default）。 */
+    providerId?: string;
   },
 ): AbortController {
   const controller = new AbortController();
@@ -134,6 +136,7 @@ export function streamChat(
           sessionId: opts?.sessionId,
           userMessage: opts?.userMessage,
           resources: opts?.resources,
+          ...(opts?.providerId ? { providerId: opts.providerId } : {}),
         }),
         signal: controller.signal,
       });

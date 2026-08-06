@@ -34,6 +34,7 @@ export function useChatStream({
       messages: ChatRequestMessage[],
       userMessage?: { id: string; content: string },
       resources?: ChatResourceBinding,
+      routing?: { providerId?: string; model?: string },
     ) => {
       // 本地乐观占位；服务端稍后分配规范的 assistant id。
       const localAssistantId = newId();
@@ -51,7 +52,7 @@ export function useChatStream({
 
       controllerRef.current = streamChat(
         messages,
-        model,
+        routing?.model ?? model,
         {
           onAssistantMessageId: (id) => {
             if (id === assistantId) return;
@@ -100,6 +101,7 @@ export function useChatStream({
           sessionId,
           userMessage,
           resources,
+          ...(routing?.providerId ? { providerId: routing.providerId } : {}),
         },
       );
     },

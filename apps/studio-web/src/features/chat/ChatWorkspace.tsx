@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Layout, Spin } from "antd";
 import { Sidebar } from "../../components/Sidebar.js";
 import { ChatHeader } from "../../components/ChatHeader.js";
@@ -8,6 +8,7 @@ import { useChatSessions } from "../../hooks/useChatSessions.js";
 import { useChatStream } from "../../hooks/useChatStream.js";
 import { newId } from "../../lib/ids.js";
 import type { ChatRequestMessage, Message } from "../../types.js";
+import { fetchProviders, type ProviderMetadata } from "../providers/api.js";
 import { useResourceCatalog } from "../resources/useResourceCatalog.js";
 import { ChatResourceDrawer } from "./ChatResourceDrawer.js";
 
@@ -28,13 +29,31 @@ export function ChatWorkspace() {
     updateToolCall,
     removeMessage,
     updateSessionResources,
+    updateSessionRouting,
   } = useChatSessions();
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false);
   const resources = useResourceCatalog();
 
-  const model = import.meta.env.VITE_MODEL as string | undefined;
+  // 拉取已启用的 Provider 目录，供对话路由选择。
+  const [providers, setProviders] = useState<ProviderMetadata[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchProviders()
+      .then((items) => {
+        if (!cancelled) setProviders(items.filter((provider) => provider.enabled));
+      })
+      .catch((reason) => {
+        console.warn("Failed to load providers for chat routing.", reason);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 会话未显式选择模型时，回退到构建期 VITE_MODEL（保持原有行为）。
+  const fallbackModel = import.meta.env.VITE_MODEL as string | undefined;
   const { isStreaming, send, stop } = useChatStream({
-    model,
+    model: activeSession?.model ?? fallbackModel,
     addMessage,
     appendDelta: appendMessageDelta,
     updateMessage,
@@ -59,9 +78,18 @@ export function ChatWorkspace() {
           .map((message) => ({ role: message.role, content: message.content })),
         { role: "user", content },
       ];
-      send(activeSession.id, apiMessages, { id: userMsg.id, content }, activeSession.resources);
+      send(
+        activeSession.id,
+        apiMessages,
+        { id: userMsg.id, content },
+        activeSession.resources,
+        {
+          providerId: activeSession.providerId ?? providers[0]?.id,
+          model: activeSession.model ?? providers[0]?.models[0],
+        },
+      );
     },
-    [activeSession, addMessage, send],
+    [activeSession, addMessage, send, providers],
   );
 
   const handleRetry = useCallback(() => {
@@ -82,8 +110,12 @@ export function ChatWorkspace() {
         .map((message) => ({ role: message.role, content: message.content })),
       undefined,
       activeSession.resources,
+      {
+        providerId: activeSession.providerId ?? providers[0]?.id,
+        model: activeSession.model ?? providers[0]?.models[0],
+      },
     );
-  }, [activeSession, removeMessage, send]);
+  }, [activeSession, removeMessage, send, providers]);
 
   const status: "idle" | "streaming" | "error" = useMemo(() => {
     if (isStreaming) return "streaming";
@@ -113,7 +145,10 @@ export function ChatWorkspace() {
         <ChatHeader
           title={activeSession.title}
           status={status}
-          model={model ?? "default"}
+          providers={providers}
+          providerId={activeSession.providerId}
+          model={activeSession.model}
+          onRoutingChange={(routing) => updateSessionRouting(activeSession.id, routing)}
           mcpToolCount={activeSession.resources.mcpTools.length}
           ragSourceCount={activeSession.resources.rag.sources.length}
           onConfigureResources={() => setResourceDrawerOpen(true)}
