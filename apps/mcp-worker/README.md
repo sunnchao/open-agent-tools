@@ -6,6 +6,30 @@
 
 Worker 拥有 Docker、对象存储、Registry、PostgreSQL 和 Redis 访问权限，应部署在独立的受限网络中，不能暴露到公网。
 
+## 代码结构
+
+`src` 按依赖方向分层：入口 → 队列 → 服务 → 基础设施。
+
+```
+src/
+├── index.ts                     # 进程入口（组合根，装配所有依赖）
+├── workers/                     # BullMQ 队列消费层
+│   ├── build-queue.ts           # 构建队列：Artifact 检查与 Tool 构建
+│   └── execution-queue.ts       # 执行队列：运行已发布的 Tool 镜像
+├── services/                    # 领域服务层（业务流程编排 + 端口接口定义）
+│   ├── artifact-inspection.ts   # Artifact 检查服务
+│   └── tool-build.ts            # Tool 构建服务
+└── infrastructure/              # 基础设施适配层（外部依赖的具体实现）
+    ├── archive.ts               # ZIP 检查与安全解压
+    ├── node-package.ts          # Node.js 包与 Manifest 校验
+    ├── docker/                  # Docker 相关：执行运行时、构建命令、Smoke 验证、镜像构建
+    ├── platform/                # 平台命令执行（spawn）
+    ├── repository/              # PostgreSQL 持久化
+    └── storage/                 # S3 对象存储（Artifact 下载、SBOM 上传）
+```
+
+依赖方向为 `infrastructure` 向上提供端口实现、`services` 编排业务流程、`workers` 消费队列，各层不反向依赖。
+
 ## Worker 模式
 
 进程启动后创建两类 BullMQ Worker：

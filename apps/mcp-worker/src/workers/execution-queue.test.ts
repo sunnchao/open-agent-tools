@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ToolExecutionJob } from "@open-agent-tools/mcp-contracts";
-import { ToolExecutionProcessor, type ToolContainerRuntime } from "./execution.js";
+import { ToolExecutionProcessor, type ToolContainerRuntime } from "./execution-queue.js";
 
 const job: ToolExecutionJob = {
   requestId: "request-1",

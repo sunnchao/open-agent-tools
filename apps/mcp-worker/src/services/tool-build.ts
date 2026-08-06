@@ -17,12 +17,12 @@ import {
   type ArchiveValidationCode,
   extractZipArchive,
   inspectZipArchive,
-} from "./archive.js";
+} from "../infrastructure/archive.js";
 import {
   NodePackageValidationError,
   type NodePackageValidationCode,
   readNodeToolPackage,
-} from "./node-package.js";
+} from "../infrastructure/node-package.js";
 
 export type BuildFailureCode =
   | "ARTIFACT_DIGEST_MISMATCH"

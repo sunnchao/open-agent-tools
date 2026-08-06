@@ -10,7 +10,7 @@ import {
   type VerificationDockerClient,
 } from "./docker-tool-verifier.js";
 import { NODE20_BUILD_IMAGE } from "./docker-build-command.js";
-import { ToolPackageVerificationError } from "./tool-build.js";
+import { ToolPackageVerificationError } from "../../services/tool-build.js";
 
 const manifest: ManagedMcpManifest = {
   schemaVersion: 1,

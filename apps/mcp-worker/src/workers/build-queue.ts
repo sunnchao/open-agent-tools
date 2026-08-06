@@ -6,8 +6,11 @@ import {
 import { Worker, type Job } from "bullmq";
 import { Redis } from "ioredis";
 
-import type { ArtifactInspectionResult, ArtifactInspectionService } from "./artifact-inspection.js";
-import type { ToolBuildResult, ToolBuildService } from "./tool-build.js";
+import type {
+  ArtifactInspectionResult,
+  ArtifactInspectionService,
+} from "../services/artifact-inspection.js";
+import type { ToolBuildResult, ToolBuildService } from "../services/tool-build.js";
 
 export interface ArtifactInspectionProcessorService {
   inspect(input: ArtifactInspectionJob): Promise<ArtifactInspectionResult>;

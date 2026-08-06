@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { NODE20_BUILD_IMAGE } from "./docker-build-command.js";
-import type { ToolImageBuilder } from "./tool-build.js";
+import type { ToolImageBuilder } from "../../services/tool-build.js";
 
 export interface PlatformCommandRunner {
   run(

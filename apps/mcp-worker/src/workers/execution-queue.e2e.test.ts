@@ -6,8 +6,8 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Queue, QueueEvents } from "bullmq";
 import { Redis } from "ioredis";
 
-import { createDockerClient, DockerToolContainerRuntime } from "./docker-runtime.js";
-import { createToolExecutionWorker, TOOL_EXECUTION_QUEUE } from "./execution.js";
+import { createDockerClient, DockerToolContainerRuntime } from "../infrastructure/docker/docker-runtime.js";
+import { createToolExecutionWorker, TOOL_EXECUTION_QUEUE } from "./execution-queue.js";
 
 const redisUrl = process.env.TEST_REDIS_URL;
 const imageDigest = process.env.TEST_TOOL_IMAGE_DIGEST;

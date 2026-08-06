@@ -1,7 +1,7 @@
 import type { ArtifactInspectionJob, ManagedMcpManifest } from "@open-agent-tools/mcp-contracts";
 
 import { NODE20_BUILD_IMAGE } from "./docker-build-command.js";
-import { ToolPackageVerificationError } from "./tool-build.js";
+import { ToolPackageVerificationError } from "../../services/tool-build.js";
 
 export interface VerificationContainerCreateOptions {
   Image: string;

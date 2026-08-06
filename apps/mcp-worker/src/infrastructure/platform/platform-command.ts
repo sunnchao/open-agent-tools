@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import type { PlatformCommandRunner } from "./tool-image-builder.js";
+import type { PlatformCommandRunner } from "../docker/tool-image-builder.js";
 
 export interface SpawnPlatformCommandRunnerOptions {
   timeoutMs?: number;

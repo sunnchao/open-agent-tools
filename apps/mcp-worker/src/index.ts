@@ -1,32 +1,32 @@
 import { pathToFileURL } from "node:url";
 
-export * from "./archive.js";
-export * from "./artifact-inspection.js";
-export * from "./docker-build-command.js";
-export * from "./docker-tool-verifier.js";
-export * from "./docker-runtime.js";
-export * from "./execution.js";
-export * from "./inspection-worker.js";
-export * from "./node-package.js";
-export * from "./platform-command.js";
-export * from "./postgres-artifact-inspection-repository.js";
-export * from "./s3-artifact-download.js";
-export { S3SbomStorage, createS3SbomStorage } from "./s3-sbom-storage.js";
-export * from "./tool-build.js";
-export * from "./tool-image-builder.js";
+export * from "./infrastructure/archive.js";
+export * from "./services/artifact-inspection.js";
+export * from "./infrastructure/docker/docker-build-command.js";
+export * from "./infrastructure/docker/docker-tool-verifier.js";
+export * from "./infrastructure/docker/docker-runtime.js";
+export * from "./workers/execution-queue.js";
+export * from "./workers/build-queue.js";
+export * from "./infrastructure/node-package.js";
+export * from "./infrastructure/platform/platform-command.js";
+export * from "./infrastructure/repository/postgres-artifact-inspection-repository.js";
+export * from "./infrastructure/storage/s3-artifact-download.js";
+export { S3SbomStorage, createS3SbomStorage } from "./infrastructure/storage/s3-sbom-storage.js";
+export * from "./services/tool-build.js";
+export * from "./infrastructure/docker/tool-image-builder.js";
 
-import { createDockerClient, DockerToolContainerRuntime } from "./docker-runtime.js";
-import { ArtifactInspectionService } from "./artifact-inspection.js";
-import { createToolExecutionWorker } from "./execution.js";
-import { createBuildQueueWorker } from "./inspection-worker.js";
-import { createPostgresArtifactInspectionRepository } from "./postgres-artifact-inspection-repository.js";
-import { createS3ArtifactDownload } from "./s3-artifact-download.js";
-import { DockerBuildCommandRunner, type BuildDockerClient } from "./docker-build-command.js";
-import { SpawnPlatformCommandRunner } from "./platform-command.js";
-import { ToolBuildService } from "./tool-build.js";
-import { DockerCliToolImageBuilder } from "./tool-image-builder.js";
-import { createS3SbomStorage } from "./s3-sbom-storage.js";
-import { DockerToolPackageVerifier, type VerificationDockerClient } from "./docker-tool-verifier.js";
+import { createDockerClient, DockerToolContainerRuntime } from "./infrastructure/docker/docker-runtime.js";
+import { ArtifactInspectionService } from "./services/artifact-inspection.js";
+import { createToolExecutionWorker } from "./workers/execution-queue.js";
+import { createBuildQueueWorker } from "./workers/build-queue.js";
+import { createPostgresArtifactInspectionRepository } from "./infrastructure/repository/postgres-artifact-inspection-repository.js";
+import { createS3ArtifactDownload } from "./infrastructure/storage/s3-artifact-download.js";
+import { DockerBuildCommandRunner, type BuildDockerClient } from "./infrastructure/docker/docker-build-command.js";
+import { SpawnPlatformCommandRunner } from "./infrastructure/platform/platform-command.js";
+import { ToolBuildService } from "./services/tool-build.js";
+import { DockerCliToolImageBuilder } from "./infrastructure/docker/tool-image-builder.js";
+import { createS3SbomStorage } from "./infrastructure/storage/s3-sbom-storage.js";
+import { DockerToolPackageVerifier, type VerificationDockerClient } from "./infrastructure/docker/docker-tool-verifier.js";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const redisUrl = process.env.REDIS_URL;

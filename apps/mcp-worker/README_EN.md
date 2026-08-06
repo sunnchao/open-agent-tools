@@ -6,6 +6,30 @@
 
 The Worker can access Docker, object storage, the Registry, PostgreSQL, and Redis. It must run on an isolated restricted network and must never be exposed publicly.
 
+## Code structure
+
+`src` is layered by dependency direction: entry → queue → services → infrastructure.
+
+```
+src/
+├── index.ts                     # Process entry (composition root)
+├── workers/                     # BullMQ queue consumers
+│   ├── build-queue.ts           # Build queue: artifact inspection and Tool builds
+│   └── execution-queue.ts       # Execution queue: run published Tool images
+├── services/                    # Domain services (workflow orchestration + port interfaces)
+│   ├── artifact-inspection.ts   # Artifact inspection service
+│   └── tool-build.ts            # Tool build service
+└── infrastructure/              # Infrastructure adapters (concrete implementations)
+    ├── archive.ts               # ZIP inspection and safe extraction
+    ├── node-package.ts          # Node.js package and manifest validation
+    ├── docker/                  # Docker: execution runtime, build commands, smoke verification, image building
+    ├── platform/                # Platform command execution (spawn)
+    ├── repository/              # PostgreSQL persistence
+    └── storage/                 # S3 object storage (artifact download, SBOM upload)
+```
+
+Dependencies flow from `infrastructure` (providing port implementations) up through `services` (orchestration) to `workers` (queue consumption); layers never depend backwards.
+
 ## Worker modes
 
 The process creates two BullMQ Workers:

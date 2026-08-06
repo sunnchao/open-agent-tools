@@ -7,8 +7,11 @@ import {
 } from "@open-agent-tools/mcp-contracts";
 import { Pool, type PoolClient } from "pg";
 
-import type { ArtifactInspectionRepository, InspectionFailureCode } from "./artifact-inspection.js";
-import type { BuildFailureCode, BuildJobRepository } from "./tool-build.js";
+import type {
+  ArtifactInspectionRepository,
+  InspectionFailureCode,
+} from "../../services/artifact-inspection.js";
+import type { BuildFailureCode, BuildJobRepository } from "../../services/tool-build.js";
 
 export class ArtifactInspectionStateError extends Error {
   constructor(message: string) {

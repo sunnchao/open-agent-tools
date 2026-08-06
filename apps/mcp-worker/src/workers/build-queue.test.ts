@@ -7,7 +7,7 @@ import {
   createArtifactInspectionProcessor,
   createBuildQueueProcessor,
   type ArtifactInspectionProcessorService,
-} from "./inspection-worker.js";
+} from "./build-queue.js";
 
 const job: ArtifactInspectionJob = {
   buildJobId: "build-1",
