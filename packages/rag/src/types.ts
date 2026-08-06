@@ -43,8 +43,8 @@ export interface IngestResult {
 /** 存储后端接口：换 Elasticsearch / seekdb 时新增实现即可，调用方 API 不变。 */
 export interface VectorStore {
   insert(chunk: Chunk, embedding: Float32Array): void;
-  vectorSearch(embedding: number[], k: number): ScoredChunk[];
-  keywordSearch(query: string, k: number): ScoredChunk[];
+  vectorSearch(embedding: number[], k: number, sources?: readonly string[]): ScoredChunk[];
+  keywordSearch(query: string, k: number, sources?: readonly string[]): ScoredChunk[];
   removeBySource(source: string): void;
   listSources(): string[];
   countChunks(): number;

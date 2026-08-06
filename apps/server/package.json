@@ -16,6 +16,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@open-agent-tools/shared": "workspace:*",
     "@langchain/anthropic": "^1.5.2",
     "@langchain/community": "^1.1.29",

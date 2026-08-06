@@ -64,6 +64,23 @@ test("keywordSearch AND 无结果时降级 OR（口语查询可召回）", () =>
   cleanup();
 });
 
+test("向量与关键词检索只返回挂载来源", () => {
+  const { dbPath, cleanup } = tmpDb();
+  const s = new SqliteVectorStore({ dbPath });
+  s.insert({ id: "a:0", source: "a.txt", chunkIndex: 0, content: "shared needle" }, fakeEmbedding(1));
+  s.insert({ id: "b:0", source: "b.txt", chunkIndex: 0, content: "shared needle" }, fakeEmbedding(5));
+
+  assert.deepEqual(s.vectorSearch(fakeEmbedding(5), 10, ["a.txt"]).map((hit) => hit.source), [
+    "a.txt",
+  ]);
+  assert.deepEqual(s.keywordSearch("needle", 10, ["b.txt"]).map((hit) => hit.source), [
+    "b.txt",
+  ]);
+  assert.deepEqual(s.keywordSearch("needle", 10, []), []);
+  s.close();
+  cleanup();
+});
+
 test("removeBySource 后向量与 FTS 均清空", () => {
   const { dbPath, cleanup } = tmpDb();
   const s = new SqliteVectorStore({ dbPath });

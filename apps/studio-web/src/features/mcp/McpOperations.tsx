@@ -21,6 +21,7 @@ import {
   listBuilds,
   listClients,
   listGrants,
+  listVersions,
   revokeApiKey,
   upsertGrant,
   type ApiClientRecord,
@@ -31,6 +32,12 @@ import {
   type McpScope,
   type McpService,
 } from "./api.js";
+import {
+  constrainGrantScopes,
+  grantCapabilities,
+  supportsGrantScope,
+  type GrantCapabilities,
+} from "./grantCapabilities.js";
 
 export type McpManagementView = "services" | "builds" | "clients" | "audit";
 
@@ -223,6 +230,47 @@ function GrantForm({
   const [allPrompts, setAllPrompts] = useState(initial?.promptNames === null);
   const [toolNames, setToolNames] = useState(initial?.toolNames?.join(", ") ?? "");
   const [promptNames, setPromptNames] = useState(initial?.promptNames?.join(", ") ?? "");
+  const [capabilities, setCapabilities] = useState<GrantCapabilities | null>(null);
+  const [capabilityLoading, setCapabilityLoading] = useState(true);
+  const [capabilityError, setCapabilityError] = useState("");
+
+  useEffect(() => {
+    const service = services.find((item) => item.id === serviceId);
+    if (!service) {
+      setCapabilities(null);
+      setCapabilityLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCapabilities(null);
+    setCapabilityError("");
+    setCapabilityLoading(true);
+    listVersions(service.id)
+      .then((versions) => {
+        if (cancelled) return;
+        const next = grantCapabilities(service, versions);
+        setCapabilities(next);
+        setSelectedScopes((current) => new Set(constrainGrantScopes(current, next)));
+        if (next.toolCount === 0) {
+          setAllTools(false);
+          setToolNames("");
+        }
+        if (next.promptCount === 0) {
+          setAllPrompts(false);
+          setPromptNames("");
+        }
+      })
+      .catch((reason) => {
+        if (!cancelled) setCapabilityError(messageFrom(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setCapabilityLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serviceId, services]);
 
   const toggleScope = (scope: McpScope) => {
     setSelectedScopes((current) => {
@@ -252,10 +300,13 @@ function GrantForm({
       className="dialog-form"
       onSubmit={(event) => {
         event.preventDefault();
+        if (!capabilities) return;
+        const constrainedScopes = constrainGrantScopes(selectedScopes, capabilities);
         void onSubmit(serviceId, {
-          scopes: scopes.map((item) => item.value).filter((scope) => selectedScopes.has(scope)),
-          toolNames: allTools ? null : parseNames(toolNames),
-          promptNames: allPrompts ? null : parseNames(promptNames),
+          scopes: constrainedScopes,
+          toolNames: capabilities.toolCount === 0 ? [] : allTools ? null : parseNames(toolNames),
+          promptNames:
+            capabilities.promptCount === 0 ? [] : allPrompts ? null : parseNames(promptNames),
         });
       }}
     >
@@ -264,7 +315,14 @@ function GrantForm({
         <select
           value={serviceId}
           disabled={Boolean(initial)}
-          onChange={(event) => setServiceId(event.target.value)}
+          onChange={(event) => {
+            setServiceId(event.target.value);
+            setSelectedScopes(new Set(["mcp:connect"]));
+            setAllTools(false);
+            setAllPrompts(false);
+            setToolNames("");
+            setPromptNames("");
+          }}
         >
           {services.map((service) => (
             <option value={service.id} key={service.id}>
@@ -273,20 +331,36 @@ function GrantForm({
           ))}
         </select>
       </label>
+      {capabilityLoading ? <p className="muted-copy">正在读取当前发布版本能力...</p> : null}
+      {capabilityError ? <Notice error={capabilityError} /> : null}
+      {capabilities && !capabilityError ? (
+        <p className="muted-copy">
+          {capabilities.versionNumber === null
+            ? "当前没有已发布版本"
+            : `当前发布版本 v${capabilities.versionNumber} · ${capabilities.toolCount} Tools · ${capabilities.promptCount} Prompts`}
+        </p>
+      ) : null}
       <fieldset className="grant-fieldset">
         <legend>Scopes</legend>
         <div className="grant-scope-grid">
-          {scopes.map((scope) => (
-            <label key={scope.value}>
-              <input
-                type="checkbox"
-                checked={selectedScopes.has(scope.value)}
-                disabled={scope.value === "mcp:connect"}
-                onChange={() => toggleScope(scope.value)}
-              />
-              <span>{scope.label}</span>
-            </label>
-          ))}
+          {scopes.map((scope) => {
+            const supported = capabilities
+              ? supportsGrantScope(scope.value, capabilities)
+              : scope.value === "mcp:connect";
+            const disabled =
+              scope.value === "mcp:connect" || capabilityLoading || !capabilities || !supported;
+            return (
+              <label className={disabled ? "is-disabled" : undefined} key={scope.value}>
+                <input
+                  type="checkbox"
+                  checked={selectedScopes.has(scope.value)}
+                  disabled={disabled}
+                  onChange={() => toggleScope(scope.value)}
+                />
+                <span>{scope.label}</span>
+              </label>
+            );
+          })}
         </div>
       </fieldset>
       <div className="field-grid">
@@ -297,13 +371,16 @@ function GrantForm({
               <input
                 type="checkbox"
                 checked={allTools}
+                disabled={capabilityLoading || !capabilities || capabilities.toolCount === 0}
                 onChange={(event) => setAllTools(event.target.checked)}
               />{" "}
               全部
             </small>
           </span>
           <input
-            disabled={allTools}
+            disabled={
+              allTools || capabilityLoading || !capabilities || capabilities.toolCount === 0
+            }
             value={toolNames}
             onChange={(event) => setToolNames(event.target.value)}
             placeholder="echo, search"
@@ -316,13 +393,16 @@ function GrantForm({
               <input
                 type="checkbox"
                 checked={allPrompts}
+                disabled={capabilityLoading || !capabilities || capabilities.promptCount === 0}
                 onChange={(event) => setAllPrompts(event.target.checked)}
               />{" "}
               全部
             </small>
           </span>
           <input
-            disabled={allPrompts}
+            disabled={
+              allPrompts || capabilityLoading || !capabilities || capabilities.promptCount === 0
+            }
             value={promptNames}
             onChange={(event) => setPromptNames(event.target.value)}
             placeholder="summary, rewrite"
@@ -333,7 +413,13 @@ function GrantForm({
         <button className="studio-button secondary" type="button" onClick={onClose}>
           取消
         </button>
-        <button className="studio-button primary" type="submit" disabled={busy || !serviceId}>
+        <button
+          className="studio-button primary"
+          type="submit"
+          disabled={
+            busy || !serviceId || capabilityLoading || !capabilities || Boolean(capabilityError)
+          }
+        >
           {busy ? <LoadingOutlined spin /> : <SafetyCertificateOutlined />} 保存授权
         </button>
       </div>

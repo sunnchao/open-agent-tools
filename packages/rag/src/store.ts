@@ -58,13 +58,15 @@ export class SqliteVectorStore implements VectorStore {
       .run(rowid, addCjkSpacing(chunk.content)); // 索引 CJK 单字分词版，chunks.content 仍存原文
   }
 
-  vectorSearch(embedding: number[], k: number): ScoredChunk[] {
+  vectorSearch(embedding: number[], k: number, sources?: readonly string[]): ScoredChunk[] {
+    if (sources?.length === 0) return [];
+    const sourceFilter = sources ? ` AND source IN (${sources.map(() => "?").join(", ")})` : "";
     const rows = this.db
       .prepare(
         `SELECT rowid, id, source, chunk_index, content, embedding FROM chunks
-         WHERE embedding IS NOT NULL`,
+         WHERE embedding IS NOT NULL${sourceFilter}`,
       )
-      .all() as unknown as ChunkRow[];
+      .all(...(sources ?? [])) as unknown as ChunkRow[];
     const q = Float32Array.from(embedding);
     return rows
       .map((r) => ({ chunk: toChunk(r), score: cosine(q, deserializeF32(r.embedding)) }))
@@ -77,27 +79,31 @@ export class SqliteVectorStore implements VectorStore {
    * BM25 关键词检索。query 为原始用户查询（内部做 CJK 切分与转义）：
    * 先 AND 精确匹配；无结果时自动降级为 OR，避免口语化查询（含"怎么办/如何"等）全军覆没。
    */
-  keywordSearch(query: string, k: number): ScoredChunk[] {
+  keywordSearch(query: string, k: number, sources?: readonly string[]): ScoredChunk[] {
+    if (sources?.length === 0) return [];
     const andQuery = escapeFtsQuery(query);
-    const and = this.matchQuery(andQuery, k);
+    const and = this.matchQuery(andQuery, k, sources);
     if (and.length > 0) return and;
     const orQuery = escapeFtsQueryOr(query);
-    return orQuery ? this.matchQuery(orQuery, k) : [];
+    return orQuery ? this.matchQuery(orQuery, k, sources) : [];
   }
 
-  private matchQuery(query: string, k: number): ScoredChunk[] {
+  private matchQuery(query: string, k: number, sources?: readonly string[]): ScoredChunk[] {
     if (!query.trim()) return [];
+    const sourceFilter = sources
+      ? ` AND c.source IN (${sources.map(() => "?").join(", ")})`
+      : "";
     const rows = this.db
       .prepare(
         `SELECT c.rowid, c.id, c.source, c.chunk_index, c.content,
                 bm25(chunks_fts) AS score
          FROM chunks_fts
          JOIN chunks c ON c.rowid = chunks_fts.rowid
-         WHERE chunks_fts MATCH ?
+         WHERE chunks_fts MATCH ?${sourceFilter}
          ORDER BY score
          LIMIT ?`,
       )
-      .all(query, k) as unknown as Array<ChunkRow & { score: number }>;
+      .all(query, ...(sources ?? []), k) as unknown as Array<ChunkRow & { score: number }>;
     // SQLite bm25() 返回负数，越大（越接近 0）越相关；取绝对值便于展示。
     return rows.map((r) => ({ ...toChunk(r), score: Math.abs(r.score) }));
   }

@@ -49,9 +49,35 @@ export interface Message {
   toolCalls?: ToolCall[];
   /** 助手消息：需要内联渲染的 UI 块（卡片）。 */
   uiBlocks?: UiBlock[];
+  /** 本次回答实际检索到的 RAG 片段。 */
+  ragCitations?: RagCitation[];
   /** 兼容：来自服务端 DB 的历史 role:"tool" 行。 */
   tool_call_id?: string;
   tool_name?: string;
+}
+
+export interface RagCitation {
+  source: string;
+  chunkIndex: number;
+  content: string;
+  [key: string]: unknown;
+}
+
+export interface McpToolBinding {
+  serviceSlug: string;
+  toolName: string;
+}
+
+export interface ChatResourceBinding {
+  mcpTools: McpToolBinding[];
+  rag: {
+    sources: string[];
+    topK: number;
+  };
+}
+
+export function emptyChatResources(): ChatResourceBinding {
+  return { mcpTools: [], rag: { sources: [], topK: 5 } };
 }
 
 export interface Session {
@@ -59,6 +85,7 @@ export interface Session {
   title: string;
   messages: Message[];
   updatedAt: number;
+  resources: ChatResourceBinding;
 }
 
 /** 发送给服务端的消息形态——剥离仅前端使用的字段。 */

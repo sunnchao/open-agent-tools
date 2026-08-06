@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Layout, Spin } from "antd";
 import { Sidebar } from "../../components/Sidebar.js";
 import { ChatHeader } from "../../components/ChatHeader.js";
@@ -8,6 +8,8 @@ import { useChatSessions } from "../../hooks/useChatSessions.js";
 import { useChatStream } from "../../hooks/useChatStream.js";
 import { newId } from "../../lib/ids.js";
 import type { ChatRequestMessage, Message } from "../../types.js";
+import { useResourceCatalog } from "../resources/useResourceCatalog.js";
+import { ChatResourceDrawer } from "./ChatResourceDrawer.js";
 
 export function ChatWorkspace() {
   const {
@@ -25,7 +27,10 @@ export function ChatWorkspace() {
     addToolCall,
     updateToolCall,
     removeMessage,
+    updateSessionResources,
   } = useChatSessions();
+  const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false);
+  const resources = useResourceCatalog();
 
   const model = import.meta.env.VITE_MODEL as string | undefined;
   const { isStreaming, send, stop } = useChatStream({
@@ -54,7 +59,7 @@ export function ChatWorkspace() {
           .map((message) => ({ role: message.role, content: message.content })),
         { role: "user", content },
       ];
-      send(activeSession.id, apiMessages, { id: userMsg.id, content });
+      send(activeSession.id, apiMessages, { id: userMsg.id, content }, activeSession.resources);
     },
     [activeSession, addMessage, send],
   );
@@ -75,6 +80,8 @@ export function ChatWorkspace() {
       previousMessages
         .filter((message) => message.status !== "error")
         .map((message) => ({ role: message.role, content: message.content })),
+      undefined,
+      activeSession.resources,
     );
   }, [activeSession, removeMessage, send]);
 
@@ -103,14 +110,37 @@ export function ChatWorkspace() {
         onRename={(id, title) => void renameSession(id, title)}
       />
       <Layout className="chat-main">
-        <ChatHeader title={activeSession.title} status={status} model={model ?? "default"} />
+        <ChatHeader
+          title={activeSession.title}
+          status={status}
+          model={model ?? "default"}
+          mcpToolCount={activeSession.resources.mcpTools.length}
+          ragSourceCount={activeSession.resources.rag.sources.length}
+          onConfigureResources={() => setResourceDrawerOpen(true)}
+        />
         <MessageList
           messages={activeSession.messages}
           isStreaming={isStreaming}
           onRetry={handleRetry}
         />
-        <Composer onSend={handleSend} onStop={stop} isStreaming={isStreaming} />
+        <Composer
+          onSend={handleSend}
+          onStop={stop}
+          isStreaming={isStreaming}
+          resources={activeSession.resources}
+          onConfigureResources={() => setResourceDrawerOpen(true)}
+        />
       </Layout>
+      <ChatResourceDrawer
+        open={resourceDrawerOpen}
+        catalog={resources.catalog}
+        loading={resources.loading}
+        error={resources.error}
+        resources={activeSession.resources}
+        onClose={() => setResourceDrawerOpen(false)}
+        onRefresh={() => void resources.refresh()}
+        onChange={(binding) => updateSessionResources(activeSession.id, binding)}
+      />
     </Layout>
   );
 }

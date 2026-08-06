@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import type { ChatRequestMessage, Message, ToolCall } from "../types.js";
+import type { ChatRequestMessage, ChatResourceBinding, Message, ToolCall } from "../types.js";
 import { newId } from "../lib/ids.js";
 import { streamChat } from "../lib/api.js";
 
@@ -33,6 +33,7 @@ export function useChatStream({
       sessionId: string,
       messages: ChatRequestMessage[],
       userMessage?: { id: string; content: string },
+      resources?: ChatResourceBinding,
     ) => {
       // 本地乐观占位；服务端稍后分配规范的 assistant id。
       const localAssistantId = newId();
@@ -60,6 +61,9 @@ export function useChatStream({
           },
           onDelta: (delta) => {
             appendDelta(sessionId, assistantId, delta);
+          },
+          onRagCitations: (ragCitations) => {
+            updateMessage(sessionId, assistantId, { ragCitations });
           },
           onToolCall: (call) => {
             // 记录一次“函数调用请求”（name + arguments），作为对话记录的一部分。
@@ -95,6 +99,7 @@ export function useChatStream({
         {
           sessionId,
           userMessage,
+          resources,
         },
       );
     },

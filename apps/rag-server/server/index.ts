@@ -6,6 +6,7 @@ import multer from "multer";
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { DEFAULT_SEPARATORS, Rag } from "@open-agent-tools/rag";
 import { parseSeparators } from "./chunk-settings.js";
+import { querySources } from "./query-settings.js";
 
 loadEnv({ path: resolve(import.meta.dirname, "../.env") });
 loadEnv({ path: resolve(import.meta.dirname, "../.env.local"), override: true });
@@ -153,7 +154,12 @@ app.delete("/api/documents/:source", (req: Request, res: Response) => {
 
 /** 混合检索（+ 可选 LLM 生成回答）。 */
 app.post("/api/query", async (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as { query?: unknown; topK?: unknown; generate?: unknown };
+  const body = (req.body ?? {}) as {
+    query?: unknown;
+    topK?: unknown;
+    generate?: unknown;
+    sources?: unknown;
+  };
   const query = typeof body.query === "string" ? body.query.trim() : "";
   if (!query) {
     res.status(400).json({ error: "query is required" });
@@ -161,8 +167,15 @@ app.post("/api/query", async (req: Request, res: Response) => {
   }
   const topK = clampTopK(body.topK);
   const generate = Boolean(body.generate);
+  let sources: string[] | undefined;
   try {
-    const result = await rag.retrieve(query, { topK });
+    sources = querySources(body.sources);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+  try {
+    const result = await rag.retrieve(query, { topK, sources });
     let answer: string | null = null;
     if (generate && llm && result.chunks.length > 0) {
       const resp = await llm.invoke([

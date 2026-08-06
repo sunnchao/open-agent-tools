@@ -1,6 +1,23 @@
-import type { Session } from "../types.js";
+import { emptyChatResources, type Session } from "../types.js";
 
 const STORAGE_KEY = "open-agent-tools.chat.v1";
+
+export function normalizeSession(
+  session: Omit<Session, "resources"> & Partial<Pick<Session, "resources">>,
+): Session {
+  return {
+    ...session,
+    resources: {
+      mcpTools: Array.isArray(session.resources?.mcpTools) ? session.resources.mcpTools : [],
+      rag: {
+        sources: Array.isArray(session.resources?.rag?.sources)
+          ? session.resources.rag.sources
+          : [],
+        topK: Number(session.resources?.rag?.topK) || emptyChatResources().rag.topK,
+      },
+    },
+  };
+}
 
 export function loadSessions(): Session[] {
   try {
@@ -8,7 +25,7 @@ export function loadSessions(): Session[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed as Session[];
+    return (parsed as Session[]).map(normalizeSession);
   } catch {
     console.warn("Corrupt localStorage sessions — resetting.");
     return [];

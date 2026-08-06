@@ -4,6 +4,7 @@ import {
   ApartmentOutlined,
   DatabaseOutlined,
   MessageOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import "./styles/studio.css";
 
@@ -27,8 +28,13 @@ const WorkflowWorkspace = lazy(() =>
     default: module.WorkflowWorkspace,
   })),
 );
+const SettingsWorkspace = lazy(() =>
+  import("./features/settings/SettingsWorkspace.js").then((module) => ({
+    default: module.SettingsWorkspace,
+  })),
+);
 
-type Workspace = "chat" | "mcp" | "rag" | "workflow";
+type Workspace = "chat" | "mcp" | "rag" | "workflow" | "settings";
 
 const workspaces: Array<{
   id: Workspace;
@@ -39,6 +45,7 @@ const workspaces: Array<{
   { id: "mcp", label: "MCP", icon: <ApiOutlined /> },
   { id: "rag", label: "知识库", icon: <DatabaseOutlined /> },
   { id: "workflow", label: "工作流", icon: <ApartmentOutlined /> },
+  { id: "settings", label: "设置", icon: <SettingOutlined /> },
 ];
 
 function workspaceFromHash(): Workspace {
@@ -99,6 +106,7 @@ export function App() {
           {workspace === "mcp" ? <McpWorkspace /> : null}
           {workspace === "rag" ? <RagWorkspace /> : null}
           {workspace === "workflow" ? <WorkflowWorkspace /> : null}
+          {workspace === "settings" ? <SettingsWorkspace /> : null}
         </Suspense>
       </main>
     </div>

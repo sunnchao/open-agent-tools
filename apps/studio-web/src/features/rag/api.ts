@@ -68,6 +68,7 @@ export function queryKnowledge(input: {
   query: string;
   topK: number;
   generate: boolean;
+  sources?: string[];
 }): Promise<QueryResult> {
   return request("/query", {
     method: "POST",

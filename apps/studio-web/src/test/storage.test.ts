@@ -36,6 +36,7 @@ const mockSession: Session = {
     },
   ],
   updatedAt: 1001,
+  resources: { mcpTools: [], rag: { sources: [], topK: 5 } },
 };
 
 describe("storage", () => {
@@ -74,5 +75,14 @@ describe("storage", () => {
     expect(loaded[0]!.messages[1]!.toolCalls?.[0]!.ui).toEqual(
       mockSession.messages[1]!.toolCalls?.[0]!.ui,
     );
+  });
+
+  it("adds default resources when loading a legacy session", () => {
+    const { resources: _resources, ...legacy } = mockSession;
+    localStorage.setItem("open-agent-tools.chat.v1", JSON.stringify([legacy]));
+    expect(loadSessions()[0]?.resources).toEqual({
+      mcpTools: [],
+      rag: { sources: [], topK: 5 },
+    });
   });
 });

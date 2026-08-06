@@ -1,10 +1,18 @@
-import type { ChatRequestMessage, Session, ToolCall, UiBlock } from "../types.js";
+import type {
+  ChatRequestMessage,
+  ChatResourceBinding,
+  RagCitation,
+  Session,
+  ToolCall,
+  UiBlock,
+} from "../types.js";
 
 interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onDone: (meta?: { assistantMessageId?: string }) => void;
   onError: (error: string) => void;
   onAssistantMessageId?: (id: string) => void;
+  onRagCitations?: (citations: RagCitation[]) => void;
   /** 收到一次“函数调用请求”（name + arguments）。 */
   onToolCall?: (call: ToolCall) => void;
   /** 收到“函数调用结果”（result / ui / error）。 */
@@ -70,9 +78,10 @@ export async function deleteMessageApi(id: string): Promise<void> {
  * 每个事件可能包含多行字段（如 `event:` + `data:`），这里只提取 `data:` 字段并解析 JSON。
  * 提取为纯函数以便单元测试。
  */
-export function parseSseBuffer(
-  buffer: string,
-): { events: Array<Record<string, unknown>>; rest: string } {
+export function parseSseBuffer(buffer: string): {
+  events: Array<Record<string, unknown>>;
+  rest: string;
+} {
   const rawEvents = buffer.split("\n\n");
   const rest = rawEvents.pop() ?? "";
   const events: Array<Record<string, unknown>> = [];
@@ -109,6 +118,7 @@ export function streamChat(
   opts?: {
     sessionId?: string;
     userMessage?: { id?: string; content: string };
+    resources?: ChatResourceBinding;
   },
 ): AbortController {
   const controller = new AbortController();
@@ -123,6 +133,7 @@ export function streamChat(
           model,
           sessionId: opts?.sessionId,
           userMessage: opts?.userMessage,
+          resources: opts?.resources,
         }),
         signal: controller.signal,
       });
@@ -158,10 +169,13 @@ export function streamChat(
           if (data.tool_call) {
             callbacks.onToolCall?.(data.tool_call as ToolCall);
           }
+          if (Array.isArray(data.rag_citations)) {
+            callbacks.onRagCitations?.(data.rag_citations as RagCitation[]);
+          }
           if (data.tool_result) {
-            callbacks.onToolResult?.(data.tool_result as Parameters<
-              NonNullable<StreamCallbacks["onToolResult"]>
-            >[0]);
+            callbacks.onToolResult?.(
+              data.tool_result as Parameters<NonNullable<StreamCallbacks["onToolResult"]>>[0],
+            );
           }
           if (data.error) {
             callbacks.onError(data.error as string);
@@ -182,5 +196,138 @@ export function streamChat(
     }
   })();
 
+  return controller;
+}
+
+export interface WorkflowRunNode {
+  id: string;
+  kind: string;
+  label: string;
+  config: Record<string, unknown>;
+}
+
+export interface WorkflowRunEdge {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+}
+
+export interface WorkflowRunRequest {
+  nodes: WorkflowRunNode[];
+  edges: WorkflowRunEdge[];
+  input: Record<string, unknown>;
+}
+
+export interface WorkflowTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface WorkflowNodeTestResult {
+  nodeId: string;
+  status: "success" | "error";
+  inputs: Record<string, unknown>;
+  result: unknown;
+  outputs: Record<string, unknown>;
+  error?: string;
+  metadata: {
+    nodeKind: string;
+    startedAt: string;
+    finishedAt: string;
+    durationMs: number;
+    tokenUsage: WorkflowTokenUsage;
+  };
+}
+
+export async function testWorkflowNode(
+  node: WorkflowRunNode,
+  inputs: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<WorkflowNodeTestResult> {
+  const response = await fetch("/api/workflow/node/test", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ node, inputs }),
+    signal,
+  });
+  if (!response.ok) throw new Error(await parseError(response));
+  return ((await response.json()) as { result: WorkflowNodeTestResult }).result;
+}
+
+export interface WorkflowStreamCallbacks {
+  onNodeStart: (nodeId: string, label?: string) => void;
+  onNodeResult: (
+    nodeId: string,
+    status: "success" | "error",
+    outputs?: Record<string, unknown>,
+    error?: string,
+  ) => void;
+  onDone: (outputs: Record<string, Record<string, unknown>>) => void;
+  onError: (error: string, nodeId?: string) => void;
+}
+
+export function streamWorkflow(
+  request: WorkflowRunRequest,
+  callbacks: WorkflowStreamCallbacks,
+): AbortController {
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const response = await fetch("/api/workflow/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        callbacks.onError(await parseError(response));
+        return;
+      }
+      const reader = response.body?.getReader();
+      if (!reader) {
+        callbacks.onError("No response body");
+        return;
+      }
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parsed = parseSseBuffer(buffer);
+        buffer = parsed.rest;
+        for (const event of parsed.events) {
+          if (event.type === "node_start" && typeof event.nodeId === "string")
+            callbacks.onNodeStart(
+              event.nodeId,
+              typeof event.label === "string" ? event.label : undefined,
+            );
+          if (
+            event.type === "node_result" &&
+            typeof event.nodeId === "string" &&
+            (event.status === "success" || event.status === "error")
+          )
+            callbacks.onNodeResult(
+              event.nodeId,
+              event.status,
+              event.outputs as Record<string, unknown> | undefined,
+              typeof event.error === "string" ? event.error : undefined,
+            );
+          if (event.type === "run_done")
+            callbacks.onDone((event.outputs ?? {}) as Record<string, Record<string, unknown>>);
+          if (event.type === "run_error")
+            callbacks.onError(
+              typeof event.error === "string" ? event.error : "Workflow execution failed",
+              typeof event.nodeId === "string" ? event.nodeId : undefined,
+            );
+        }
+      }
+    } catch (reason) {
+      if ((reason as Error).name !== "AbortError")
+        callbacks.onError(reason instanceof Error ? reason.message : "Workflow request failed");
+    }
+  })();
   return controller;
 }

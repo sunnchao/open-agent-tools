@@ -1,16 +1,31 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Flex, Input } from "antd";
-import { SendOutlined, PauseCircleOutlined } from "@ant-design/icons";
+import { Button, Flex, Input, Tag } from "antd";
+import {
+  ApiOutlined,
+  DatabaseOutlined,
+  PauseCircleOutlined,
+  SendOutlined,
+} from "@ant-design/icons";
 import type { TextAreaRef } from "antd/es/input/TextArea";
+import type { ChatResourceBinding } from "../types.js";
 
 interface ComposerProps {
   onSend: (content: string) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled?: boolean;
+  resources: ChatResourceBinding;
+  onConfigureResources: () => void;
 }
 
-export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProps) {
+export function Composer({
+  onSend,
+  onStop,
+  isStreaming,
+  disabled,
+  resources,
+  onConfigureResources,
+}: ComposerProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<TextAreaRef>(null);
 
@@ -34,6 +49,19 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
         flexShrink: 0,
       }}
     >
+      {resources.rag.sources.length > 0 || resources.mcpTools.length > 0 ? (
+        <div className="composer-resources">
+          {resources.rag.sources.length > 0 ? (
+            <Tag icon={<DatabaseOutlined />}>RAG {resources.rag.sources.length}</Tag>
+          ) : null}
+          {resources.mcpTools.length > 0 ? (
+            <Tag icon={<ApiOutlined />}>MCP {resources.mcpTools.length}</Tag>
+          ) : null}
+          <button type="button" onClick={onConfigureResources}>
+            调整
+          </button>
+        </div>
+      ) : null}
       <Flex gap={8} align="flex-end">
         <Input.TextArea
           ref={textareaRef}

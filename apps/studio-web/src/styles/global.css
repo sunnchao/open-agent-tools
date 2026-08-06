@@ -134,6 +134,89 @@ body {
   margin-top: 10px;
 }
 
+.composer-resources {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+  overflow-x: auto;
+}
+
+.composer-resources .ant-tag {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.composer-resources button {
+  padding: 2px 4px;
+  color: #2864c7;
+  font-size: 11px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.rag-citations {
+  margin-top: 12px;
+  color: #69717d;
+  font-size: 12px;
+  border-top: 1px solid #e2e5e9;
+}
+
+.rag-citations summary {
+  padding: 9px 0 5px;
+  color: #b96b18;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rag-citations > div {
+  display: grid;
+  gap: 6px;
+  padding-top: 3px;
+}
+
+.rag-citations article {
+  padding: 8px 10px;
+  background: #fff9f0;
+  border: 1px solid #efd8bc;
+  border-radius: 6px;
+}
+
+.rag-citations article b {
+  color: #202428;
+}
+
+.rag-citations article span {
+  margin-left: 8px;
+  color: #9299a3;
+  font-size: 10px;
+}
+
+.rag-citations article p {
+  display: -webkit-box;
+  margin: 5px 0 0;
+  overflow: hidden;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+@media (max-width: 560px) {
+  .chat-header-resources .ant-tag {
+    display: none;
+  }
+
+  .chat-header-resources .ant-btn {
+    padding-inline: 9px;
+  }
+
+  .message-list {
+    padding-inline: 12px;
+  }
+}
+
 .tool-call-pre {
   margin: 0;
   padding: 8px 10px;

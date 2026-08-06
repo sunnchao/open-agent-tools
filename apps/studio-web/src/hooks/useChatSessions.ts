@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Message, Session, ToolCall } from "../types.js";
+import {
+  emptyChatResources,
+  type ChatResourceBinding,
+  type Message,
+  type Session,
+  type ToolCall,
+} from "../types.js";
 import { newId } from "../lib/ids.js";
 import {
   createSessionApi,
@@ -8,7 +14,7 @@ import {
   fetchSessions,
   renameSessionApi,
 } from "../lib/api.js";
-import { loadSessions, saveSessions } from "../lib/storage.js";
+import { loadSessions, normalizeSession, saveSessions } from "../lib/storage.js";
 
 function createLocalSession(): Session {
   return {
@@ -16,6 +22,7 @@ function createLocalSession(): Session {
     title: "New chat",
     messages: [],
     updatedAt: Date.now(),
+    resources: emptyChatResources(),
   };
 }
 
@@ -56,6 +63,7 @@ export function useChatSessions() {
           const created = await createSessionApi();
           loaded = [created];
         }
+        loaded = loaded.map(normalizeSession);
         setSessions(loaded);
         setActiveId(loaded[0]!.id);
         saveSessions(loaded);
@@ -85,9 +93,10 @@ export function useChatSessions() {
       void (async () => {
         try {
           const created = await createSessionApi();
-          setSessions([created]);
+          const normalized = normalizeSession(created);
+          setSessions([normalized]);
           setActiveId(created.id);
-          saveSessions([created]);
+          saveSessions([normalized]);
         } catch {
           const local = createLocalSession();
           setSessions([local]);
@@ -110,6 +119,7 @@ export function useChatSessions() {
       title: "New chat",
       messages: [],
       updatedAt: Date.now(),
+      resources: emptyChatResources(),
     };
     setSessions((prev) => [s, ...prev]);
     setActiveId(s.id);
@@ -133,9 +143,10 @@ export function useChatSessions() {
         if (next.length === 0) {
           const fresh = createLocalSession();
           void createSessionApi({ id: fresh.id }).then((created) => {
-            setSessions([created]);
+            const normalized = normalizeSession(created);
+            setSessions([normalized]);
             setActiveId(created.id);
-            saveSessions([created]);
+            saveSessions([normalized]);
           });
           setActiveId(fresh.id);
           return [fresh];
@@ -149,22 +160,21 @@ export function useChatSessions() {
     [activeId],
   );
 
-  const renameSession = useCallback(
-    async (id: string, title: string) => {
+  const renameSession = useCallback(async (id: string, title: string) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, title, updatedAt: Date.now() } : s)),
+    );
+    try {
+      const updated = await renameSessionApi(id, title);
       setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, title, updatedAt: Date.now() } : s)),
+        prev.map((s) =>
+          s.id === id ? { ...updated, messages: s.messages, resources: s.resources } : s,
+        ),
       );
-      try {
-        const updated = await renameSessionApi(id, title);
-        setSessions((prev) =>
-          prev.map((s) => (s.id === id ? { ...updated, messages: s.messages } : s)),
-        );
-      } catch (err) {
-        console.warn("renameSession failed", err);
-      }
-    },
-    [],
-  );
+    } catch (err) {
+      console.warn("renameSession failed", err);
+    }
+  }, []);
 
   const addMessage = useCallback((sessionId: string, message: Message) => {
     setSessions((prev) =>
@@ -222,35 +232,37 @@ export function useChatSessions() {
    * 给某条助手消息追加一次工具调用（function calling 记录）。
    * 以 tool call id 为键；若缺失 id 则追加到数组末尾。
    */
-  const addToolCall = useCallback(
-    (sessionId: string, messageId: string, toolCall: ToolCall) => {
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id !== sessionId) return s;
-          return {
-            ...s,
-            messages: s.messages.map((m) => {
-              if (m.id !== messageId) return m;
-              const toolCalls = [...(m.toolCalls ?? []), toolCall];
-              return {
-                ...m,
-                toolCalls,
-                uiBlocks: toolCall.ui ? [...(m.uiBlocks ?? []), toolCall.ui] : m.uiBlocks,
-              };
-            }),
-            updatedAt: Date.now(),
-          };
-        }),
-      );
-    },
-    [],
-  );
+  const addToolCall = useCallback((sessionId: string, messageId: string, toolCall: ToolCall) => {
+    setSessions((prev) =>
+      prev.map((s) => {
+        if (s.id !== sessionId) return s;
+        return {
+          ...s,
+          messages: s.messages.map((m) => {
+            if (m.id !== messageId) return m;
+            const toolCalls = [...(m.toolCalls ?? []), toolCall];
+            return {
+              ...m,
+              toolCalls,
+              uiBlocks: toolCall.ui ? [...(m.uiBlocks ?? []), toolCall.ui] : m.uiBlocks,
+            };
+          }),
+          updatedAt: Date.now(),
+        };
+      }),
+    );
+  }, []);
 
   /**
    * 更新某条助手消息里匹配的工具调用（按 id；id 缺失时取最后一条）。
    */
   const updateToolCall = useCallback(
-    (sessionId: string, messageId: string, toolCallId: string | undefined, patch: Partial<ToolCall>) => {
+    (
+      sessionId: string,
+      messageId: string,
+      toolCallId: string | undefined,
+      patch: Partial<ToolCall>,
+    ) => {
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id !== sessionId) return s;
@@ -260,9 +272,7 @@ export function useChatSessions() {
               if (m.id !== messageId) return m;
               const toolCalls = (m.toolCalls ?? []).map((tc, idx, arr) => {
                 const matches =
-                  toolCallId != null
-                    ? (tc.id ?? null) === toolCallId
-                    : idx === arr.length - 1;
+                  toolCallId != null ? (tc.id ?? null) === toolCallId : idx === arr.length - 1;
                 return matches ? { ...tc, ...patch } : tc;
               });
               const ui =
@@ -293,6 +303,17 @@ export function useChatSessions() {
     void deleteMessageApi(messageId).catch((err) => console.warn("deleteMessage failed", err));
   }, []);
 
+  const updateSessionResources = useCallback(
+    (sessionId: string, resources: ChatResourceBinding) => {
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId ? { ...session, resources, updatedAt: Date.now() } : session,
+        ),
+      );
+    },
+    [],
+  );
+
   return {
     ready,
     sessions,
@@ -308,5 +329,6 @@ export function useChatSessions() {
     addToolCall,
     updateToolCall,
     removeMessage,
+    updateSessionResources,
   };
 }

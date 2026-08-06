@@ -8,6 +8,8 @@ export interface RetrieveOptions {
   candidates?: number;
   /** RRF 常数 k，默认 60。 */
   rrfK?: number;
+  /** 限定检索的文档来源；缺省为全部，空数组表示不检索。 */
+  sources?: string[];
 }
 
 /**
@@ -38,13 +40,16 @@ export async function retrieve(
   query: string,
   opts: RetrieveOptions = {},
 ): Promise<RetrievalResult> {
-  const { topK = 5, candidates = 30, rrfK = 60 } = opts;
+  const { topK = 5, candidates = 30, rrfK = 60, sources } = opts;
+  if (sources?.length === 0) {
+    return { query, chunks: [], formatted: () => "" };
+  }
   const lists: ScoredChunk[][] = [];
   if (embeddings) {
     const qv = (await embeddings.embedDocuments([query]))[0] ?? [];
-    lists.push(store.vectorSearch(qv, candidates));
+    lists.push(store.vectorSearch(qv, candidates, sources));
   }
-  lists.push(store.keywordSearch(query, candidates)); // store 内部做 CJK 切分 + AND→OR 降级
+  lists.push(store.keywordSearch(query, candidates, sources)); // store 内部做 CJK 切分 + AND→OR 降级
 
   const chunks = reciprocalRankFusion(lists, rrfK).slice(0, topK);
   return { query, chunks, formatted: () => formatChunks(chunks) };

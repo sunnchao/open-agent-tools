@@ -64,6 +64,18 @@ export function openDb(path = getDbPath()): DatabaseSync {
 
     CREATE INDEX IF NOT EXISTS idx_messages_session_position
       ON messages(session_id, position);
+
+    CREATE TABLE IF NOT EXISTS providers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      api_key_enc TEXT,
+      models_json TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   migrateMessagesTable(db);
@@ -199,9 +211,7 @@ export function deleteSession(id: string): boolean {
 }
 
 export function touchSession(id: string, updatedAt = Date.now()): void {
-  openDb()
-    .prepare(`UPDATE sessions SET updated_at = ? WHERE id = ?`)
-    .run(updatedAt, id);
+  openDb().prepare(`UPDATE sessions SET updated_at = ? WHERE id = ?`).run(updatedAt, id);
 }
 
 function nextPosition(sessionId: string): number {
@@ -225,8 +235,7 @@ export function addMessage(
 ): Message | null {
   const database = openDb();
   const session = database.prepare(`SELECT id, title FROM sessions WHERE id = ?`).get(sessionId) as
-    | { id: string; title: string }
-    | undefined;
+    { id: string; title: string } | undefined;
   if (!session) return null;
 
   const id = message.id ?? randomUUID();

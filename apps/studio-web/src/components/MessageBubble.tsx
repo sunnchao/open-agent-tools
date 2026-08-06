@@ -1,5 +1,5 @@
 import { Alert, Button, Card } from "antd";
-import type { Message, ToolCall } from "../types.js";
+import type { Message, RagCitation, ToolCall } from "../types.js";
 import { MarkdownView } from "./MarkdownView.js";
 import { FinancialReportCard } from "./FinancialReportCard.js";
 import { ToolCalls } from "./ToolCalls.js";
@@ -48,11 +48,13 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
     const hasContent = message.content.trim().length > 0;
     const hasToolCalls = (message.toolCalls?.length ?? 0) > 0;
     const hasUi = (message.uiBlocks?.length ?? 0) > 0;
-    if (!hasContent && !hasToolCalls && !hasUi) return <></>;
+    const hasCitations = (message.ragCitations?.length ?? 0) > 0;
+    if (!hasContent && !hasToolCalls && !hasUi && !hasCitations) return <></>;
     return (
       <div className="msg-row msg-row--assistant">
         <div className="msg-bubble msg-bubble--assistant">
           {hasContent ? <MarkdownView content={message.content} /> : null}
+          <RagCitations citations={message.ragCitations} />
           <UiBlocks blocks={message.uiBlocks} />
           <ToolCalls toolCalls={message.toolCalls} />
           {message.status === "streaming" && <span className="msg__caret" />}
@@ -71,6 +73,24 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
         <MarkdownView content={message.content} />
       </div>
     </div>
+  );
+}
+
+function RagCitations({ citations }: { citations?: RagCitation[] }) {
+  if (!citations || citations.length === 0) return null;
+  return (
+    <details className="rag-citations">
+      <summary>引用文档 · {citations.length} 个片段</summary>
+      <div>
+        {citations.map((citation, index) => (
+          <article key={`${citation.source}-${citation.chunkIndex}-${index}`}>
+            <b>{citation.source}</b>
+            <span>第 {Number(citation.chunkIndex) + 1} 段</span>
+            <p>{citation.content}</p>
+          </article>
+        ))}
+      </div>
+    </details>
   );
 }
 
