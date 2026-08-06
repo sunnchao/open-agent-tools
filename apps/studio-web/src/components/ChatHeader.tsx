@@ -27,9 +27,9 @@ const STATUS_COLOR: Record<ChatHeaderProps["status"], string> = {
 };
 
 const STATUS_LABEL: Record<ChatHeaderProps["status"], string> = {
-  idle: "idle",
-  streaming: "streaming…",
-  error: "error",
+  idle: "空闲",
+  streaming: "生成中…",
+  error: "出错",
 };
 
 export function ChatHeader({
@@ -59,62 +59,62 @@ export function ChatHeader({
   return (
     <Flex
       align="center"
-      justify="space-between"
       style={{
         height: 52,
         padding: "0 20px",
-        borderBottom: "1px solid rgba(255,255,255,0.08)",
+        borderBottom: "1px solid var(--studio-line, #e2e5e9)",
         flexShrink: 0,
-        gap: 12,
       }}
     >
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <Title level={5} style={{ margin: 0 }} ellipsis>
-          {title}
-        </Title>
-        <Flex align="center" gap={8} style={{ marginTop: 2 }}>
-          <Tag color={STATUS_COLOR[status]} style={{ marginInlineEnd: 0 }}>
-            {STATUS_LABEL[status]}
-          </Tag>
+      <div className="chat-col" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <Title level={5} style={{ margin: 0 }} ellipsis>
+            {title}
+          </Title>
+          <Flex align="center" gap={8} style={{ marginTop: 2 }}>
+            <Tag color={STATUS_COLOR[status]} style={{ marginInlineEnd: 0 }}>
+              {STATUS_LABEL[status]}
+            </Tag>
+          </Flex>
+        </div>
+        <Flex align="center" gap={8} wrap="wrap">
+          <Select
+            size="small"
+            value={selectedProviderId}
+            options={providers.map((provider) => ({ value: provider.id, label: provider.name }))}
+            style={{ minWidth: 140 }}
+            placeholder="Provider"
+            title="模型 Provider（路由）"
+            onChange={(value) => {
+              const provider = providers.find((item) => item.id === value);
+              onRoutingChange({ providerId: value, model: provider?.models[0] });
+            }}
+          />
+          <Select
+            size="small"
+            value={selectedModel}
+            options={modelOptions.map((item) => ({ value: item, label: item }))}
+            style={{ minWidth: 150 }}
+            placeholder="模型"
+            title="模型"
+            onChange={(value) => onRoutingChange({ model: value })}
+          />
+          <Flex align="center" gap={6} className="chat-header-resources">
+            {ragSourceCount > 0 ? <Tag icon={<DatabaseOutlined />}>{ragSourceCount}</Tag> : null}
+            {mcpToolCount > 0 ? <Tag icon={<ApiOutlined />}>{mcpToolCount}</Tag> : null}
+            <Badge count={resourceCount} size="small" overflowCount={99}>
+              <Button
+                icon={<SettingOutlined />}
+                onClick={onConfigureResources}
+                title="配置对话资源"
+                aria-label="配置对话资源"
+              >
+                资源
+              </Button>
+            </Badge>
+          </Flex>
         </Flex>
       </div>
-      <Flex align="center" gap={8} wrap="wrap">
-        <Select
-          size="small"
-          value={selectedProviderId}
-          options={providers.map((provider) => ({ value: provider.id, label: provider.name }))}
-          style={{ minWidth: 140 }}
-          placeholder="Provider"
-          title="模型 Provider（路由）"
-          onChange={(value) => {
-            const provider = providers.find((item) => item.id === value);
-            onRoutingChange({ providerId: value, model: provider?.models[0] });
-          }}
-        />
-        <Select
-          size="small"
-          value={selectedModel}
-          options={modelOptions.map((item) => ({ value: item, label: item }))}
-          style={{ minWidth: 150 }}
-          placeholder="模型"
-          title="模型"
-          onChange={(value) => onRoutingChange({ model: value })}
-        />
-        <Flex align="center" gap={6} className="chat-header-resources">
-          {ragSourceCount > 0 ? <Tag icon={<DatabaseOutlined />}>{ragSourceCount}</Tag> : null}
-          {mcpToolCount > 0 ? <Tag icon={<ApiOutlined />}>{mcpToolCount}</Tag> : null}
-          <Badge count={resourceCount} size="small" overflowCount={99}>
-            <Button
-              icon={<SettingOutlined />}
-              onClick={onConfigureResources}
-              title="配置对话资源"
-              aria-label="配置对话资源"
-            >
-              资源
-            </Button>
-          </Badge>
-        </Flex>
-      </Flex>
     </Flex>
   );
 }

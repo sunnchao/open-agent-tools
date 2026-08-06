@@ -5,7 +5,8 @@ import {
   type ArtifactInspectionJob,
   type ManagedMcpManifest,
 } from "@open-agent-tools/mcp-contracts";
-import { Pool, type PoolClient } from "pg";
+import type { Pool, PoolClient } from "pg";
+import { createPostgresPool } from "@open-agent-tools/pg";
 
 import type {
   ArtifactInspectionRepository,
@@ -400,9 +401,9 @@ export function createPostgresArtifactInspectionRepository(databaseUrl: string):
   repository: PostgresArtifactInspectionRepository;
   close: () => Promise<void>;
 } {
-  const pool = new Pool({ connectionString: databaseUrl });
+  const { pool, close } = createPostgresPool(databaseUrl);
   return {
     repository: new PostgresArtifactInspectionRepository(pool),
-    close: () => pool.end(),
+    close,
   };
 }

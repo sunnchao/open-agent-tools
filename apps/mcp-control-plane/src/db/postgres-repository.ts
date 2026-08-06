@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, getTableColumns, ne, or, sql } from "drizzle-orm";
-import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { createPostgresConnection, isPostgresError } from "@open-agent-tools/pg";
 import {
   RepositoryConflictError,
   RepositoryNotFoundError,
@@ -22,16 +22,6 @@ type Database = NodePgDatabase<typeof schema>;
 type ServiceRow = typeof mcpServices.$inferSelect;
 type VersionRow = typeof mcpServiceVersions.$inferSelect;
 type BuildJobRow = typeof mcpBuildJobs.$inferSelect;
-
-function isPostgresError(error: unknown, code: string): boolean {
-  let current = error;
-  for (let depth = 0; depth < 4; depth += 1) {
-    if (typeof current !== "object" || current === null) return false;
-    if ("code" in current && (current as { code?: unknown }).code === code) return true;
-    current = "cause" in current ? (current as { cause?: unknown }).cause : undefined;
-  }
-  return false;
-}
 
 function mapService(row: ServiceRow): McpServiceRecord {
   return {
@@ -550,10 +540,9 @@ export function createPostgresRepository(connectionString: string): {
   repository: PostgresMcpManagementRepository;
   close: () => Promise<void>;
 } {
-  const pool = new Pool({ connectionString });
-  const database = drizzle(pool, { schema });
+  const { database, close } = createPostgresConnection(connectionString, { schema });
   return {
     repository: new PostgresMcpManagementRepository(database),
-    close: () => pool.end(),
+    close,
   };
 }

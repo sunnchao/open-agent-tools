@@ -44,6 +44,7 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
 | RAG Server     | `@open-agent-tools/rag-server`        | Document ingestion, retrieval, and optional LLM answer API                                |
 | Contracts      | `@open-agent-tools/mcp-contracts`     | Shared Zod contracts for manifests, Prompts, jobs, and Runner I/O                         |
 | Auth           | `@open-agent-tools/mcp-auth`          | API Key generation, parsing, hashing, verification                                        |
+| Pg             | `@open-agent-tools/pg`                | Shared PostgreSQL connection helpers (pg Pool, Drizzle database, error codes)             |
 | Node.js Runner | `@open-agent-tools/mcp-nodejs-runner` | Loads handlers inside Tool containers and validates MCP results                           |
 
 The `packages/deepagent` package is a LangGraph-driven Deep Agent adapter used by `apps/cli`. It wraps `createDeepAgent` from `deepagents`, adds HITL interrupt handling, tool-call streaming callbacks, and MCP/time/memory tools.

@@ -3,7 +3,7 @@ import {
   ManagedToolSchema,
   PromptDefinitionSchema,
 } from "@open-agent-tools/mcp-contracts";
-import { Pool } from "pg";
+import type { Pool } from "pg";
 import { z } from "zod";
 import type {
   ApiClientRecord,
@@ -14,6 +14,7 @@ import type {
   McpScope,
   ServiceSummary,
 } from "./repository.js";
+import { createPostgresPool } from "@open-agent-tools/pg";
 
 const ClientStatusSchema = z.enum(["ACTIVE", "REVOKED"]);
 const KeyStatusSchema = z.enum(["ACTIVE", "REVOKED"]);
@@ -264,9 +265,9 @@ export function createPostgresGatewayRepository(connectionString: string): {
   repository: PostgresGatewayRepository;
   close: () => Promise<void>;
 } {
-  const pool = new Pool({ connectionString });
+  const { pool, close } = createPostgresPool(connectionString);
   return {
     repository: new PostgresGatewayRepository(pool),
-    close: () => pool.end(),
+    close,
   };
 }

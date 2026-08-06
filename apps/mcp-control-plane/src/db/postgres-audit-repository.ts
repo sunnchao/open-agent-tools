@@ -1,6 +1,6 @@
 import { and, desc, eq, ilike, type SQL } from "drizzle-orm";
-import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { createPostgresConnection } from "@open-agent-tools/pg";
 
 import type { AuditEventQuery, AuditEventRecord, AuditRepository } from "../audit-repository.js";
 import * as schema from "./schema.js";
@@ -37,10 +37,9 @@ export function createPostgresAuditRepository(connectionString: string): {
   repository: PostgresAuditRepository;
   close: () => Promise<void>;
 } {
-  const pool = new Pool({ connectionString });
-  const database = drizzle(pool, { schema });
+  const { database, close } = createPostgresConnection(connectionString, { schema });
   return {
     repository: new PostgresAuditRepository(database),
-    close: () => pool.end(),
+    close,
   };
 }

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Layout, Spin } from "antd";
 import { Sidebar } from "../../components/Sidebar.js";
 import { ChatHeader } from "../../components/ChatHeader.js";
 import { MessageList } from "../../components/MessageList.js";
-import { Composer } from "../../components/Composer.js";
+import { Composer, type ComposerHandle } from "../../components/Composer.js";
 import { useChatSessions } from "../../hooks/useChatSessions.js";
 import { useChatStream } from "../../hooks/useChatStream.js";
 import { newId } from "../../lib/ids.js";
@@ -33,6 +33,8 @@ export function ChatWorkspace() {
   } = useChatSessions();
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false);
   const resources = useResourceCatalog();
+  const composerRef = useRef<ComposerHandle>(null);
+  const [input, setInput] = useState("");
 
   // 拉取已启用的 Provider 目录，供对话路由选择。
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
@@ -49,6 +51,11 @@ export function ChatWorkspace() {
       cancelled = true;
     };
   }, []);
+
+  // 切换会话时把焦点交给输入框，提升连续性
+  useEffect(() => {
+    composerRef.current?.focus();
+  }, [activeId]);
 
   // 会话未显式选择模型时，回退到构建期 VITE_MODEL（保持原有行为）。
   const fallbackModel = import.meta.env.VITE_MODEL as string | undefined;
@@ -117,6 +124,50 @@ export function ChatWorkspace() {
     );
   }, [activeSession, removeMessage, send, providers]);
 
+  const handleRegenerate = useCallback(
+    (assistantId: string) => {
+      if (!activeSession) return;
+      const messages = activeSession.messages;
+      const idx = messages.findIndex((m) => m.id === assistantId);
+      if (idx < 0) return;
+      let userIdx = -1;
+      for (let i = idx - 1; i >= 0; i--) {
+        const current = messages[i];
+        if (current?.role === "user") {
+          userIdx = i;
+          break;
+        }
+      }
+      if (userIdx < 0) return;
+      const userMsg = messages[userIdx];
+      if (!userMsg) return;
+      const trailing = messages.slice(userIdx + 1);
+      for (const message of trailing) {
+        removeMessage(activeSession.id, message.id);
+      }
+      const history = messages
+        .slice(0, userIdx + 1)
+        .filter((m) => m.status !== "error")
+        .map((m) => ({ role: m.role, content: m.content }));
+      send(
+        activeSession.id,
+        history,
+        { id: userMsg.id, content: userMsg.content },
+        activeSession.resources,
+        {
+          providerId: activeSession.providerId ?? providers[0]?.id,
+          model: activeSession.model ?? providers[0]?.models[0],
+        },
+      );
+    },
+    [activeSession, removeMessage, send, providers],
+  );
+
+  const handleSuggestion = useCallback((text: string) => {
+    setInput(text);
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }, []);
+
   const status: "idle" | "streaming" | "error" = useMemo(() => {
     if (isStreaming) return "streaming";
     if (activeSession?.messages.some((message) => message.status === "error")) return "error";
@@ -157,8 +208,13 @@ export function ChatWorkspace() {
           messages={activeSession.messages}
           isStreaming={isStreaming}
           onRetry={handleRetry}
+          onRegenerate={handleRegenerate}
+          onSuggestion={handleSuggestion}
         />
         <Composer
+          ref={composerRef}
+          value={input}
+          onChange={setInput}
           onSend={handleSend}
           onStop={stop}
           isStreaming={isStreaming}

@@ -1,6 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
-import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { createPostgresConnection } from "@open-agent-tools/pg";
 import type {
   ApiClientRecord,
   ClientAccessRepository,
@@ -166,10 +166,9 @@ export function createPostgresClientAccessRepository(connectionString: string): 
   repository: PostgresClientAccessRepository;
   close: () => Promise<void>;
 } {
-  const pool = new Pool({ connectionString });
-  const database = drizzle(pool, { schema });
+  const { database, close } = createPostgresConnection(connectionString, { schema });
   return {
     repository: new PostgresClientAccessRepository(database),
-    close: () => pool.end(),
+    close,
   };
 }
