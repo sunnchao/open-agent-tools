@@ -1,5 +1,6 @@
 import { callMcpTool, retrieveRag, type McpToolBinding } from "../resources.js";
-import { createProviderClient, getProvider, type ProviderWithKey } from "../providers/store.js";
+import { getProvider, type ProviderWithKey } from "../providers/store.js";
+import { createLlmClient } from "../providers/clients/index.js";
 
 export type WorkflowNodeKind = "start" | "input" | "rag" | "llm" | "mcp" | "condition" | "end";
 
@@ -397,22 +398,19 @@ async function runNode(
             throw new Error(
               `Provider「${resolvedProvider.name}」未配置 API Key，请在「设置」中为该 Provider 填写 API Key`,
             );
-          const client = createProviderClient(resolvedProvider);
-          const response = await client.chat.completions.create(
-            {
-              model: value.model,
-              messages: [{ role: "user", content: value.prompt }],
-              ...(value.temperature === undefined ? {} : { temperature: value.temperature }),
-              stream: false,
-            },
-            { signal: deps.signal },
-          );
+          const completion = await createLlmClient(resolvedProvider).complete({
+            model: value.model,
+            messages: [{ role: "user", content: value.prompt }],
+            ...(value.temperature === undefined ? {} : { temperature: value.temperature }),
+            signal: deps.signal,
+          });
+          const { inputTokens = 0, outputTokens = 0 } = completion.tokenUsage ?? {};
           return {
-            content: response.choices[0]?.message?.content ?? "",
+            content: completion.content,
             tokenUsage: {
-              inputTokens: response.usage?.prompt_tokens ?? 0,
-              outputTokens: response.usage?.completion_tokens ?? 0,
-              totalTokens: response.usage?.total_tokens ?? 0,
+              inputTokens,
+              outputTokens,
+              totalTokens: inputTokens + outputTokens,
             },
           };
         });

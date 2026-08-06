@@ -10,6 +10,7 @@ import {
   fetchProviderModels,
   getProvider,
   listProviders,
+  probeProviderModels,
   updateProvider,
 } from "./store.js";
 
@@ -49,6 +50,32 @@ describe("provider store", () => {
     assert.equal(provider.apiKeyMasked, "sk***lue");
     assert.equal(getProvider("default")?.apiKey, "sk-secret-value");
     assert.equal(listProviders().length, 1);
+    // format 缺省时回落为 openai-chat
+    assert.equal(provider.format, "openai-chat");
+  });
+
+  it("persists and updates the provider format", () => {
+    const provider = createProvider({
+      name: "Claude",
+      baseUrl: "https://api.anthropic.com/v1",
+      models: ["claude-3-5-sonnet"],
+      format: "anthropic-message",
+    });
+    assert.equal(provider.format, "anthropic-message");
+    assert.equal(getProvider(provider.id)?.format, "anthropic-message");
+    assert.throws(
+      () =>
+        createProvider({
+          name: "Bad",
+          baseUrl: "https://example.com/v1",
+          models: ["m"],
+          // @ts-expect-error intentionally invalid format
+          format: "unknown-format",
+        }),
+      /unknown provider format/,
+    );
+    const updated = updateProvider(provider.id, { format: "openai-response" });
+    assert.equal(updated?.format, "openai-response");
   });
 
   it("does not allow key writes without an encryption key", () => {
@@ -98,5 +125,23 @@ describe("provider store", () => {
         status: 200,
       })) as typeof fetch;
     assert.deepEqual(await fetchProviderModels(provider.id), ["a", "b"]);
+  });
+
+  it("probes model metadata by params without persisting", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (input) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify({ data: [{ id: "x" }, { id: "y" }] }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+    const models = await probeProviderModels({
+      baseUrl: "https://example.com/v1/",
+      apiKey: "sk-probe",
+    });
+    assert.deepEqual(models, ["x", "y"]);
+    assert.equal(requestedUrl, "https://example.com/v1/models");
+    // probe 不落库
+    assert.equal(listProviders().length, 0);
   });
 });

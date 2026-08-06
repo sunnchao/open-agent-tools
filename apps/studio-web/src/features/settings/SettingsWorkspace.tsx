@@ -10,10 +10,13 @@ import {
 import {
   fetchProviderModels,
   fetchProviders,
+  probeProviderModels,
   removeProvider,
   saveProvider,
+  type ProviderFormat,
   type ProviderMetadata,
 } from "../providers/api.js";
+import { PROVIDER_FORMATS, PROVIDER_FORMAT_LABELS } from "../providers/api.js";
 
 type Draft = {
   id?: string;
@@ -22,8 +25,16 @@ type Draft = {
   apiKey: string;
   models: string[];
   enabled: boolean;
+  format: ProviderFormat;
 };
-const emptyDraft = (): Draft => ({ name: "", baseUrl: "", apiKey: "", models: [], enabled: true });
+const emptyDraft = (): Draft => ({
+  name: "",
+  baseUrl: "",
+  apiKey: "",
+  models: [],
+  enabled: true,
+  format: "openai-chat",
+});
 
 export function SettingsWorkspace() {
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
@@ -71,6 +82,7 @@ export function SettingsWorkspace() {
       apiKey: "",
       models: provider.models,
       enabled: provider.enabled,
+      format: provider.format,
     });
 
   return (
@@ -130,6 +142,7 @@ export function SettingsWorkspace() {
                   <th>名称</th>
                   <th>Base URL</th>
                   <th>API Key</th>
+                  <th>格式</th>
                   <th>模型</th>
                   <th>状态</th>
                   <th>默认</th>
@@ -139,14 +152,14 @@ export function SettingsWorkspace() {
               <tbody>
                 {loading && providers.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="table-empty">
+                    <td colSpan={8} className="table-empty">
                       正在加载 Provider...
                     </td>
                   </tr>
                 ) : null}
                 {!loading && providers.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="table-empty">
+                    <td colSpan={8} className="table-empty">
                       还没有 Provider
                     </td>
                   </tr>
@@ -165,6 +178,9 @@ export function SettingsWorkspace() {
                     </td>
                     <td>
                       <span className="masked-key">{provider.apiKeyMasked ?? "未配置"}</span>
+                    </td>
+                    <td>
+                      <span className="format-pill">{PROVIDER_FORMAT_LABELS[provider.format]}</span>
                     </td>
                     <td>
                       <span className="model-count">{provider.models.length}</span>
@@ -248,16 +264,22 @@ function ProviderModal({
     setModelInput("");
   };
   const autoFetch = async () => {
-    if (!draft.id) return;
     setFetching(true);
     try {
-      patch({ models: await fetchProviderModels(draft.id) });
+      // 编辑已有 Provider 时走入库记录；新建时按当前表单参数探测，无需先保存。
+      const models = draft.id
+        ? await fetchProviderModels(draft.id)
+        : await probeProviderModels({ baseUrl: draft.baseUrl, apiKey: draft.apiKey });
+      patch({ models });
     } catch (reason) {
       window.alert(reason instanceof Error ? reason.message : "模型获取失败");
     } finally {
       setFetching(false);
     }
   };
+
+  // 自动获取模型需要 Base URL；编辑态需已入库的 id，新建态只需 Base URL。
+  const canAutoFetch = draft.id ? true : Boolean(draft.baseUrl.trim());
   return (
     <div
       className="settings-modal-backdrop"
@@ -297,6 +319,21 @@ function ProviderModal({
               onChange={(event) => patch({ baseUrl: event.target.value })}
               placeholder="https://api.example.com/v1"
             />
+          </label>
+          <label className="studio-field">
+            <span>
+              接入格式 <small>决定请求协议与调用方式</small>
+            </span>
+            <select
+              value={draft.format}
+              onChange={(event) => patch({ format: event.target.value as ProviderFormat })}
+            >
+              {PROVIDER_FORMATS.map((format) => (
+                <option key={format} value={format}>
+                  {PROVIDER_FORMAT_LABELS[format]}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="studio-field">
             <span>
@@ -344,11 +381,14 @@ function ProviderModal({
                 <button type="button" onClick={addModel}>
                   <PlusOutlined />
                 </button>
-                {draft.id ? (
-                  <button type="button" onClick={() => void autoFetch()} disabled={fetching}>
-                    <ReloadOutlined /> {fetching ? "获取中" : "自动获取"}
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void autoFetch()}
+                  disabled={fetching || !canAutoFetch}
+                  title={canAutoFetch ? "获取该 Provider 的模型列表" : "请先填写 Base URL"}
+                >
+                  <ReloadOutlined /> {fetching ? "获取中" : "自动获取"}
+                </button>
               </div>
             </div>
           </div>

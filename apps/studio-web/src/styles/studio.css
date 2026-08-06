@@ -445,6 +445,18 @@ select:focus-visible {
   border-radius: 4px;
 }
 
+.format-pill {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  padding: 3px 7px;
+  color: var(--studio-blue);
+  font-family: var(--studio-mono);
+  font-size: 9px;
+  background: var(--studio-blue-soft);
+  border-radius: 3px;
+}
+
 .status-pill,
 .default-mark {
   display: inline-flex;

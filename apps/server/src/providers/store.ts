@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { OpenAI } from "openai";
 import { openDb } from "../db.js";
 import { decryptProviderKey, encryptProviderKey, maskProviderKey } from "./crypto.js";
+import { isProviderFormat, type ProviderFormat } from "./formats.js";
 
 export interface Provider {
   id: string;
@@ -11,6 +11,7 @@ export interface Provider {
   enabled: boolean;
   isDefault: boolean;
   apiKeyMasked: string | null;
+  format: ProviderFormat;
   createdAt: string;
   updatedAt: string;
 }
@@ -26,6 +27,7 @@ export interface ProviderInput {
   apiKey?: string | null;
   models: string[];
   enabled?: boolean;
+  format?: ProviderFormat;
 }
 
 interface ProviderRow {
@@ -36,6 +38,7 @@ interface ProviderRow {
   models_json: string;
   enabled: number;
   is_default: number;
+  format: string;
   created_at: string;
   updated_at: string;
 }
@@ -60,7 +63,7 @@ function normalizeModels(models: unknown): string[] {
 
 function normalizeInput(
   input: ProviderInput,
-): Required<Pick<ProviderInput, "name" | "baseUrl" | "models">> &
+): Required<Pick<ProviderInput, "name" | "baseUrl" | "models" | "format">> &
   Pick<ProviderInput, "apiKey" | "enabled"> {
   const name = input.name?.trim();
   const baseUrl = input.baseUrl?.trim().replace(/\/$/, "");
@@ -73,12 +76,15 @@ function normalizeInput(
     throw new Error("baseUrl must be a valid URL");
   }
   if (!/^https?:$/.test(parsed.protocol)) throw new Error("baseUrl must use http or https");
+  const format = input.format ?? "openai-chat";
+  if (!isProviderFormat(format)) throw new Error(`unknown provider format: ${format}`);
   return {
     name,
     baseUrl,
     models: normalizeModels(input.models),
     apiKey: input.apiKey === undefined ? undefined : input.apiKey?.trim() || null,
     enabled: input.enabled !== false,
+    format,
   };
 }
 
@@ -87,6 +93,7 @@ function rowToProvider(row: ProviderRow, includeKey = false): Provider | Provide
   const parsedModels = Array.isArray(models)
     ? models.filter((model): model is string => typeof model === "string")
     : [];
+  const format = isProviderFormat(row.format) ? row.format : "openai-chat";
   const base = {
     id: row.id,
     name: row.name,
@@ -95,6 +102,7 @@ function rowToProvider(row: ProviderRow, includeKey = false): Provider | Provide
     enabled: row.enabled === 1,
     isDefault: row.is_default === 1,
     apiKeyMasked: maskProviderKey(row.api_key_enc ? decryptProviderKey(row.api_key_enc) : null),
+    format,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   } satisfies Provider;
@@ -133,8 +141,8 @@ export function createProvider(input: ProviderInput): Provider {
   const encrypted = normalized.apiKey ? encryptProviderKey(normalized.apiKey) : null;
   openDb()
     .prepare(
-      `INSERT INTO providers (id, name, base_url, api_key_enc, models_json, enabled, is_default, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      `INSERT INTO providers (id, name, base_url, api_key_enc, models_json, enabled, is_default, format, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
     )
     .run(
       id,
@@ -143,6 +151,7 @@ export function createProvider(input: ProviderInput): Provider {
       encrypted,
       JSON.stringify(normalized.models),
       normalized.enabled ? 1 : 0,
+      normalized.format,
       timestamp,
       timestamp,
     );
@@ -161,6 +170,7 @@ export function updateProvider(
     models: input.models ?? JSON.parse(current.models_json),
     enabled: input.enabled ?? current.enabled === 1,
     apiKey: input.apiKey,
+    format: input.format ?? (isProviderFormat(current.format) ? current.format : "openai-chat"),
   });
   const encrypted =
     normalized.apiKey === undefined
@@ -170,7 +180,7 @@ export function updateProvider(
         : null;
   openDb()
     .prepare(
-      `UPDATE providers SET name = ?, base_url = ?, api_key_enc = ?, models_json = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE providers SET name = ?, base_url = ?, api_key_enc = ?, models_json = ?, enabled = ?, format = ?, updated_at = ? WHERE id = ?`,
     )
     .run(
       normalized.name,
@@ -178,6 +188,7 @@ export function updateProvider(
       encrypted,
       JSON.stringify(normalized.models),
       normalized.enabled ? 1 : 0,
+      normalized.format,
       now(),
       id,
     );
@@ -199,16 +210,18 @@ export function ensureDefaultProvider(): Provider | null {
   return getProvider("default");
 }
 
-export function createProviderClient(provider: ProviderWithKey): OpenAI {
-  return new OpenAI({ apiKey: provider.apiKey ?? "", baseURL: provider.baseUrl });
+export interface ProbeModelsParams {
+  baseUrl: string;
+  apiKey?: string | null;
 }
 
-export async function fetchProviderModels(id: string): Promise<string[]> {
-  const provider = getProvider(id, { requireEnabled: false });
-  if (!provider) throw new Error("provider not found");
+/** 向目标的 /models 端点发起请求并解析模型 id 列表（不落库）。 */
+export async function probeProviderModels(params: ProbeModelsParams): Promise<string[]> {
+  const baseUrl = params.baseUrl?.trim().replace(/\/$/, "");
+  if (!baseUrl) throw new Error("baseUrl is required");
   const headers: Record<string, string> = {};
-  if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
-  const response = await fetch(`${provider.baseUrl}/models`, { headers });
+  if (params.apiKey) headers.authorization = `Bearer ${params.apiKey}`;
+  const response = await fetch(`${baseUrl}/models`, { headers });
   if (!response.ok) {
     if (response.status === 404) {
       throw new Error("该 Provider 不支持自动获取，请手动填写");
@@ -222,6 +235,12 @@ export async function fetchProviderModels(id: string): Promise<string[]> {
   return body.data
     .map((item) => (typeof item?.id === "string" ? item.id.trim() : ""))
     .filter(Boolean);
+}
+
+export async function fetchProviderModels(id: string): Promise<string[]> {
+  const provider = getProvider(id, { requireEnabled: false });
+  if (!provider) throw new Error("provider not found");
+  return probeProviderModels({ baseUrl: provider.baseUrl, apiKey: provider.apiKey });
 }
 
 export function initializeProviders(): Provider | null {

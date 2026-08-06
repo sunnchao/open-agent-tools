@@ -16,14 +16,14 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@open-agent-tools/shared": "workspace:*",
     "@langchain/anthropic": "^1.5.2",
     "@langchain/community": "^1.1.29",
     "@langchain/core": "^1.2.3",
     "@langchain/langgraph": "^1.4.8",
     "@langchain/openai": "^1.5.5",
     "@langchain/textsplitters": "^1.0.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@open-agent-tools/shared": "workspace:*",
     "chalk": "^6.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",

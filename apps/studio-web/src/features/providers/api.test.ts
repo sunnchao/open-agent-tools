@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchProviders, saveProvider, fetchProviderModels } from "./api.js";
+import {
+  fetchProviders,
+  saveProvider,
+  fetchProviderModels,
+  probeProviderModels,
+} from "./api.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -18,6 +23,7 @@ describe("provider api", () => {
                 enabled: true,
                 isDefault: true,
                 apiKeyMasked: "sk***abc",
+                format: "openai-chat",
               },
             ],
           }),
@@ -60,5 +66,20 @@ describe("provider api", () => {
     ).resolves.toMatchObject({ id: "p1" });
     await expect(fetchProviderModels("p1")).resolves.toEqual(["a", "b"]);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+  });
+
+  it("probes models by params for a new provider", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ models: ["x", "y"] }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      probeProviderModels({ baseUrl: "https://example.com/v1", apiKey: "sk-x" }),
+    ).resolves.toEqual(["x", "y"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/providers/fetch-models",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ baseUrl: "https://example.com/v1", apiKey: "sk-x" }) }),
+    );
   });
 });

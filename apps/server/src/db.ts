@@ -73,12 +73,14 @@ export function openDb(path = getDbPath()): DatabaseSync {
       models_json TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       is_default INTEGER NOT NULL DEFAULT 0,
+      format TEXT NOT NULL DEFAULT 'openai-chat',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
   `);
 
   migrateMessagesTable(db);
+  migrateProvidersTable(db);
 
   return db;
 }
@@ -101,6 +103,18 @@ function migrateMessagesTable(database: DatabaseSync): void {
 
   // Drop leftover backup from a previous failed rebuild migration.
   database.exec(`DROP TABLE IF EXISTS messages_migration_backup`);
+}
+
+function providerColumns(database: DatabaseSync): Set<string> {
+  const rows = database.prepare(`PRAGMA table_info(providers)`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+/** Add format column on legacy DBs (defaults to OpenAI Chat). */
+function migrateProvidersTable(database: DatabaseSync): void {
+  if (!providerColumns(database).has("format")) {
+    database.exec(`ALTER TABLE providers ADD COLUMN format TEXT NOT NULL DEFAULT 'openai-chat'`);
+  }
 }
 
 /** Test helper: close and forget the singleton. */

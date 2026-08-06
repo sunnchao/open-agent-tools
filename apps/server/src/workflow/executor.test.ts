@@ -143,6 +143,7 @@ describe("workflow executor", () => {
       isDefault: true,
       apiKeyMasked: null,
       apiKey: null,
+      format: "openai-chat" as const,
       createdAt: "",
       updatedAt: "",
     };
@@ -243,6 +244,7 @@ describe("workflow executor", () => {
           isDefault: true,
           apiKeyMasked: null,
           apiKey: null,
+          format: "openai-chat" as const,
           createdAt: "",
           updatedAt: "",
         }),
