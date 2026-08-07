@@ -23,6 +23,7 @@
     "@langchain/openai": "^1.5.5",
     "@langchain/textsplitters": "^1.0.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@open-agent-tools/rag-crag": "workspace:*",
     "@open-agent-tools/shared": "workspace:*",
     "chalk": "^6.0.0",
     "cors": "^2.8.5",

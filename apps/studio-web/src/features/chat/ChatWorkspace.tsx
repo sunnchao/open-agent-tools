@@ -193,17 +193,7 @@ export function ChatWorkspace() {
         onRename={(id, title) => void renameSession(id, title)}
       />
       <Layout className="chat-main">
-        <ChatHeader
-          title={activeSession.title}
-          status={status}
-          providers={providers}
-          providerId={activeSession.providerId}
-          model={activeSession.model}
-          onRoutingChange={(routing) => updateSessionRouting(activeSession.id, routing)}
-          mcpToolCount={activeSession.resources.mcpTools.length}
-          ragSourceCount={activeSession.resources.rag.sources.length}
-          onConfigureResources={() => setResourceDrawerOpen(true)}
-        />
+        <ChatHeader title={activeSession.title} />
         <MessageList
           messages={activeSession.messages}
           isStreaming={isStreaming}
@@ -220,6 +210,10 @@ export function ChatWorkspace() {
           isStreaming={isStreaming}
           resources={activeSession.resources}
           onConfigureResources={() => setResourceDrawerOpen(true)}
+          providers={providers}
+          providerId={activeSession.providerId}
+          model={activeSession.model}
+          onRoutingChange={(routing) => updateSessionRouting(activeSession.id, routing)}
         />
       </Layout>
       <ChatResourceDrawer

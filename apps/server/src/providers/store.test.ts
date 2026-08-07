@@ -8,9 +8,12 @@ import {
   createProvider,
   deleteProvider,
   fetchProviderModels,
+  getDefaultProvider,
   getProvider,
+  initializeProviders,
   listProviders,
   probeProviderModels,
+  setDefaultProvider,
   updateProvider,
 } from "./store.js";
 
@@ -49,6 +52,8 @@ describe("provider store", () => {
     assert.equal(provider.id, "default");
     assert.equal(provider.apiKeyMasked, "sk***lue");
     assert.equal(getProvider("default")?.apiKey, "sk-secret-value");
+    assert.equal(initializeProviders()?.isDefault, true);
+    assert.equal(getDefaultProvider()?.id, "default");
     assert.equal(listProviders().length, 1);
     // format 缺省时回落为 openai-chat
     assert.equal(provider.format, "openai-chat");
@@ -92,7 +97,7 @@ describe("provider store", () => {
     );
   });
 
-  it("supports CRUD while preserving the default", () => {
+  it("switches the default and allows deleting the former default", () => {
     createProvider({
       id: "default",
       name: "OpenAI",
@@ -105,13 +110,27 @@ describe("provider store", () => {
       models: ["llama3"],
       enabled: false,
     });
+    assert.equal(setDefaultProvider("default")?.isDefault, true);
     assert.equal(listProviders({ includeDisabled: true }).length, 2);
     assert.deepEqual(
       updateProvider(provider.id, { enabled: true, models: ["llama3.1", "llama3.1"] })?.models,
       ["llama3.1"],
     );
     assert.equal(deleteProvider("default"), "default");
-    assert.equal(deleteProvider(provider.id), "deleted");
+    assert.equal(setDefaultProvider(provider.id)?.isDefault, true);
+    assert.equal(getDefaultProvider()?.id, provider.id);
+    assert.equal(deleteProvider("default"), "deleted");
+    assert.equal(deleteProvider(provider.id), "default");
+  });
+
+  it("rejects a disabled default provider", () => {
+    const provider = createProvider({
+      name: "Disabled",
+      baseUrl: "https://example.com/v1",
+      models: ["m"],
+      enabled: false,
+    });
+    assert.throws(() => setDefaultProvider(provider.id), /disabled provider cannot be default/);
   });
 
   it("fetches OpenAI-compatible model metadata", async () => {

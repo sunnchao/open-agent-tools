@@ -70,6 +70,15 @@ export async function removeProvider(id: string): Promise<void> {
   if (!response.ok) throw new Error(await parseError(response));
 }
 
+export async function setDefaultProvider(id: string): Promise<ProviderMetadata> {
+  const response = await fetch(`/api/admin/providers/${encodeURIComponent(id)}/default`, {
+    method: "PUT",
+  });
+  if (!response.ok) throw new Error(await parseError(response));
+  const body = (await response.json()) as { provider: ProviderMetadata };
+  return body.provider;
+}
+
 export async function fetchProviderModels(id: string): Promise<string[]> {
   const response = await fetch(`/api/admin/providers/${encodeURIComponent(id)}/fetch-models`, {
     method: "POST",

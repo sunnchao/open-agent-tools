@@ -134,6 +134,15 @@ export function getProvider(
   return rowToProvider(row, true) as ProviderWithKey;
 }
 
+export function getDefaultProvider(options?: { requireEnabled?: boolean }): ProviderWithKey | null {
+  const row = openDb()
+    .prepare(
+      `SELECT * FROM providers WHERE is_default = 1 ${options?.requireEnabled ? "AND enabled = 1" : ""} LIMIT 1`,
+    )
+    .get() as ProviderRow | undefined;
+  return row ? (rowToProvider(row, true) as ProviderWithKey) : null;
+}
+
 export function createProvider(input: ProviderInput): Provider {
   const normalized = normalizeInput(input);
   const id = input.id?.trim() || randomUUID();
@@ -195,19 +204,33 @@ export function updateProvider(
   return getProvider(id);
 }
 
+export function setDefaultProvider(id: string): Provider | null {
+  const current = getRow(id);
+  if (!current) return null;
+  if (current.enabled !== 1) throw new Error("disabled provider cannot be default");
+
+  openDb()
+    .prepare(
+      `UPDATE providers
+       SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END, updated_at = ?
+       WHERE is_default = 1 OR id = ?`,
+    )
+    .run(id, now(), id);
+  return rowToProvider(getRow(id)!);
+}
+
 export function deleteProvider(id: string): "deleted" | "not_found" | "default" {
   const current = getRow(id);
   if (!current) return "not_found";
-  // 默认 Provider（id 为 "default" 或标记为 is_default）不可删除，
-  // 因为 /api/chat 与 Workflow LLM 节点在未指定 providerId 时会路由到它。
-  if (current.id === "default" || current.is_default === 1) return "default";
+  if (current.is_default === 1) return "default";
   openDb().prepare(`DELETE FROM providers WHERE id = ?`).run(id);
   return "deleted";
 }
 
 export function ensureDefaultProvider(): Provider | null {
-  // Provider 完全由设置页面管理，不再从环境变量注入默认 Provider。
-  return getProvider("default");
+  const current = getDefaultProvider();
+  if (current) return current;
+  return getRow("default")?.enabled === 1 ? setDefaultProvider("default") : null;
 }
 
 export interface ProbeModelsParams {

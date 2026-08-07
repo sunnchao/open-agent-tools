@@ -1,5 +1,5 @@
 import { callMcpTool, retrieveRag, type McpToolBinding } from "../resources.js";
-import { getProvider, type ProviderWithKey } from "../providers/store.js";
+import { getDefaultProvider, getProvider, type ProviderWithKey } from "../providers/store.js";
 import { createLlmClient } from "../providers/clients/index.js";
 
 export type WorkflowNodeKind = "start" | "input" | "rag" | "llm" | "mcp" | "condition" | "end";
@@ -84,6 +84,7 @@ export interface WorkflowDependencies {
   retrieveRag?: typeof retrieveRag;
   callMcpTool?: typeof callMcpTool;
   getProvider?: (id: string, options?: { requireEnabled?: boolean }) => ProviderWithKey | null;
+  getDefaultProvider?: (options?: { requireEnabled?: boolean }) => ProviderWithKey | null;
   completeLlm?: (
     provider: ProviderWithKey,
     input: { model: string; prompt: string; temperature?: number },
@@ -347,15 +348,19 @@ function normalizeTokenUsage(usage?: Partial<WorkflowTokenUsage>): WorkflowToken
 
 function resolvedDependencies(
   dependencies: WorkflowDependencies,
-): Required<Pick<WorkflowDependencies, "retrieveRag" | "callMcpTool" | "getProvider">> &
+): Required<
+  Pick<WorkflowDependencies, "retrieveRag" | "callMcpTool" | "getProvider" | "getDefaultProvider">
+> &
   WorkflowDependencies {
-  return { retrieveRag, callMcpTool, getProvider, ...dependencies };
+  return { retrieveRag, callMcpTool, getProvider, getDefaultProvider, ...dependencies };
 }
 
 async function runNode(
   node: WorkflowNodeInput,
   inputs: Record<string, unknown>,
-  deps: Required<Pick<WorkflowDependencies, "retrieveRag" | "callMcpTool" | "getProvider">> &
+  deps: Required<
+    Pick<WorkflowDependencies, "retrieveRag" | "callMcpTool" | "getProvider" | "getDefaultProvider">
+  > &
     WorkflowDependencies,
 ): Promise<NodeExecution> {
   const config = configOf(node);
@@ -382,13 +387,19 @@ async function runNode(
       return { result };
     }
     case "llm": {
-      const providerId =
-        typeof config.providerId === "string" && config.providerId ? config.providerId : "default";
-      const provider = deps.getProvider(providerId, { requireEnabled: true });
-      if (!provider) throw new Error(`Provider ${providerId} not found or disabled`);
+      const providerId = typeof config.providerId === "string" ? config.providerId : "";
+      const provider = providerId
+        ? deps.getProvider(providerId, { requireEnabled: true })
+        : deps.getDefaultProvider({ requireEnabled: true });
+      if (!provider)
+        throw new Error(
+          providerId
+            ? `Provider ${providerId} not found or disabled`
+            : "Default provider not found or disabled",
+        );
       const model =
         typeof config.model === "string" && config.model ? config.model : provider.models[0];
-      if (!model) throw new Error(`Provider ${providerId} has no models`);
+      if (!model) throw new Error(`Provider ${provider.id} has no models`);
       const prompt = interpolate(config.prompt ?? "", inputs, "text");
       const temperature = typeof config.temperature === "number" ? config.temperature : undefined;
       const complete =

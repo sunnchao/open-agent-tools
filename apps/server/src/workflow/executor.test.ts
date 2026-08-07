@@ -153,7 +153,6 @@ describe("workflow executor", () => {
           id: "llm",
           kind: "llm",
           config: {
-            providerId: "default",
             model: "m",
             prompt: "say {{topic}}",
             inputs: [{ name: "topic", source: { type: "run", variable: "topic" } }],
@@ -163,7 +162,7 @@ describe("workflow executor", () => {
         inputs: { topic: "hello" },
       },
       {
-        getProvider: () => provider,
+        getDefaultProvider: () => provider,
         completeLlm: async () => ({
           content: "world",
           tokenUsage: { inputTokens: 5, outputTokens: 2 },
@@ -235,7 +234,7 @@ describe("workflow executor", () => {
           completeCalls += 1;
           return "yes";
         },
-        getProvider: () => ({
+        getDefaultProvider: () => ({
           id: "default",
           name: "test",
           baseUrl: "http://localhost",

@@ -5,6 +5,7 @@ import {
   fetchProviderModels,
   listProviders,
   probeProviderModels,
+  setDefaultProvider,
   updateProvider,
 } from "../providers/store.js";
 import { isProviderFormat, type ProviderFormat } from "../providers/formats.js";
@@ -58,6 +59,19 @@ providersRouter.put("/api/admin/providers/:id", (req: Request, res: Response) =>
     res.json({ provider });
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+providersRouter.put("/api/admin/providers/:id/default", (req: Request, res: Response) => {
+  try {
+    const provider = setDefaultProvider(req.params.id as string);
+    if (!provider) {
+      res.status(404).json({ error: "provider not found" });
+      return;
+    }
+    res.json({ provider });
+  } catch (error) {
+    res.status(409).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
 

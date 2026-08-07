@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
 import { closeDb } from "./db.js";
-import { createProvider } from "./providers/store.js";
+import { createProvider, setDefaultProvider } from "./providers/store.js";
 
 let server: Server;
 let origin: string;
@@ -27,6 +27,7 @@ before(async () => {
     models: ["gpt-4o-mini"],
     enabled: true,
   });
+  setDefaultProvider("default");
   server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -61,10 +62,35 @@ describe("server provider and workflow contracts", () => {
     });
     assert.equal(createdResponse.status, 201);
     const created = (await createdResponse.json()) as { provider: { id: string } };
-    const removed = await fetch(`${origin}/api/admin/providers/${created.provider.id}`, {
+    const defaulted = await fetch(`${origin}/api/admin/providers/${created.provider.id}/default`, {
+      method: "PUT",
+    });
+    assert.equal(defaulted.status, 200);
+    assert.equal(
+      ((await defaulted.json()) as { provider: { isDefault: boolean } }).provider.isDefault,
+      true,
+    );
+
+    const defaultChat = await fetch(`${origin}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "hello" }] }),
+    });
+    assert.equal(defaultChat.status, 400);
+    assert.match(
+      ((await defaultChat.json()) as { error: string }).error,
+      /Provider「Local」未配置 API Key/,
+    );
+
+    const removed = await fetch(`${origin}/api/admin/providers/default`, {
       method: "DELETE",
     });
     assert.equal(removed.status, 204);
+
+    const protectedDefault = await fetch(`${origin}/api/admin/providers/${created.provider.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(protectedDefault.status, 409);
   });
 
   it("rejects an unknown chat provider before making an LLM request", async () => {

@@ -480,6 +480,32 @@ select:focus-visible {
   background: var(--studio-rag-soft);
 }
 
+.set-default-button {
+  display: inline-flex;
+  min-height: 27px;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  color: var(--studio-muted);
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--studio-line);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.set-default-button:hover:not(:disabled) {
+  color: var(--studio-rag);
+  background: var(--studio-rag-soft);
+  border-color: transparent;
+}
+
+.set-default-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .table-actions {
   display: flex;
   justify-content: end;

@@ -6,6 +6,7 @@ import {
   ReloadOutlined,
   SaveOutlined,
   SettingOutlined,
+  StarOutlined,
 } from "@ant-design/icons";
 import {
   fetchProviderModels,
@@ -13,6 +14,7 @@ import {
   probeProviderModels,
   removeProvider,
   saveProvider,
+  setDefaultProvider,
   type ProviderFormat,
   type ProviderMetadata,
 } from "../providers/api.js";
@@ -41,6 +43,7 @@ export function SettingsWorkspace() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [defaultingId, setDefaultingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = async () => {
@@ -84,6 +87,19 @@ export function SettingsWorkspace() {
       enabled: provider.enabled,
       format: provider.format,
     });
+
+  const makeDefault = async (provider: ProviderMetadata) => {
+    setDefaultingId(provider.id);
+    setError(null);
+    try {
+      await setDefaultProvider(provider.id);
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "设置默认 Provider 失败");
+    } finally {
+      setDefaultingId(null);
+    }
+  };
 
   return (
     <section className="settings-workspace">
@@ -191,7 +207,20 @@ export function SettingsWorkspace() {
                       </span>
                     </td>
                     <td>
-                      {provider.isDefault ? <span className="default-mark">DEFAULT</span> : ""}
+                      {provider.isDefault ? (
+                        <span className="default-mark">DEFAULT</span>
+                      ) : (
+                        <button
+                          className="set-default-button"
+                          type="button"
+                          title={provider.enabled ? "设为默认" : "请先启用 Provider"}
+                          disabled={!provider.enabled || defaultingId !== null}
+                          onClick={() => void makeDefault(provider)}
+                        >
+                          <StarOutlined />
+                          <span>{defaultingId === provider.id ? "设置中" : "设为默认"}</span>
+                        </button>
+                      )}
                     </td>
                     <td>
                       <div className="table-actions">

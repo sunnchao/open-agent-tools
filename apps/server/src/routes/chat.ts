@@ -1,15 +1,19 @@
 import { Router, type Request, type Response } from "express";
 import { addMessage, ensureSession, updateMessage, type Role } from "../db.js";
 import { executeTool, tools as builtinTools } from "../function_tools/index.js";
-import { getProvider } from "../providers/store.js";
-import { createLlmClient, type LlmMessage, type LlmToolDefinition } from "../providers/clients/index.js";
+import { getDefaultProvider, getProvider } from "../providers/store.js";
+import {
+  createLlmClient,
+  type LlmMessage,
+  type LlmToolDefinition,
+} from "../providers/clients/index.js";
 import {
   callMcpTool,
   normalizeResourceBindings,
   resolveMcpTools,
-  retrieveRag,
   type McpToolBinding,
 } from "../resources.js";
+import { createChatCragController } from "../crag.js";
 import { logDuration, logTrace, truncate } from "../trace.js";
 
 export const chatRouter: ReturnType<typeof Router> = Router();
@@ -45,7 +49,9 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
     }
   }
 
-  const selectedProvider = getProvider(providerId || "default", { requireEnabled: true });
+  const selectedProvider = providerId
+    ? getProvider(providerId, { requireEnabled: true })
+    : getDefaultProvider({ requireEnabled: true });
   if (!selectedProvider) {
     res
       .status(400)
@@ -54,7 +60,11 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
   }
   if (!selectedProvider.apiKey) {
     const message = `Provider「${selectedProvider.name}」未配置 API Key，请在「设置」中为该 Provider 填写 API Key`;
-    logTrace("chat.provider_unavailable", { providerId: selectedProvider.id, error: message }, "warn");
+    logTrace(
+      "chat.provider_unavailable",
+      { providerId: selectedProvider.id, error: message },
+      "warn",
+    );
     res.status(400).json({ error: message });
     return;
   }
@@ -131,20 +141,44 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
       .find((message) => message.role === "user")?.content;
     if (bindings.rag.sources.length > 0 && lastUserQuery) {
       const ragStartedAt = Date.now();
-      const rag = await retrieveRag({ query: lastUserQuery, ...bindings.rag });
+      // CRAG 检索：块级检索 + 图谱子图检索 → 评估 → 纠正 → 条带精炼
+      const crag = createChatCragController();
+      const result = await crag.retrieve(lastUserQuery, { sources: bindings.rag.sources });
       logDuration("chat.rag", ragStartedAt, {
         sources: bindings.rag.sources.length,
         topK: bindings.rag.topK,
-        chunks: rag.chunks.length,
+        assessment: result.assessment,
+        confidence: result.confidence,
+        actions: result.actions.join(","),
         query: truncate(lastUserQuery, 120),
       });
-      send({ rag_citations: rag.chunks });
-      if (rag.formatted) {
+      send({
+        crag_assessment: {
+          assessment: result.assessment,
+          confidence: result.confidence,
+          actions: result.actions,
+        },
+      });
+      send({
+        rag_citations: result.citations.map((s) => ({
+          source: s.source,
+          chunkIndex: s.chunkIndex,
+          content: s.text,
+        })),
+      });
+      if (result.formatted) {
         completionMessages.unshift({
           role: "system",
           content:
             "优先基于以下挂载文档回答，并用【来源】标注引用；资料未覆盖时如实说明。\n\n" +
-            rag.formatted,
+            result.formatted,
+        });
+      } else if (result.assessment === "incorrect") {
+        // 评估为不相关且纠正失败：不注入噪声上下文，模型将如实说明
+        completionMessages.unshift({
+          role: "system",
+          content:
+            "已检索挂载文档但未找到与问题相关的资料。请如实告知用户知识库未覆盖该内容，不要编造。",
         });
       }
     }

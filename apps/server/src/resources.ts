@@ -262,3 +262,26 @@ export async function retrieveRag(input: {
       .join("\n\n"),
   };
 }
+
+/** 图谱子图检索（rag-server /api/graph/retrieve）。子图未命中时返回空。 */
+export async function retrieveRagGraph(input: {
+  query: string;
+  signal?: AbortSignal;
+}): Promise<{ formatted: string; seeds: Array<{ id: string; name: string }> }> {
+  const { ragApiUrl } = resourceConfig();
+  const response = await fetch(`${ragApiUrl}/graph/retrieve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query: input.query, maxHops: 2 }),
+    signal: input.signal,
+  });
+  if (!response.ok) {
+    if (response.status === 404) return { formatted: "", seeds: [] }; // 老版本 rag-server 无图谱能力，优雅降级
+    throw new Error(`Graph retrieval failed (${response.status})`);
+  }
+  const body = (await response.json()) as {
+    formatted?: string;
+    seeds?: Array<{ id: string; name: string }>;
+  };
+  return { formatted: body.formatted ?? "", seeds: body.seeds ?? [] };
+}

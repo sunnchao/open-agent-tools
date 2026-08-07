@@ -89,7 +89,10 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
   const hasToolCalls = (message.toolCalls?.length ?? 0) > 0;
   const hasUi = (message.uiBlocks?.length ?? 0) > 0;
   const hasCitations = (message.ragCitations?.length ?? 0) > 0;
-  if (!hasContent && !hasToolCalls && !hasUi && !hasCitations) return <></>;
+  const isThinking = message.status === "streaming" && !hasContent && !hasToolCalls && !hasUi;
+
+  // 空消息不渲染（除了思考中状态）
+  if (!hasContent && !hasToolCalls && !hasUi && !hasCitations && !isThinking) return <></>;
 
   const canRegenerate = message.status === "complete" && Boolean(onRegenerate);
 
@@ -98,11 +101,21 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
       <div className="msg-avatar msg-avatar--assistant">AI</div>
       <div className="msg-body">
         <div className="msg-bubble msg-bubble--assistant">
-          {hasContent ? <MarkdownView content={message.content} /> : null}
-          <RagCitations citations={message.ragCitations} />
-          <UiBlocks blocks={message.uiBlocks} />
-          <ToolCalls toolCalls={message.toolCalls} />
-          {message.status === "streaming" && <span className="msg__caret" />}
+          {isThinking ? (
+            <div className="thinking-indicator">
+              <span className="thinking-dot" />
+              <span className="thinking-dot" />
+              <span className="thinking-dot" />
+            </div>
+          ) : (
+            <>
+              {hasContent ? <MarkdownView content={message.content} /> : null}
+              <RagCitations citations={message.ragCitations} />
+              <UiBlocks blocks={message.uiBlocks} />
+              <ToolCalls toolCalls={message.toolCalls} />
+              {message.status === "streaming" && <span className="msg__caret" />}
+            </>
+          )}
         </div>
         <div className="msg-meta">
           <span>{formatTime(message.createdAt)}</span>

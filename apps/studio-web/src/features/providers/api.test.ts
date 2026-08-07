@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchProviders,
-  saveProvider,
   fetchProviderModels,
   probeProviderModels,
+  saveProvider,
+  setDefaultProvider,
 } from "./api.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -79,7 +80,25 @@ describe("provider api", () => {
     ).resolves.toEqual(["x", "y"]);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/admin/providers/fetch-models",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ baseUrl: "https://example.com/v1", apiKey: "sk-x" }) }),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ baseUrl: "https://example.com/v1", apiKey: "sk-x" }),
+      }),
     );
+  });
+
+  it("sets the selected provider as default", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ provider: { id: "provider/id", isDefault: true } }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(setDefaultProvider("provider/id")).resolves.toMatchObject({ isDefault: true });
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/providers/provider%2Fid/default", {
+      method: "PUT",
+    });
   });
 });

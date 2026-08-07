@@ -5,8 +5,10 @@ import express, { type Request, type Response } from "express";
 import multer from "multer";
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { DEFAULT_SEPARATORS, Rag } from "@open-agent-tools/rag";
+import { KnowledgeGraph } from "@open-agent-tools/rag-graph";
 import { parseSeparators } from "./chunk-settings.js";
 import { querySources } from "./query-settings.js";
+import { buildCragController, graphRouter } from "./graph.js";
 
 loadEnv({ path: resolve(import.meta.dirname, "../.env") });
 loadEnv({ path: resolve(import.meta.dirname, "../.env.local"), override: true });
@@ -41,6 +43,10 @@ const rag = new Rag({
   chunkOverlap: defaultChunkOverlap,
   separators: defaultSeparators,
 });
+
+// 知识图谱：独立 SQLite 邻接表存储（与 rag 共用文档源，抽取输入为 rag 分块）。
+const graph = new KnowledgeGraph({ dbPath: resolve(import.meta.dirname, "../rag-graph.db") });
+const crag = buildCragController({ rag, graph });
 
 const app = express();
 app.use(cors());
@@ -152,13 +158,14 @@ app.delete("/api/documents/:source", (req: Request, res: Response) => {
   res.json({ ok: true, source });
 });
 
-/** 混合检索（+ 可选 LLM 生成回答）。 */
+/** 混合检索（+ 可选 LLM 生成回答 / CRAG 纠正评估）。 */
 app.post("/api/query", async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as {
     query?: unknown;
     topK?: unknown;
     generate?: unknown;
     sources?: unknown;
+    crag?: unknown;
   };
   const query = typeof body.query === "string" ? body.query.trim() : "";
   if (!query) {
@@ -167,6 +174,7 @@ app.post("/api/query", async (req: Request, res: Response) => {
   }
   const topK = clampTopK(body.topK);
   const generate = Boolean(body.generate);
+  const useCrag = Boolean(body.crag);
   let sources: string[] | undefined;
   try {
     sources = querySources(body.sources);
@@ -175,6 +183,38 @@ app.post("/api/query", async (req: Request, res: Response) => {
     return;
   }
   try {
+    // CRAG 模式：评估 + 纠正 + 条带精炼
+    if (useCrag) {
+      const result = await crag.retrieve(query, { sources });
+      let answer: string | null = null;
+      if (generate && llm && result.formatted) {
+        const resp = await llm.invoke([
+          {
+            role: "system",
+            content:
+              "你是知识库问答助手。基于提供的资料回答用户问题；资料未覆盖的内容请如实说明，不要编造。引用请标注【来源】。\n\n" +
+              result.formatted,
+          },
+          { role: "user", content: query },
+        ]);
+        answer = typeof resp.content === "string" ? resp.content : JSON.stringify(resp.content);
+      }
+      res.json({
+        query,
+        crag: {
+          assessment: result.assessment,
+          confidence: result.confidence,
+          actions: result.actions,
+        },
+        formatted: result.formatted,
+        citations: result.citations,
+        answer,
+        generate,
+        llmAvailable: Boolean(llm),
+      });
+      return;
+    }
+
     const result = await rag.retrieve(query, { topK, sources });
     let answer: string | null = null;
     if (generate && llm && result.chunks.length > 0) {
@@ -201,10 +241,14 @@ app.post("/api/query", async (req: Request, res: Response) => {
   }
 });
 
+// 知识图谱 API
+app.use("/api/graph", graphRouter({ rag, graph }));
+
 app.listen(PORT, () => {
   console.log(`[rag-server] api listening on http://localhost:${PORT}`);
   console.log(`[rag-server] sqlite: ${dbPath}`);
+  console.log(`[rag-server] graph: ${resolve(import.meta.dirname, "../rag-graph.db")}`);
   console.log(
-    `[rag-server] embeddings=${embeddings ? "on" : "off (BM25 only)"} llm=${llm ? "on" : "off"}`,
+    `[rag-server] embeddings=${embeddings ? "on" : "off (BM25 only)"} llm=${llm ? "on" : "off"} crag=${crag ? "on" : "off"}`,
   );
 });
