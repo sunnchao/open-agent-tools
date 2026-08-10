@@ -1,5 +1,5 @@
-import { Layout, Button, Typography, Flex } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { Layout, Button, Typography } from "antd";
+import { PlusOutlined } from "../lib/icons.js";
 import type { Session } from "../types.js";
 import { SessionList } from "./SessionList.js";
 
@@ -13,6 +13,7 @@ interface SidebarProps {
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, title: string) => void;
+  collapsed: boolean;
 }
 
 export function Sidebar({
@@ -22,30 +23,24 @@ export function Sidebar({
   onSelect,
   onDelete,
   onRename,
+  collapsed,
 }: SidebarProps) {
   return (
     <Sider
-      width={260}
+      id="chat-session-sidebar"
+      width={248}
+      collapsedWidth={0}
+      collapsed={collapsed}
+      collapsible
+      trigger={null}
       theme="light"
-      style={{
-        borderRight: "1px solid rgba(255,255,255,0.08)",
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-      }}
+      className="chat-session-sidebar"
     >
-      <Flex vertical style={{ height: "100%" }}>
-        <div style={{ padding: "14px 12px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+      <div className="chat-session-panel">
+        <div className="chat-session-panel__head">
           <Text
             type="secondary"
-            style={{
-              display: "block",
-              fontWeight: 700,
-              fontSize: 12,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              marginBottom: 12,
-            }}
+            className="chat-session-panel__eyebrow"
           >
             Agent Chat
           </Text>
@@ -62,12 +57,12 @@ export function Sidebar({
           onRename={onRename}
         />
 
-        <div style={{ padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-          <Text type="secondary" style={{ fontSize: 11 }}>
+        <div className="chat-session-panel__foot">
+          <Text type="secondary">
             local sessions · v1
           </Text>
         </div>
-      </Flex>
+      </div>
     </Sider>
   );
 }

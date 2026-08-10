@@ -326,4 +326,48 @@ describe("workflow executor", () => {
       /timed out/,
     );
   });
+
+  it("runs a graph node with interpolated query", async () => {
+    const outputs = await executeWorkflow(
+      base({
+        input: { query: "OpenAI" },
+        nodes: [
+          {
+            id: "graph",
+            kind: "graph",
+            config: {
+              query: "{{query}} 供应商",
+              inputs: [{ name: "query", source: { type: "run", variable: "query" } }],
+              outputs: [{ name: "formatted", selector: "$result.formatted" }],
+            },
+          },
+        ],
+        edges: [],
+      }),
+      () => undefined,
+      {
+        retrieveRagGraph: async ({ query }) => ({
+          formatted: `图谱结果: ${query}`,
+          seeds: [{ id: "openai", name: "openai" }],
+        }),
+      },
+    );
+    const nodeOutput = (outputs as Record<string, Record<string, unknown>>).graph;
+    assert.ok(nodeOutput);
+    assert.equal(nodeOutput.formatted, "图谱结果: OpenAI 供应商");
+  });
+
+  it("graph node without query errors", async () => {
+    await assert.rejects(
+      executeWorkflow(
+        base({
+          nodes: [{ id: "graph", kind: "graph", config: { query: "" } }],
+          edges: [],
+        }),
+        () => undefined,
+        { retrieveRagGraph: async () => ({ formatted: "", seeds: [] }) },
+      ),
+      /query/,
+    );
+  });
 });

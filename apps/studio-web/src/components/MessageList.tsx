@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { FloatButton } from "antd";
-import { ArrowDownOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined } from "../lib/icons.js";
 import type { Message } from "../types.js";
 import { MessageBubble } from "./MessageBubble.js";
 
 interface MessageListProps {
   messages: Message[];
-  isStreaming: boolean;
   onRetry?: () => void;
   onRegenerate?: (assistantId: string) => void;
   onSuggestion?: (text: string) => void;
@@ -21,7 +20,6 @@ const SUGGESTIONS: Array<{ title: string; desc: string; prompt: string }> = [
 
 export function MessageList({
   messages,
-  isStreaming,
   onRetry,
   onRegenerate,
   onSuggestion,
@@ -51,7 +49,7 @@ export function MessageList({
 
   if (messages.length === 0) {
     return (
-      <div className="message-list" style={{ display: "block" }}>
+      <div className="message-list message-list--empty">
         <div className="chat-welcome">
           <h2>有什么可以帮你的？</h2>
           <p>选择下面的示例开始，或直接在下方输入消息。</p>
@@ -74,28 +72,32 @@ export function MessageList({
   }
 
   return (
-    <div className="message-list" ref={scrollRef} onScroll={handleScroll}>
-      <div className="message-list__inner chat-col">
-        {messages.map((m) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            onRetry={m.status === "error" ? onRetry : undefined}
-            onRegenerate={
-              m.role === "assistant" && m.status === "complete" && onRegenerate
-                ? () => onRegenerate(m.id)
-                : undefined
-            }
-          />
-        ))}
+    <div className="message-list-shell">
+      <div className="message-list" ref={scrollRef} onScroll={handleScroll}>
+        <div className="message-list__inner chat-col">
+          {messages.map((m) => (
+            <MessageBubble
+              key={m.id}
+              message={m}
+              onRetry={m.status === "error" ? onRetry : undefined}
+              onRegenerate={
+                m.role === "assistant" && m.status === "complete" && onRegenerate
+                  ? () => onRegenerate(m.id)
+                  : undefined
+              }
+            />
+          ))}
+        </div>
       </div>
       {!stickToBottom && (
-        <FloatButton
-          icon={<ArrowDownOutlined />}
-          tooltip="回到最新"
-          onClick={jumpToBottom}
-          style={{ position: "absolute", right: 20, bottom: 16 }}
-        />
+        <div className="message-list__jump-dock">
+          <FloatButton
+            className="message-list__jump"
+            icon={<ArrowDownOutlined />}
+            tooltip="回到最新"
+            onClick={jumpToBottom}
+          />
+        </div>
       )}
     </div>
   );

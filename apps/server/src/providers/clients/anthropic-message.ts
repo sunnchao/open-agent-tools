@@ -28,6 +28,7 @@ interface AnthropicMessageEvent {
   content_block?: { type?: string; id?: string; name?: string };
   error?: { type?: string; message?: string };
   message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+  usage?: { output_tokens?: number };
 }
 
 /** 将统一消息转换为 Anthropic 格式。 */
@@ -211,9 +212,17 @@ export class AnthropicMessageClient implements LlmClient {
 
     const callsByIndex = new Map<number, { id?: string; name?: string; arguments: string }>();
     let content = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
     for await (const event of sseEvents(response.body)) {
       if (event.type === "error") {
         throw new Error(event.error?.message ?? "Anthropic stream error");
+      }
+      if (event.type === "message_start" && event.message?.usage?.input_tokens) {
+        inputTokens = event.message.usage.input_tokens;
+      }
+      if (event.type === "message_delta" && event.usage?.output_tokens) {
+        outputTokens = event.usage.output_tokens;
       }
       if (event.type === "content_block_start" && event.content_block?.type === "tool_use") {
         const index = event.index ?? callsByIndex.size;
@@ -242,7 +251,7 @@ export class AnthropicMessageClient implements LlmClient {
       .map(([, call]) => ({ ...call, id: call.id ?? `call_${Date.now()}` }))
       .filter((call): call is { id: string; name: string; arguments: string } => Boolean(call.name));
 
-    return { content, toolCalls };
+    return { content, toolCalls, tokenUsage: { inputTokens, outputTokens } };
   }
 
   async complete(params: {

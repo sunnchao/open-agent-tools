@@ -39,12 +39,11 @@ function makeEntity(name: string, type: string, props: Record<string, string> = 
   return { id: entityId(normalized, safeType), name: normalized, type: safeType, props };
 }
 
-function makeRelation(
-  src: Entity,
-  relType: string,
-  dst: Entity,
-  sourceChunk: string,
-): Relation {
+/**
+ * 建边。source 取自所属分块的文档来源，是生命周期级联删除的锚点——
+ * 只记 chunk id 无法反查归属文档，删除时会漏。
+ */
+function makeRelation(src: Entity, relType: string, dst: Entity, chunk: ChunkLike): Relation {
   const safeType = (DEFAULT_RELATION_TYPES as readonly string[]).includes(relType)
     ? relType
     : "related_to";
@@ -54,7 +53,8 @@ function makeRelation(
     dstId: dst.id,
     relType: safeType,
     weight: 1,
-    sourceChunk,
+    sourceChunk: chunk.id,
+    source: chunk.source,
   };
 }
 
@@ -150,7 +150,7 @@ export class LlmGraphExtractor implements GraphExtractor {
             src,
             typeof predicate === "string" ? predicate : "related_to",
             dst,
-            chunk.id,
+            chunk,
           );
           if (!relations.some((r) => r.id === rel.id)) relations.push(rel);
         }
@@ -160,14 +160,23 @@ export class LlmGraphExtractor implements GraphExtractor {
   }
 }
 
-/** 候选词过滤：去除停用词与纯数字。 */
+/** 候选词过滤：去除停用词（常见动词/虚词/通用名词）。 */
 const STOPWORDS = new Set([
   "我们", "你们", "他们", "这个", "那个", "一个", "以及", "或者", "因为", "所以",
-  "可以", "需要", "没有", "不是", "就是", "进行", "通过", "以及", "对于", "关于",
-  "系统", "用户", "数据", "功能", "问题", "方法",
+  "可以", "需要", "没有", "不是", "就是", "进行", "通过", "对于", "关于",
+  "系统", "用户", "数据", "功能", "问题", "方法", "支持", "使用", "包括",
+  "提供", "依赖", "发布", "存在", "具有", "属于", "成为", "导致", "影响",
+  "以及", "其中", "此外", "同时", "当前", "现在", "如果", "是否",
 ]);
 
-/** 从文本中提取候选实体名（英文驼峰/大写词 + 中文 2-6 字片段）。 */
+/** 中文句读边界（分句与切块共用）。 */
+const SENTENCE_BOUNDARY = /[。！？；.!?;\n]/;
+
+/**
+ * 从文本中提取候选实体名：
+ * - 英文驼峰/大写词（≥3 字符且含大写）；
+ * - 中文：以标点/空白切为块，块内 2-6 字完整短语为候选（>6 字的中文长串多为句子，跳过避免残词）。
+ */
 export function extractCandidateNames(text: string): string[] {
   const names = new Set<string>();
   for (const match of text.matchAll(/[A-Za-z][A-Za-z0-9_]*/g)) {
@@ -175,28 +184,47 @@ export function extractCandidateNames(text: string): string[] {
     // 常见小写功能词不构成实体
     if (word.length >= 3 && /[A-Z]/.test(word)) names.add(word);
   }
-  // 中文：连续 2-6 个 CJK 字符作为候选
-  for (const match of text.matchAll(/[\u4e00-\u9fff]{2,6}/g)) {
-    const phrase = match[0]!;
+  // 中文：以标点/空白切块，避免滑窗把长句切成残词
+  for (const block of text.split(/[\s，,、：:（）()【】《》"'“”]+/)) {
+    const phrase = block.replace(SENTENCE_BOUNDARY, "");
+    if (phrase.length < 2 || phrase.length > 6) continue; // 跳过 >6 字长串（多为句子）
     if (!STOPWORDS.has(phrase)) names.add(phrase);
   }
   return [...names];
 }
 
+/** 按句读边界切分文本为句子（规则抽取的共现窗口），保留句读标点。 */
+export function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[。！？；.!?;])/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 /**
- * 规则抽取器（无 LLM 时回退）：专有名词/名词短语高频共现建图。
- * - 实体：候选名 + 出现频次；
- * - 关系：同一分块内共现的实体对 → related_to（方向无关，weight 累积由 store 处理）。
+ * 规则抽取器（无 LLM 时回退）：句内共现建图。
+ * - 实体：候选名（标点切块 + 停用词过滤，无残词）；
+ * - 关系：同一句内共现的实体对 → related_to（方向无关），替代整块全连接，显著降噪。
  */
 export class RuleGraphExtractor implements GraphExtractor {
   async extract(chunk: ChunkLike): Promise<ExtractResult> {
     const candidates = extractCandidateNames(chunk.content);
     const entities = candidates.map((name) => makeEntity(name, "concept"));
+    const byName = new Map(entities.map((e) => [e.name, e]));
     const relations: Relation[] = [];
-    for (let i = 0; i < entities.length; i += 1) {
-      for (let j = i + 1; j < entities.length; j += 1) {
-        const rel = makeRelation(entities[i]!, "related_to", entities[j]!, chunk.id);
-        if (!relations.some((r) => r.id === rel.id)) relations.push(rel);
+    const seen = new Set<string>();
+    for (const sentence of splitSentences(chunk.content)) {
+      const inSentence = extractCandidateNames(sentence)
+        .map((name) => byName.get(normalizeName(name)))
+        .filter((e): e is Entity => e !== undefined);
+      for (let i = 0; i < inSentence.length; i += 1) {
+        for (let j = i + 1; j < inSentence.length; j += 1) {
+          const rel = makeRelation(inSentence[i]!, "related_to", inSentence[j]!, chunk);
+          if (!seen.has(rel.id)) {
+            seen.add(rel.id);
+            relations.push(rel);
+          }
+        }
       }
     }
     return { entities, relations };

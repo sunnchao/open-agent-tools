@@ -48,7 +48,10 @@ export function listChunks(source: string): Promise<{ source: string; chunks: Ch
   return request(`/documents/${encodeURIComponent(source)}/chunks`);
 }
 
-export function deleteDocument(source: string): Promise<{ ok: true }> {
+/** 删除文档：分块与派生的图谱实体关系一并清理，graph 字段回传图谱侧的回收量。 */
+export function deleteDocument(
+  source: string,
+): Promise<{ ok: true; source: string; graph?: { entities: number; relations: number } }> {
   return request(`/documents/${encodeURIComponent(source)}`, { method: "DELETE" });
 }
 

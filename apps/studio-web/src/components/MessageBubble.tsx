@@ -1,5 +1,5 @@
 import { Alert, Button, Card } from "antd";
-import { CopyOutlined, ReloadOutlined } from "@ant-design/icons";
+import { CopyOutlined, ReloadOutlined } from "../lib/icons.js";
 import type { Message, RagCitation, ToolCall, UiBlock } from "../types.js";
 import { MarkdownView } from "./MarkdownView.js";
 import { FinancialReportCard } from "./FinancialReportCard.js";
@@ -45,7 +45,7 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
           <Alert
             type="error"
             showIcon
-            message={message.content || "请求失败"}
+            title={message.content || "请求失败"}
             action={
               onRetry ? (
                 <Button size="small" danger onClick={onRetry}>
@@ -132,7 +132,7 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
           ) : null}
         </div>
       </div>
-      <MessageActions message={message} onRegenerate={canRegenerate ? onRegenerate : undefined} />
+      <MessageActions message={message} />
     </div>
   );
 }

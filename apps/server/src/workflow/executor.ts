@@ -1,8 +1,23 @@
-import { callMcpTool, retrieveRag, type McpToolBinding } from "../resources.js";
+import { callMcpTool, retrieveRag, retrieveRagGraph, type McpToolBinding } from "../resources.js";
 import { getDefaultProvider, getProvider, type ProviderWithKey } from "../providers/store.js";
 import { createLlmClient } from "../providers/clients/index.js";
+import {
+  runTraced,
+  startObservation,
+  withTraceAttributes,
+  slimValue,
+  type ObservationKind,
+} from "../tracing.js";
 
-export type WorkflowNodeKind = "start" | "input" | "rag" | "llm" | "mcp" | "condition" | "end";
+export type WorkflowNodeKind =
+  | "start"
+  | "input"
+  | "rag"
+  | "graph"
+  | "llm"
+  | "mcp"
+  | "condition"
+  | "end";
 
 export interface WorkflowNodeInput {
   id: string;
@@ -82,6 +97,7 @@ export interface WorkflowEvent {
 
 export interface WorkflowDependencies {
   retrieveRag?: typeof retrieveRag;
+  retrieveRagGraph?: typeof retrieveRagGraph;
   callMcpTool?: typeof callMcpTool;
   getProvider?: (id: string, options?: { requireEnabled?: boolean }) => ProviderWithKey | null;
   getDefaultProvider?: (options?: { requireEnabled?: boolean }) => ProviderWithKey | null;
@@ -89,7 +105,7 @@ export interface WorkflowDependencies {
     provider: ProviderWithKey,
     input: { model: string; prompt: string; temperature?: number },
   ) => Promise<string | WorkflowLlmCompletion>;
-  timeoutMs?: Partial<Record<"rag" | "llm" | "mcp", number>>;
+  timeoutMs?: Partial<Record<"rag" | "llm" | "mcp" | "graph", number>>;
   signal?: AbortSignal;
 }
 
@@ -119,6 +135,7 @@ const NODE_KINDS = new Set<WorkflowNodeKind>([
   "start",
   "input",
   "rag",
+  "graph",
   "llm",
   "mcp",
   "condition",
@@ -349,17 +366,30 @@ function normalizeTokenUsage(usage?: Partial<WorkflowTokenUsage>): WorkflowToken
 function resolvedDependencies(
   dependencies: WorkflowDependencies,
 ): Required<
-  Pick<WorkflowDependencies, "retrieveRag" | "callMcpTool" | "getProvider" | "getDefaultProvider">
+  Pick<
+    WorkflowDependencies,
+    "retrieveRag" | "retrieveRagGraph" | "callMcpTool" | "getProvider" | "getDefaultProvider"
+  >
 > &
   WorkflowDependencies {
-  return { retrieveRag, callMcpTool, getProvider, getDefaultProvider, ...dependencies };
+  return {
+    retrieveRag,
+    retrieveRagGraph,
+    callMcpTool,
+    getProvider,
+    getDefaultProvider,
+    ...dependencies,
+  };
 }
 
 async function runNode(
   node: WorkflowNodeInput,
   inputs: Record<string, unknown>,
   deps: Required<
-    Pick<WorkflowDependencies, "retrieveRag" | "callMcpTool" | "getProvider" | "getDefaultProvider">
+    Pick<
+      WorkflowDependencies,
+      "retrieveRag" | "retrieveRagGraph" | "callMcpTool" | "getProvider" | "getDefaultProvider"
+    >
   > &
     WorkflowDependencies,
 ): Promise<NodeExecution> {
@@ -385,6 +415,21 @@ async function runNode(
         deps.signal,
       );
       return { result };
+    }
+    case "graph": {
+      const query = interpolate(config.query ?? inputs.query ?? "", inputs, "text");
+      if (!query) throw new Error("graph node requires a query");
+      const result = await withTimeout(
+        deps.retrieveRagGraph({ query, signal: deps.signal }),
+        deps.timeoutMs?.graph ?? 15_000,
+        deps.signal,
+      );
+      return {
+        result: {
+          formatted: result.formatted,
+          seeds: result.seeds,
+        },
+      };
     }
     case "llm": {
       const providerId = typeof config.providerId === "string" ? config.providerId : "";
@@ -494,6 +539,35 @@ function resolveInputs(
   return values;
 }
 
+/** 节点 kind → Langfuse observation 类型（LLM=generation、RAG=retriever、MCP=tool）。 */
+function nodeKindAsType(kind: WorkflowNodeKind): ObservationKind {
+  switch (kind) {
+    case "llm":
+      return "generation";
+    case "rag":
+    case "graph":
+      return "retriever";
+    case "mcp":
+      return "tool";
+    default:
+      return "span";
+  }
+}
+
+/** 节点 observation 的初始化属性：generation 需要 model/providerId 属性以支持成本分析。 */
+function nodeObservationAttributes(node: WorkflowNodeInput): Record<string, unknown> {
+  const config = configOf(node);
+  const metadata: Record<string, unknown> = { nodeId: node.id, kind: node.kind };
+  const attributes: Record<string, unknown> = { metadata };
+  if (node.kind === "llm") {
+    if (typeof config.model === "string" && config.model) attributes.model = config.model;
+    if (typeof config.providerId === "string" && config.providerId) {
+      metadata.providerId = config.providerId;
+    }
+  }
+  return attributes;
+}
+
 export async function executeWorkflow(
   request: WorkflowRunRequest,
   emit: (event: WorkflowEvent) => void,
@@ -510,51 +584,102 @@ export async function executeWorkflow(
   const statuses = new Map<string, "success" | "error">();
   const outputContext = new Map<string, Record<string, unknown>>();
 
-  for (const nodeId of validation.order) {
-    if (deps.signal?.aborted) throw new Error("workflow run cancelled");
-    if (!activeNodes.has(nodeId)) continue;
-    const node = validation.byId.get(nodeId)!;
-    const incoming = validation.incoming.get(nodeId)!.filter((edge) => activeEdges.has(edge.id));
-    if (incoming.some((edge) => statuses.get(edge.source) !== "success")) continue;
-    if (nodeId && !request.input) throw new WorkflowNodeError(nodeId, "workflow input is required");
-    emit({ type: "node_start", nodeId, label: node.label ?? node.kind });
+  return runTraced("workflow-run", async (span) => {
+    span.update({
+      input: slimValue(request.input),
+      metadata: {
+        nodeCount: String(validation.nodes.length),
+        edgeCount: String(validation.edges.length),
+      },
+    });
     try {
-      const inputs = resolveInputs(node, request, outputContext);
-      const execution = await runNode(node, inputs, deps);
-      const result = execution.result;
-      const nodeOutputs: Record<string, unknown> = {};
-      for (const output of outputsOf(node))
-        nodeOutputs[output.name] = selectValue(output.selector, result, inputs);
-      outputContext.set(nodeId, nodeOutputs);
-      statuses.set(nodeId, "success");
-      emit({ type: "node_result", nodeId, status: "success", outputs: nodeOutputs });
-      const outgoing = validation.outgoing.get(nodeId)!;
-      if (node.kind === "condition") {
-        const condition = result === true;
-        const selected = outgoing.filter((edge) => edge.label === String(condition));
-        const defaults = outgoing.filter((edge) => !edge.label);
-        for (const edge of selected.length > 0 ? selected : defaults) {
-          activeEdges.add(edge.id);
-          activeNodes.add(edge.target);
-        }
-      } else {
-        for (const edge of outgoing) {
-          activeEdges.add(edge.id);
-          activeNodes.add(edge.target);
-        }
-      }
+      await withTraceAttributes(
+        {
+          tags: ["workflow"],
+          metadata: {
+            nodeKinds: validation.nodes.map((node) => node.kind).join(","),
+          },
+        },
+        async () => {
+          for (const nodeId of validation.order) {
+            if (deps.signal?.aborted) throw new Error("workflow run cancelled");
+            if (!activeNodes.has(nodeId)) continue;
+            const node = validation.byId.get(nodeId)!;
+            const incoming = validation.incoming
+              .get(nodeId)!
+              .filter((edge) => activeEdges.has(edge.id));
+            if (incoming.some((edge) => statuses.get(edge.source) !== "success")) continue;
+            if (nodeId && !request.input)
+              throw new WorkflowNodeError(nodeId, "workflow input is required");
+            emit({ type: "node_start", nodeId, label: node.label ?? node.kind });
+            const nodeObservation = startObservation(
+              node.label ?? node.kind,
+              nodeObservationAttributes(node),
+              { asType: nodeKindAsType(node.kind) },
+            );
+            try {
+              const inputs = resolveInputs(node, request, outputContext);
+              const execution = await runNode(node, inputs, deps);
+              const result = execution.result;
+              nodeObservation.update({
+                input: slimValue(inputs),
+                output: slimValue(result),
+                ...(execution.tokenUsage
+                  ? {
+                      usageDetails: {
+                        input: execution.tokenUsage.inputTokens,
+                        output: execution.tokenUsage.outputTokens,
+                      },
+                    }
+                  : {}),
+              });
+              const nodeOutputs: Record<string, unknown> = {};
+              for (const output of outputsOf(node))
+                nodeOutputs[output.name] = selectValue(output.selector, result, inputs);
+              outputContext.set(nodeId, nodeOutputs);
+              statuses.set(nodeId, "success");
+              emit({ type: "node_result", nodeId, status: "success", outputs: nodeOutputs });
+              const outgoing = validation.outgoing.get(nodeId)!;
+              if (node.kind === "condition") {
+                const condition = result === true;
+                const selected = outgoing.filter((edge) => edge.label === String(condition));
+                const defaults = outgoing.filter((edge) => !edge.label);
+                for (const edge of selected.length > 0 ? selected : defaults) {
+                  activeEdges.add(edge.id);
+                  activeNodes.add(edge.target);
+                }
+              } else {
+                for (const edge of outgoing) {
+                  activeEdges.add(edge.id);
+                  activeNodes.add(edge.target);
+                }
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              nodeObservation.update({ level: "ERROR", statusMessage: message });
+              statuses.set(nodeId, "error");
+              emit({ type: "node_result", nodeId, status: "error", error: message });
+              throw new WorkflowNodeError(nodeId, message);
+            } finally {
+              nodeObservation.end();
+            }
+          }
+        },
+      );
+      const outputs = Object.fromEntries(
+        [...outputContext.entries()].map(([nodeId, values]) => [nodeId, values]),
+      );
+      span.update({ output: outputs });
+      emit({ type: "run_done", outputs });
+      return outputs;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      statuses.set(nodeId, "error");
-      emit({ type: "node_result", nodeId, status: "error", error: message });
-      throw new WorkflowNodeError(nodeId, message);
+      span.update({
+        level: "ERROR",
+        statusMessage: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
-  }
-  const outputs = Object.fromEntries(
-    [...outputContext.entries()].map(([nodeId, values]) => [nodeId, values]),
-  );
-  emit({ type: "run_done", outputs });
-  return outputs;
+  });
 }
 
 export async function executeWorkflowNodeTest(
@@ -617,29 +742,59 @@ export async function executeWorkflowNodeTest(
     };
   };
 
-  try {
-    for (const binding of bindings) {
-      if (inputs[binding.name] === undefined && binding.required !== false) {
-        throw new WorkflowNodeError(request.node.id, `required input ${binding.name} is missing`);
+  return runTraced("workflow-node-test", async (span) => {
+    span.update({
+      input: request.inputs,
+      metadata: { nodeId: request.node.id, kind: request.node.kind },
+    });
+    const nodeObservation = startObservation(
+      request.node.label ?? request.node.kind,
+      nodeObservationAttributes(request.node),
+      { asType: nodeKindAsType(request.node.kind) },
+    );
+    try {
+      for (const binding of bindings) {
+        if (inputs[binding.name] === undefined && binding.required !== false) {
+          throw new WorkflowNodeError(request.node.id, `required input ${binding.name} is missing`);
+        }
       }
+      const execution = await runNode(request.node, inputs, resolvedDependencies(dependencies));
+      const outputs: Record<string, unknown> = {};
+      for (const output of outputsOf(request.node)) {
+        outputs[output.name] = selectValue(output.selector, execution.result, inputs);
+      }
+      nodeObservation.update({
+        output: slimValue(execution.result),
+        ...(execution.tokenUsage
+          ? {
+              usageDetails: {
+                input: execution.tokenUsage.inputTokens,
+                output: execution.tokenUsage.outputTokens,
+              },
+            }
+          : {}),
+      });
+      const result = finish({
+        status: "success",
+        result: execution.result,
+        outputs,
+        tokenUsage: execution.tokenUsage ?? emptyTokenUsage(),
+      });
+      span.update({ output: result });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      nodeObservation.update({ level: "ERROR", statusMessage: message });
+      const result = finish({
+        status: "error",
+        result: null,
+        outputs: {},
+        error: message,
+      });
+      span.update({ level: "ERROR", output: result });
+      return result;
+    } finally {
+      nodeObservation.end();
     }
-    const execution = await runNode(request.node, inputs, resolvedDependencies(dependencies));
-    const outputs: Record<string, unknown> = {};
-    for (const output of outputsOf(request.node)) {
-      outputs[output.name] = selectValue(output.selector, execution.result, inputs);
-    }
-    return finish({
-      status: "success",
-      result: execution.result,
-      outputs,
-      tokenUsage: execution.tokenUsage ?? emptyTokenUsage(),
-    });
-  } catch (error) {
-    return finish({
-      status: "error",
-      result: null,
-      outputs: {},
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  });
 }

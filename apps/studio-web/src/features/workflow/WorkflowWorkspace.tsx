@@ -10,6 +10,7 @@ import {
   EditOutlined,
   ExperimentOutlined,
   FlagOutlined,
+  NodeIndexOutlined,
   PlayCircleFilled,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -17,7 +18,7 @@ import {
   PlusOutlined,
   ThunderboltOutlined,
   UserOutlined,
-} from "@ant-design/icons";
+} from "../../lib/icons.js";
 import {
   addEdge,
   Background,
@@ -80,6 +81,7 @@ const palette: PaletteItem[] = [
   { kind: "start", label: "开始", description: "工作流入口", group: "输入" },
   { kind: "input", label: "用户输入", description: "定义输入变量", group: "输入" },
   { kind: "rag", label: "知识检索", description: "召回知识片段", group: "知识与模型" },
+  { kind: "graph", label: "图谱检索", description: "子图多跳扩展", group: "知识与模型" },
   { kind: "llm", label: "LLM", description: "生成或理解文本", group: "知识与模型" },
   { kind: "mcp", label: "MCP Tool", description: "调用 MCP 工具", group: "工具与逻辑" },
   { kind: "condition", label: "条件分支", description: "按表达式分流", group: "工具与逻辑" },
@@ -90,6 +92,7 @@ const iconByKind: Record<NodeKind, React.ReactNode> = {
   start: <PlayCircleFilled />,
   input: <UserOutlined />,
   rag: <DatabaseOutlined />,
+  graph: <NodeIndexOutlined />,
   llm: <ExperimentOutlined />,
   mcp: <ApiOutlined />,
   condition: <BranchesOutlined />,
@@ -191,7 +194,7 @@ function WorkflowCanvas() {
   const runController = useRef<AbortController | null>(null);
   const nodeTestToken = useRef(0);
   const nodeTestController = useRef<AbortController | null>(null);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, getNode, setCenter } = useReactFlow();
 
   useEffect(
     () => () => {
@@ -226,6 +229,19 @@ function WorkflowCanvas() {
   }, [nodes, edges]);
 
   const selectedNode = nodes.find((node) => node.id === selectedId) ?? null;
+
+  const focusRunNode = useCallback(
+    (nodeId: string) => {
+      const node = getNode(nodeId);
+      if (!node) return;
+      const width = node.measured?.width ?? node.width ?? 218;
+      const height = node.measured?.height ?? node.height ?? 84;
+      setCenter(node.position.x + width / 2, node.position.y + height / 2, {
+        duration: 450,
+      });
+    },
+    [getNode, setCenter],
+  );
 
   const connect = useCallback(
     (connection: Connection) => {
@@ -418,6 +434,7 @@ function WorkflowCanvas() {
       .map((node) => ({ node, error: validateNodeResources(node.data, resources.catalog) }))
       .find((item) => item.error);
     if (invalid?.error) {
+      focusRunNode(invalid.node.id);
       setRunLog([
         {
           id: invalid.node.id,
@@ -453,6 +470,7 @@ function WorkflowCanvas() {
       {
         onNodeStart: (nodeId) => {
           if (runToken.current !== token) return;
+          focusRunNode(nodeId);
           setNodes((current) =>
             current.map((node) =>
               node.id === nodeId ? { ...node, data: { ...node.data, status: "running" } } : node,
@@ -484,6 +502,7 @@ function WorkflowCanvas() {
         },
         onError: (error, nodeId) => {
           if (runToken.current !== token) return;
+          if (nodeId) focusRunNode(nodeId);
           setRunOutputs(null);
           setRunLog((current) => [
             ...current,
@@ -705,6 +724,9 @@ function nodeSummary(data: WorkflowNodeData): string {
       ? `${sources.length} 个文档 · Top-${data.config.topK}`
       : "选择 RAG 文档";
   }
+  if (data.kind === "graph") {
+    return String(data.config.query ?? "{{query}}");
+  }
   if (data.kind === "llm") return String(data.config.model);
   if (data.kind === "mcp")
     return data.config.toolName
@@ -913,6 +935,18 @@ function NodeInspector({
                 />
               </label>
             </>
+          ) : null}
+          {data.kind === "graph" ? (
+            <label className="studio-field">
+              <span>
+                查询（支持 {"{{变量}}"} 插值）
+                <small>示例: {"{{query}}"}</small>
+              </span>
+              <input
+                value={String(data.config.query ?? "{{query}}")}
+                onChange={(event) => updateConfig("query", event.target.value)}
+              />
+            </label>
           ) : null}
           {data.kind === "llm" ? (
             <>
@@ -1681,6 +1715,7 @@ function ApartmentMark() {
 
 function nodeColor(kind: NodeKind): string {
   if (kind === "rag") return "#c77921";
+  if (kind === "graph") return "#534AB7";
   if (kind === "mcp") return "#16806a";
   if (kind === "condition") return "#7a5da6";
   if (kind === "llm") return "#356bc4";

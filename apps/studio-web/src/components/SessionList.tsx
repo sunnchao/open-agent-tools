@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input, Popconfirm, Space } from "antd";
-import { DeleteOutlined, EditOutlined, SearchOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, SearchOutlined } from "../lib/icons.js";
 import type { Session } from "../types.js";
 
 interface SessionListProps {

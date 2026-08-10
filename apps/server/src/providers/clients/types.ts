@@ -36,6 +36,8 @@ export interface LlmStreamCallbacks {
 export interface LlmStreamResult {
   content: string;
   toolCalls: Array<{ id?: string; name: string; arguments: string }>;
+  /** 流式调用结束后的 token 用量（部分 provider 需要显式开启统计）。 */
+  tokenUsage?: { inputTokens: number; outputTokens: number };
 }
 
 export interface LlmCompleteResult {

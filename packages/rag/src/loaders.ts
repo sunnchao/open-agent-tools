@@ -8,13 +8,23 @@ import type { DocumentLoader } from "./types.js";
 export class TextFileLoader implements DocumentLoader {
   async load(path: string): Promise<Document[]> {
     const text = await readFile(path, "utf-8");
-    return [{ pageContent: text, metadata: { source: basename(path) } }];
+    return [
+      {
+        pageContent: text,
+        metadata: { source: basename(path), type: textKind(path) },
+      },
+    ];
   }
 
   async loadBuffer(name: string, data: Uint8Array): Promise<Document[]> {
     const text = Buffer.from(data).toString("utf-8");
-    return [{ pageContent: text, metadata: { source: name } }];
+    return [{ pageContent: text, metadata: { source: name, type: textKind(name) } }];
   }
+}
+
+/** 按扩展名标记文本类型，供切分器选择结构感知策略。 */
+function textKind(name: string): "markdown" | "text" {
+  return /\.(md|markdown)$/i.test(name) ? "markdown" : "text";
 }
 
 /** PDF 加载器（@langchain/community PDFLoader，基于 pdfjs）。 */
@@ -29,6 +39,7 @@ export class PdfFileLoader implements DocumentLoader {
     const docs = await loader.load();
     for (const d of docs) {
       d.metadata.source = name;
+      d.metadata.type = "pdf";
     }
     return docs;
   }

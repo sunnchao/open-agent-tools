@@ -19,7 +19,7 @@ import {
   ToolOutlined,
   UndoOutlined,
   UploadOutlined,
-} from "@ant-design/icons";
+} from "../../lib/icons.js";
 import {
   addPrompt,
   addTool,

@@ -1,5 +1,5 @@
 import { Collapse, Flex, Tag, Typography } from "antd";
-import { SettingOutlined } from "@ant-design/icons";
+import { SettingOutlined } from "../lib/icons.js";
 import type { ToolCall } from "../types.js";
 
 interface ToolCallsProps {

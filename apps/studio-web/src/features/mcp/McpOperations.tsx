@@ -11,7 +11,7 @@ import {
   ReloadOutlined,
   SafetyCertificateOutlined,
   UserOutlined,
-} from "@ant-design/icons";
+} from "../../lib/icons.js";
 import {
   createApiKey,
   createClient,

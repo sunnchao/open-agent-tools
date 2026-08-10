@@ -75,6 +75,8 @@ export class OpenAIChatClient implements LlmClient {
         model,
         messages: completionMessages,
         stream: true,
+        // 显式请求 usage，否则流式响应不返回 token 统计。
+        stream_options: { include_usage: true },
         ...(tools?.length ? { tools: toToolDefinitions(tools) } : {}),
       },
       { signal },
@@ -82,8 +84,14 @@ export class OpenAIChatClient implements LlmClient {
 
     const callsByIndex = new Map<number, { id?: string; name?: string; arguments: string }>();
     let content = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
     for await (const chunk of stream) {
       const choice = chunk.choices[0];
+      if (chunk.usage) {
+        inputTokens = chunk.usage.prompt_tokens ?? 0;
+        outputTokens = chunk.usage.completion_tokens ?? 0;
+      }
       if (!choice) continue;
       if (choice.delta?.content) {
         content += choice.delta.content;
@@ -104,7 +112,7 @@ export class OpenAIChatClient implements LlmClient {
       .map(([, call], index) => ({ ...call, id: call.id ?? `call_${index}` }))
       .filter((call): call is { id: string; name: string; arguments: string } => Boolean(call.name));
 
-    return { content, toolCalls };
+    return { content, toolCalls, tokenUsage: { inputTokens, outputTokens } };
   }
 
   async complete(params: {

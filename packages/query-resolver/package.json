@@ -1,0 +1,26 @@
+{
+  "name": "@open-agent-tools/query-resolver",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "tsx --test src/*.test.ts",
+    "clean": "rm -rf dist",
+    "demo": "tsx src/demo.ts"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.3",
+    "zod": "^4.4.3"
+  }
+}

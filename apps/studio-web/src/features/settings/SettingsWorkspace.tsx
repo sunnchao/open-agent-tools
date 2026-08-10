@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import {
+  CloseOutlined,
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
@@ -7,7 +9,7 @@ import {
   SaveOutlined,
   SettingOutlined,
   StarOutlined,
-} from "@ant-design/icons";
+} from "../../lib/icons.js";
 import {
   fetchProviderModels,
   fetchProviders,
@@ -118,14 +120,14 @@ export function SettingsWorkspace() {
             onClick={() => void refresh()}
             disabled={loading}
           >
-            <ReloadOutlined /> 刷新
+            <ReloadOutlined spin={loading} /> <span>刷新</span>
           </button>
           <button
             className="studio-button primary"
             type="button"
             onClick={() => setDraft(emptyDraft())}
           >
-            <PlusOutlined /> 新建 Provider
+            <PlusOutlined /> <span>新建 Provider</span>
           </button>
         </div>
       </header>
@@ -182,31 +184,33 @@ export function SettingsWorkspace() {
                 ) : null}
                 {providers.map((provider) => (
                   <tr key={provider.id}>
-                    <td>
+                    <td data-label="Provider">
                       <div className="provider-name">
-                        <span className="provider-dot" />
+                        <span
+                          className={`provider-dot${provider.enabled ? "" : " is-disabled"}`}
+                        />
                         <b>{provider.name}</b>
                         <small>{provider.id}</small>
                       </div>
                     </td>
-                    <td>
-                      <code>{provider.baseUrl}</code>
+                    <td data-label="Base URL">
+                      <code title={provider.baseUrl}>{provider.baseUrl}</code>
                     </td>
-                    <td>
+                    <td data-label="API Key">
                       <span className="masked-key">{provider.apiKeyMasked ?? "未配置"}</span>
                     </td>
-                    <td>
+                    <td data-label="格式">
                       <span className="format-pill">{PROVIDER_FORMAT_LABELS[provider.format]}</span>
                     </td>
-                    <td>
+                    <td data-label="模型">
                       <span className="model-count">{provider.models.length}</span>
                     </td>
-                    <td>
+                    <td data-label="状态">
                       <span className={`status-pill${provider.enabled ? " is-enabled" : ""}`}>
                         {provider.enabled ? "启用" : "停用"}
                       </span>
                     </td>
-                    <td>
+                    <td data-label="默认路由">
                       {provider.isDefault ? (
                         <span className="default-mark">DEFAULT</span>
                       ) : (
@@ -222,7 +226,7 @@ export function SettingsWorkspace() {
                         </button>
                       )}
                     </td>
-                    <td>
+                    <td data-label="操作">
                       <div className="table-actions">
                         <button
                           type="button"
@@ -258,15 +262,18 @@ export function SettingsWorkspace() {
           </div>
         </main>
       </div>
-      {draft ? (
-        <ProviderModal
-          draft={draft}
-          setDraft={setDraft}
-          saving={saving}
-          onCancel={() => setDraft(null)}
-          onSubmit={() => void submit()}
-        />
-      ) : null}
+      {draft
+        ? createPortal(
+            <ProviderModal
+              draft={draft}
+              setDraft={setDraft}
+              saving={saving}
+              onCancel={() => setDraft(null)}
+              onSubmit={() => void submit()}
+            />,
+            document.body,
+          )
+        : null}
     </section>
   );
 }
@@ -329,7 +336,7 @@ function ProviderModal({
             <h2 id="provider-modal-title">{draft.id ? "编辑 Provider" : "新建 Provider"}</h2>
           </div>
           <button type="button" aria-label="关闭" onClick={onCancel}>
-            ×
+            <CloseOutlined />
           </button>
         </div>
         <div className="settings-modal-fields">
@@ -389,7 +396,7 @@ function ProviderModal({
                         patch({ models: draft.models.filter((item) => item !== model) })
                       }
                     >
-                      ×
+                      <CloseOutlined />
                     </button>
                   </span>
                 ))}
@@ -416,21 +423,24 @@ function ProviderModal({
                   disabled={fetching || !canAutoFetch}
                   title={canAutoFetch ? "获取该 Provider 的模型列表" : "请先填写 Base URL"}
                 >
-                  <ReloadOutlined /> {fetching ? "获取中" : "自动获取"}
+                  <ReloadOutlined spin={fetching} /> {fetching ? "获取中" : "自动获取"}
                 </button>
               </div>
             </div>
           </div>
           <label className="toggle-field">
-            <span>
+            <span className="toggle-field__copy">
               <b>启用 Provider</b>
               <small>禁用后不会出现在 Workflow 选择器</small>
             </span>
-            <input
-              type="checkbox"
-              checked={draft.enabled}
-              onChange={(event) => patch({ enabled: event.target.checked })}
-            />
+            <span className="settings-switch">
+              <input
+                type="checkbox"
+                checked={draft.enabled}
+                onChange={(event) => patch({ enabled: event.target.checked })}
+              />
+              <span aria-hidden="true" />
+            </span>
           </label>
         </div>
         <div className="settings-modal-actions">

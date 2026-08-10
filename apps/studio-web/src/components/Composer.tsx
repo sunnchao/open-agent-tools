@@ -6,7 +6,7 @@ import {
   PauseCircleOutlined,
   SendOutlined,
   SettingOutlined,
-} from "@ant-design/icons";
+} from "../lib/icons.js";
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import type { ChatResourceBinding } from "../types.js";
 import type { ProviderMetadata } from "../features/providers/api.js";

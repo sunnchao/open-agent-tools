@@ -8,6 +8,7 @@ import { sessionsRouter } from "./routes/sessions.js";
 import { providersRouter } from "./routes/providers.js";
 import { chatRouter } from "./routes/chat.js";
 import { workflowRouter } from "./routes/workflow.js";
+import { imRouter } from "./routes/im.js";
 
 export function createApp(): express.Express {
   const app: express.Express = express();
@@ -41,6 +42,7 @@ export function createApp(): express.Express {
   app.use(providersRouter);
   app.use(chatRouter);
   app.use(workflowRouter);
+  app.use(imRouter);
 
   return app;
 }

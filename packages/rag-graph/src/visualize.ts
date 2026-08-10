@@ -1,4 +1,4 @@
-import type { Entity, GraphStore, Relation, Subgraph } from "./types.js";
+import type { Entity, GraphStore, Subgraph } from "./types.js";
 
 /** 前端力导向图节点。 */
 export interface GraphNode {

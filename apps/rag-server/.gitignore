@@ -3,5 +3,8 @@
 rag.db
 rag.db-shm
 rag.db-wal
+rag-graph.db
+rag-graph.db-shm
+rag-graph.db-wal
 dist/
 node_modules/

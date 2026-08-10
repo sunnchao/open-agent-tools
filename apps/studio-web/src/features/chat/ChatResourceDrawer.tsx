@@ -1,4 +1,4 @@
-import { ApiOutlined, DatabaseOutlined, ReloadOutlined } from "@ant-design/icons";
+import { ApiOutlined, DatabaseOutlined, ReloadOutlined } from "../../lib/icons.js";
 import { Alert, Button, Checkbox, Drawer, Empty, Slider, Spin } from "antd";
 import type { ChatResourceBinding, McpToolBinding } from "../../types.js";
 import type { ResourceCatalog } from "../resources/api.js";

@@ -2,7 +2,7 @@ import { memo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "antd";
-import { CheckOutlined, CopyOutlined } from "@ant-design/icons";
+import { CheckOutlined, CopyOutlined } from "../lib/icons.js";
 import type { Components } from "react-markdown";
 
 interface MarkdownViewProps {

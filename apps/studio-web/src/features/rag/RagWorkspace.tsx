@@ -10,7 +10,7 @@ import {
   ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
-} from "@ant-design/icons";
+} from "../../lib/icons.js";
 import {
   deleteDocument,
   listChunks,
@@ -118,12 +118,24 @@ export function RagWorkspace() {
   };
 
   const removeSource = async (source: string) => {
-    if (!window.confirm(`确认删除知识来源“${source}”及其全部分块？`)) return;
+    if (
+      !window.confirm(
+        `确认删除知识来源“${source}”？\n\n该来源的全部分块，以及由它抽取出的知识图谱实体与关系都会一并清除（被其他文档共同引用的实体会保留）。`,
+      )
+    )
+      return;
     try {
-      await deleteDocument(source);
+      const result = await deleteDocument(source);
       setSelectedSource(null);
       setChunks([]);
       await refresh();
+      const removed = result?.graph;
+      if (removed && (removed.entities > 0 || removed.relations > 0)) {
+        setNotice({
+          type: "success",
+          text: `已删除「${source}」，同时清理图谱 ${removed.entities} 个实体、${removed.relations} 条关系`,
+        });
+      }
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     }

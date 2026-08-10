@@ -108,6 +108,8 @@ export class OpenAIResponseClient implements LlmClient {
 
     const callsByIndex = new Map<number, { id?: string; name?: string; arguments: string }>();
     let content = "";
+    let inputTokens = 0;
+    let outputTokens = 0;
     for await (const event of stream) {
       switch (event.type) {
         case "response.output_text.delta":
@@ -125,6 +127,10 @@ export class OpenAIResponseClient implements LlmClient {
             });
           }
           break;
+        case "response.completed":
+          inputTokens = event.response.usage?.input_tokens ?? 0;
+          outputTokens = event.response.usage?.output_tokens ?? 0;
+          break;
       }
     }
 
@@ -133,7 +139,7 @@ export class OpenAIResponseClient implements LlmClient {
       .map(([, call]) => ({ ...call, id: call.id ?? `call_${Date.now()}` }))
       .filter((call): call is { id: string; name: string; arguments: string } => Boolean(call.name));
 
-    return { content, toolCalls };
+    return { content, toolCalls, tokenUsage: { inputTokens, outputTokens } };
   }
 
   async complete(params: {

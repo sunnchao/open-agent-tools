@@ -17,11 +17,11 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@ant-design/icons": "^6.3.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@open-agent-tools/shared": "workspace:*",
     "@xyflow/react": "^12.11.2",
     "antd": "^6.5.2",
+    "lucide-react": "^1.30.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^9.0.3",

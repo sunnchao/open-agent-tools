@@ -1,4 +1,10 @@
 import type { Entity, GraphQueryResult, GraphStore, Relation, Subgraph } from "./types.js";
+import { cosine } from "./utils.js";
+
+/** 轻量 embeddings 接口（避免强依赖 langchain，调用方可注入任意实现）。 */
+export interface EmbeddingsLike {
+  embedDocuments(texts: string[]): Promise<number[][]>;
+}
 
 export interface GraphRetrieverOptions {
   /** BFS 扩展跳数，默认 2。 */
@@ -14,16 +20,19 @@ export interface GraphRetrieverOptions {
 /**
  * 图检索器：种子实体定位 + 子图多跳扩展 + 序列化。
  *
- * 种子定位策略（无 embeddings 依赖，纯文本匹配）：
+ * 种子定位策略：
  * 1. 查询串整体做实体名精确/包含匹配；
  * 2. 未命中时拆分为候选词（英文词 + 中文 2-6 字片段）逐个匹配；
- * 3. 仍未命中 → 返回空子图（调用方如实说明）。
+ * 3. 注入 embeddings 时，名称匹配为空再对实体名做向量 top-k 兜底（口语化表述可命中）；
+ * 4. 仍未命中 → 返回空子图（调用方如实说明）。
  */
 export class GraphRetriever {
   private store: GraphStore;
+  private embeddings?: EmbeddingsLike;
 
-  constructor(store: GraphStore) {
+  constructor(store: GraphStore, opts: { embeddings?: EmbeddingsLike } = {}) {
     this.store = store;
+    this.embeddings = opts.embeddings;
   }
 
   /** 从查询文本中拆分候选词。 */
@@ -39,19 +48,46 @@ export class GraphRetriever {
   }
 
   /** 种子定位：返回去重后的候选实体。 */
-  locateSeeds(query: string, limit = 20): Entity[] {
+  async locateSeeds(query: string, limit = 20): Promise<Entity[]> {
     const seen = new Map<string, Entity>();
     const add = (entity: Entity | null) => {
       if (entity && !seen.has(entity.id)) seen.set(entity.id, entity);
     };
     // 1) 整体匹配
     for (const entity of this.store.findEntitiesByName(query, limit)) add(entity);
-    // 2) 候选词逐个匹配
+    // 2) 别名匹配（共指："OpenAI 公司" → openai）
+    if (seen.size === 0) {
+      const aliasHit = this.store.findByAlias(query);
+      if (aliasHit) add(aliasHit);
+    }
+    // 3) 候选词逐个匹配
     for (const term of GraphRetriever.splitQueryTerms(query)) {
       if (seen.size >= limit) break;
       for (const entity of this.store.findEntitiesByName(term, Math.max(1, limit - seen.size))) {
         add(entity);
         if (seen.size >= limit) break;
+      }
+      if (seen.size === 0) {
+        const aliasHit = this.store.findByAlias(term);
+        if (aliasHit) add(aliasHit);
+      }
+    }
+    // 4) 名称/别名匹配为空 → 向量兜底（口语化/同义表述可命中）
+    if (seen.size === 0 && this.embeddings && limit > 0) {
+      const all = this.store.listEntities({ limit: Math.max(limit, 100) });
+      if (all.length > 0) {
+        const [qv, entityVectors] = await Promise.all([
+          this.embeddings.embedDocuments([query]),
+          this.embeddings.embedDocuments(all.map((e) => e.name)),
+        ]);
+        const q = qv[0] ?? [];
+        const ranked = all
+          .map((entity, index) => ({ entity, score: cosine(q, entityVectors[index] ?? []) }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
+        for (const hit of ranked) {
+          if (hit.score > 0.3) add(hit.entity); // 阈值以下视为不相关
+        }
       }
     }
     return [...seen.values()];
@@ -101,8 +137,8 @@ export class GraphRetriever {
   }
 
   /** 检索门面：定位种子 → 扩展子图。 */
-  retrieve(query: string, opts: GraphRetrieverOptions = {}): GraphQueryResult {
-    const seeds = this.locateSeeds(query, opts.seedLimit);
+  async retrieve(query: string, opts: GraphRetrieverOptions = {}): Promise<GraphQueryResult> {
+    const seeds = await this.locateSeeds(query, opts.seedLimit);
     if (seeds.length === 0) {
       return { query, seeds: [], subgraph: null };
     }

@@ -1,6 +1,6 @@
 import type { ResourceCatalog } from "../resources/api.js";
 
-export type NodeKind = "start" | "input" | "rag" | "llm" | "mcp" | "condition" | "end";
+export type NodeKind = "start" | "input" | "rag" | "graph" | "llm" | "mcp" | "condition" | "end";
 export type NodeRunStatus = "idle" | "running" | "success" | "error";
 export type WorkflowConfigValue = unknown;
 
@@ -30,6 +30,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
 
 export function defaultConfig(kind: NodeKind): Record<string, WorkflowConfigValue> {
   if (kind === "rag") return { sources: [], topK: 5, query: "{{query}}", inputs: [], outputs: [] };
+  if (kind === "graph")
+    return { query: "{{query}}", inputs: [], outputs: [{ name: "formatted", selector: "$result.formatted" }] };
   if (kind === "llm")
     return {
       providerId: "default",

@@ -1,6 +1,21 @@
 import { createHash } from "node:crypto";
 import type { Entity, Relation, Subgraph } from "./types.js";
 
+/** 余弦相似度（等长向量）。 */
+export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i += 1) {
+    dot += a[i]! * b[i]!;
+    na += a[i]! * a[i]!;
+    nb += b[i]! * b[i]!;
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
 /** sha1 摘要（16 进制），用于实体/关系稳定键。 */
 export function sha1(input: string): string {
   return createHash("sha1").update(input).digest("hex");

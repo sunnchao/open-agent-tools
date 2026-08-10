@@ -5,7 +5,7 @@ import {
   CloseOutlined,
   DownloadOutlined,
   EyeOutlined,
-} from "@ant-design/icons";
+} from "../lib/icons.js";
 
 type ReportStatus = "approved" | "pending" | "rejected" | string;
 

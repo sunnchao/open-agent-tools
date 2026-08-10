@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Layout, Spin } from "antd";
 import { Sidebar } from "../../components/Sidebar.js";
 import { ChatHeader } from "../../components/ChatHeader.js";
@@ -35,6 +35,22 @@ export function ChatWorkspace() {
   const resources = useResourceCatalog();
   const composerRef = useRef<ComposerHandle>(null);
   const [input, setInput] = useState("");
+  const [compactLayout, setCompactLayout] = useState(() =>
+    window.matchMedia("(max-width: 1100px)").matches,
+  );
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(() =>
+    !window.matchMedia("(max-width: 1100px)").matches,
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1100px)");
+    const handleLayoutChange = (event: MediaQueryListEvent) => {
+      setCompactLayout(event.matches);
+      setSessionPanelOpen(!event.matches);
+    };
+    media.addEventListener("change", handleLayoutChange);
+    return () => media.removeEventListener("change", handleLayoutChange);
+  }, []);
 
   // 拉取已启用的 Provider 目录，供对话路由选择。
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
@@ -168,12 +184,6 @@ export function ChatWorkspace() {
     requestAnimationFrame(() => composerRef.current?.focus());
   }, []);
 
-  const status: "idle" | "streaming" | "error" = useMemo(() => {
-    if (isStreaming) return "streaming";
-    if (activeSession?.messages.some((message) => message.status === "error")) return "error";
-    return "idle";
-  }, [activeSession, isStreaming]);
-
   if (!ready || !activeSession) {
     return (
       <Layout className="studio-loading">
@@ -187,16 +197,32 @@ export function ChatWorkspace() {
       <Sidebar
         sessions={sessions}
         activeId={activeId}
+        collapsed={!sessionPanelOpen}
         onNewChat={() => void newChat()}
-        onSelect={selectSession}
+        onSelect={(id) => {
+          selectSession(id);
+          if (compactLayout) setSessionPanelOpen(false);
+        }}
         onDelete={(id) => void deleteSession(id)}
         onRename={(id, title) => void renameSession(id, title)}
       />
+      {compactLayout && sessionPanelOpen ? (
+        <button
+          type="button"
+          className="chat-session-backdrop"
+          aria-label="关闭会话列表"
+          onClick={() => setSessionPanelOpen(false)}
+        />
+      ) : null}
       <Layout className="chat-main">
-        <ChatHeader title={activeSession.title} />
+        <ChatHeader
+          title={activeSession.title}
+          sessionsOpen={sessionPanelOpen}
+          overlayMode={compactLayout}
+          onToggleSessions={() => setSessionPanelOpen((open) => !open)}
+        />
         <MessageList
           messages={activeSession.messages}
-          isStreaming={isStreaming}
           onRetry={handleRetry}
           onRegenerate={handleRegenerate}
           onSuggestion={handleSuggestion}
