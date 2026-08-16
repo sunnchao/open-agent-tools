@@ -1,5 +1,5 @@
 import type { Rag } from "@open-agent-tools/rag";
-import type { GraphSourceState, KnowledgeGraph } from "@open-agent-tools/rag-graph";
+import type { GraphSourceState, KnowledgeGraph } from "@open-agent-tools/rag/graph";
 
 export interface GraphLifecycleOptions {
   rag: Rag;

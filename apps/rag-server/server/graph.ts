@@ -1,11 +1,11 @@
 import { Router, type Request, type Response } from "express";
-import { KnowledgeGraph, GraphVisualizer, type Entity } from "@open-agent-tools/rag-graph";
+import { KnowledgeGraph, GraphVisualizer, type Entity } from "@open-agent-tools/rag/graph";
 import {
   CragController,
   createBlockDomain,
   createGraphDomain,
   HeuristicRetrievalEvaluator,
-} from "@open-agent-tools/rag-crag";
+} from "@open-agent-tools/rag/crag";
 import type { Rag } from "@open-agent-tools/rag";
 import type { GraphLifecycle } from "./lifecycle.js";
 

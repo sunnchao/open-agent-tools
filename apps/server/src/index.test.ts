@@ -167,4 +167,59 @@ describe("server provider and workflow contracts", () => {
     assert.equal(body.result.metadata.nodeKind, "input");
     assert.ok(body.result.metadata.durationMs >= 0);
   });
+
+  it("ends chat SSE with a done event", async () => {
+    // 给 default provider 配一个 API Key，同时拦截 OpenAI SDK 的底层 fetch，
+    // 使 /api/chat 走完真实路由（含 SSE 发送）而不真正调用外部 LLM。
+    createProvider({
+      id: "default",
+      name: "OpenAI",
+      baseUrl: "http://127.0.0.1:9/v1",
+      models: ["gpt-4o-mini"],
+      enabled: true,
+      apiKey: "test-key",
+    });
+    setDefaultProvider("default");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes("/chat/completions")) return originalFetch(input, init);
+      // 模拟 OpenAI 流式响应：两段内容分片 + [DONE]。
+      const encoder = new TextEncoder();
+      const chunks = [
+        `data: {"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}\n\n`,
+        `data: {"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":"stop"}]}\n\n`,
+        `data: {"id":"x","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2}}\n\n`,
+        `data: [DONE]\n\n`,
+      ];
+      return new Response(new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+          controller.close();
+        },
+      }), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const response = await fetch(`${origin}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      });
+      assert.equal(response.status, 200);
+      const body = await response.text();
+      assert.match(body, /"delta":"Hel"/);
+      assert.match(body, /"delta":"lo"/);
+      // 结束标志：前端依赖 done 事件解除 loading。
+      assert.match(body, /"done":true/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

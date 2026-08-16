@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { addMessage, ensureSession, updateMessage, type Role } from "../db.js";
 import { executeTool, tools as builtinTools } from "../function_tools/index.js";
+import { buildSchemaInjection } from "../schema-inject.js";
 import { getDefaultProvider, getProvider } from "../providers/store.js";
 import {
   createLlmClient,
@@ -15,7 +16,7 @@ import {
   resolveMcpTools,
   type McpToolBinding,
 } from "../resources.js";
-import { LlmRetrievalEvaluator } from "@open-agent-tools/rag-crag";
+import { LlmRetrievalEvaluator } from "@open-agent-tools/rag/crag";
 import { createChatCragController } from "../crag.js";
 import { logDuration, logTrace, truncate } from "../trace.js";
 import {
@@ -51,6 +52,8 @@ interface ChatStreamParams {
   resolvedSessionId: string | null | undefined;
   send: (data: Record<string, unknown>) => void;
   span: ObservationHandle;
+  /** 渐进式 schema 注入（enriched catalog → 骨架 + 相关表）。 */
+  schemaInjection: ReturnType<typeof buildSchemaInjection>;
 }
 
 /**
@@ -58,7 +61,7 @@ interface ChatStreamParams {
  * 所有 LLM 调用（generation）、工具调用（tool）、检索（retriever）都会写入 Langfuse。
  */
 async function streamChatTurn(params: ChatStreamParams): Promise<{ fullContent: string; toolRounds: number }> {
-  const { llm, model, messages, bindings, resolvedSessionId, send } = params;
+  const { llm, model, messages, bindings, resolvedSessionId, send, schemaInjection } = params;
   let fullContent = "";
   let toolRounds = 0;
 
@@ -66,6 +69,15 @@ async function streamChatTurn(params: ChatStreamParams): Promise<{ fullContent: 
   const completionMessages: LlmMessage[] = messages
     .filter((message) => message.role !== "tool")
     .map((message) => ({ role: message.role, content: message.content }));
+
+  if (schemaInjection.enabled) {
+    const schemaSystem =
+      "你是 NEW-API 运营数据查询助手。可基于以下数据库 schema 生成只读 SQL，并调用 query_sql 工具执行获取数据。\n" +
+      "规则：1) 表名/列名用反引号包裹；2) 时间戳是 Unix 秒；3) 大表必须带 WHERE 过滤；4) 中文问日期先换算 Unix 秒区间；5) 结果按用户语言汇总成自然语言回答。\n\n" +
+      schemaInjection.skeleton +
+      (schemaInjection.selected ? `\n\n${schemaInjection.selected}` : "");
+    completionMessages.unshift({ role: "system", content: schemaSystem });
+  }
 
   const lastUserQuery = [...messages]
     .reverse()
@@ -480,6 +492,14 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
     const lastUserQuery = [...messages]
       .reverse()
       .find((message) => message.role === "user")?.content;
+    const schemaInjection = buildSchemaInjection(lastUserQuery);
+    if (schemaInjection.enabled) {
+      logTrace("chat.schema", {
+        sessionId: resolvedSessionId ?? null,
+        tables: schemaInjection.tableNames.join(",") || "(skeleton only)",
+        estimatedTokens: schemaInjection.estimatedTokens,
+      });
+    }
 
     await runTraced("chat-turn", async (span) => {
       span.update({
@@ -511,6 +531,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
               resolvedSessionId,
               send,
               span,
+              schemaInjection,
             });
             fullContent = result.fullContent;
             toolRounds = result.toolRounds;
@@ -558,6 +579,15 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
     }
     send({ error: message });
   } finally {
+    // 结束标志：前端依赖 { done: true } 结束 loading 并解锁下一次对话。
+    // 无论成功还是失败都必须发送，否则客户端无法区分流是否结束。
+    if (assistantMessageId) {
+      updateMessage(assistantMessageId, {
+        content: fullContent,
+        status: "complete",
+      });
+    }
+    send({ done: true });
     res.end();
   }
 });

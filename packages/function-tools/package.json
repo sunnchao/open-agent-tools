@@ -1,0 +1,14 @@
+{
+  "name": "@open-agent-tools/function-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "自定义 MCP Tools 聚合目录与打包脚本（build-package）",
+  "scripts": {
+    "build-package": "node scripts/build-package.mjs",
+    "clean": "node scripts/build-package.mjs --clean"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

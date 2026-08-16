@@ -102,6 +102,40 @@ describe("workflow executor", () => {
         (event) => JSON.stringify(event) === JSON.stringify({ type: "run_done", outputs: result }),
       ),
     );
+    assert.ok(
+      events.some(
+        (event) =>
+          event &&
+          typeof event === "object" &&
+          (event as { type: string }).type === "node_start" &&
+          (event as { nodeId: string }).nodeId === "source" &&
+          (event as { kind: string }).kind === "input",
+      ),
+    );
+    const endResult = events.find(
+      (event) =>
+        event &&
+        typeof event === "object" &&
+        (event as { type: string }).type === "node_result" &&
+        (event as { nodeId: string }).nodeId === "end",
+    ) as
+      | {
+          inputs?: Record<string, unknown>;
+          outputs?: Record<string, unknown>;
+          result?: unknown;
+          metadata?: { durationMs: number; tokenUsage: { totalTokens: number } };
+        }
+      | undefined;
+    assert.ok(endResult);
+    assert.deepEqual(endResult.inputs, { text: "hello", literal: "ok" });
+    assert.deepEqual(endResult.outputs, { answer: "hello" });
+    assert.deepEqual(endResult.result, { text: "hello", literal: "ok" });
+    assert.ok(endResult.metadata && endResult.metadata.durationMs >= 0);
+    assert.deepEqual(endResult.metadata.tokenUsage, {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    });
   });
 
   it("tests an input node in isolation and exposes inputs, result, outputs, and metadata", async () => {
@@ -252,6 +286,141 @@ describe("workflow executor", () => {
     assert.equal(completeCalls, 1);
     assert.deepEqual(result.yes, { answer: "yes" });
     assert.equal(result.no, undefined);
+  });
+
+  it("emits the interpolated prompt on llm node result events", async () => {
+    const provider = {
+      id: "default",
+      name: "test",
+      baseUrl: "http://localhost",
+      models: ["m"],
+      enabled: true,
+      isDefault: true,
+      apiKeyMasked: null,
+      apiKey: null,
+      format: "openai-chat" as const,
+      createdAt: "",
+      updatedAt: "",
+    };
+    const events: Array<Record<string, unknown>> = [];
+    let receivedPrompt: string | undefined;
+    let receivedSystemPrompt: string | undefined;
+    await executeWorkflow(
+      base({
+        input: { question: "如何优化 LLM 调用" },
+        nodes: [
+          {
+            id: "user",
+            kind: "input",
+            config: {
+              inputs: [{ name: "question", source: { type: "run", variable: "question" } }],
+              outputs: [{ name: "text", selector: "$inputs.question" }],
+            },
+          },
+          {
+            id: "llm",
+            kind: "llm",
+            config: {
+              model: "m",
+              systemPrompt: "你是助手，请使用 {{lang}} 回答",
+              prompt: "请回答：{{q}}",
+              inputs: [
+                { name: "q", source: { type: "node", nodeId: "user", output: "text" } },
+                { name: "lang", source: { type: "literal", value: "中文" } },
+              ],
+              outputs: [{ name: "answer", selector: "$result" }],
+            },
+          },
+        ],
+        edges: [{ source: "user", target: "llm" }],
+      }),
+      (event) => events.push(event as unknown as Record<string, unknown>),
+      {
+        getDefaultProvider: () => provider,
+        completeLlm: async (_provider, input) => {
+          receivedPrompt = input.prompt;
+          receivedSystemPrompt = input.systemPrompt;
+          return "好的";
+        },
+      },
+    );
+    assert.equal(receivedSystemPrompt, "你是助手，请使用 中文 回答");
+    assert.equal(receivedPrompt, "请回答：如何优化 LLM 调用");
+    const llmEvent = events.find(
+      (event) => event.type === "node_result" && event.nodeId === "llm",
+    );
+    assert.ok(llmEvent);
+    assert.equal(llmEvent.status, "success");
+    assert.equal(llmEvent.systemPrompt, "你是助手，请使用 中文 回答");
+    assert.equal(llmEvent.prompt, "请回答：如何优化 LLM 调用");
+    assert.deepEqual(llmEvent.inputs, { q: "如何优化 LLM 调用", lang: "中文" });
+    assert.deepEqual(llmEvent.outputs, { answer: "好的" });
+    assert.ok(llmEvent.metadata);
+  });
+
+  it("auto-joins input variables as the user message when no prompt template is set", async () => {
+    const provider = {
+      id: "default",
+      name: "test",
+      baseUrl: "http://localhost",
+      models: ["m"],
+      enabled: true,
+      isDefault: true,
+      apiKeyMasked: null,
+      apiKey: null,
+      format: "openai-chat" as const,
+      createdAt: "",
+      updatedAt: "",
+    };
+    const events: Array<Record<string, unknown>> = [];
+    let receivedPrompt: string | undefined;
+    let receivedSystemPrompt: string | undefined;
+    await executeWorkflow(
+      base({
+        input: { question: "如何优化 LLM 调用" },
+        nodes: [
+          {
+            id: "user",
+            kind: "input",
+            config: {
+              inputs: [{ name: "question", source: { type: "run", variable: "question" } }],
+              outputs: [{ name: "text", selector: "$inputs.question" }],
+            },
+          },
+          {
+            id: "llm",
+            kind: "llm",
+            config: {
+              model: "m",
+              systemPrompt: "你是严格的翻译助手",
+              inputs: [{ name: "q", source: { type: "node", nodeId: "user", output: "text" } }],
+              outputs: [{ name: "answer", selector: "$result" }],
+            },
+          },
+        ],
+        edges: [{ source: "user", target: "llm" }],
+      }),
+      (event) => events.push(event as unknown as Record<string, unknown>),
+      {
+        getDefaultProvider: () => provider,
+        completeLlm: async (_provider, input) => {
+          receivedPrompt = input.prompt;
+          receivedSystemPrompt = input.systemPrompt;
+          return "翻译结果";
+        },
+      },
+    );
+    // prompt 未配置时，上游入参数据自动拼接为 user 消息，不再被系统提示词覆盖。
+    assert.equal(receivedSystemPrompt, "你是严格的翻译助手");
+    assert.equal(receivedPrompt, "q:\n如何优化 LLM 调用");
+    const llmEvent = events.find(
+      (event) => event.type === "node_result" && event.nodeId === "llm",
+    );
+    assert.ok(llmEvent);
+    assert.equal(llmEvent.systemPrompt, "你是严格的翻译助手");
+    assert.equal(llmEvent.prompt, "q:\n如何优化 LLM 调用");
+    assert.deepEqual(llmEvent.inputs, { q: "如何优化 LLM 调用" });
+    assert.deepEqual(llmEvent.outputs, { answer: "翻译结果" });
   });
 
   it("aborts on node errors", async () => {

@@ -193,6 +193,10 @@ export function streamChat(
           }
         }
       }
+
+      // 流式连接正常关闭但未收到 done 事件时，兜底结束本次对话，
+      // 避免前端一直停留在 loading 状态。
+      callbacks.onDone({ assistantMessageId });
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       callbacks.onError(err instanceof Error ? err.message : "Request failed");
@@ -228,6 +232,22 @@ export interface WorkflowTokenUsage {
   totalTokens: number;
 }
 
+/** 单个节点本次运行的完整信息，供运行轨迹日志展示与调试。 */
+export interface WorkflowNodeRunMeta {
+  inputs?: Record<string, unknown>;
+  outputs?: Record<string, unknown>;
+  result?: unknown;
+  /** LLM 节点插值后的最终请求内容（user 消息）。 */
+  prompt?: string;
+  /** LLM 节点插值后的系统提示词（system 消息）。 */
+  systemPrompt?: string;
+  error?: string;
+  metadata?: {
+    durationMs: number;
+    tokenUsage: WorkflowTokenUsage;
+  };
+}
+
 export interface WorkflowNodeTestResult {
   nodeId: string;
   status: "success" | "error";
@@ -260,13 +280,8 @@ export async function testWorkflowNode(
 }
 
 export interface WorkflowStreamCallbacks {
-  onNodeStart: (nodeId: string, label?: string) => void;
-  onNodeResult: (
-    nodeId: string,
-    status: "success" | "error",
-    outputs?: Record<string, unknown>,
-    error?: string,
-  ) => void;
+  onNodeStart: (nodeId: string, label?: string, kind?: string) => void;
+  onNodeResult: (nodeId: string, status: "success" | "error", meta: WorkflowNodeRunMeta) => void;
   onDone: (outputs: Record<string, Record<string, unknown>>) => void;
   onError: (error: string, nodeId?: string) => void;
 }
@@ -306,18 +321,23 @@ export function streamWorkflow(
             callbacks.onNodeStart(
               event.nodeId,
               typeof event.label === "string" ? event.label : undefined,
+              typeof event.kind === "string" ? event.kind : undefined,
             );
           if (
             event.type === "node_result" &&
             typeof event.nodeId === "string" &&
             (event.status === "success" || event.status === "error")
           )
-            callbacks.onNodeResult(
-              event.nodeId,
-              event.status,
-              event.outputs as Record<string, unknown> | undefined,
-              typeof event.error === "string" ? event.error : undefined,
-            );
+            callbacks.onNodeResult(event.nodeId, event.status, {
+              inputs: event.inputs as Record<string, unknown> | undefined,
+              outputs: event.outputs as Record<string, unknown> | undefined,
+              result: event.result,
+              prompt: typeof event.prompt === "string" ? event.prompt : undefined,
+              systemPrompt:
+                typeof event.systemPrompt === "string" ? event.systemPrompt : undefined,
+              error: typeof event.error === "string" ? event.error : undefined,
+              metadata: event.metadata as WorkflowNodeRunMeta["metadata"],
+            });
           if (event.type === "run_done")
             callbacks.onDone((event.outputs ?? {}) as Record<string, Record<string, unknown>>);
           if (event.type === "run_error")

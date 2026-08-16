@@ -1,4 +1,32 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "!packages/function-tools"
   - "runtimes/*/*"
+
+catalog:
+  "@aws-sdk/client-s3": ^3.883.0
+  "@langchain/community": ^1.1.29
+  "@langchain/core": ^1.2.3
+  "@langchain/openai": ^1.5.5
+  "@langchain/textsplitters": ^1.0.1
+  "@langfuse/core": ^5.10.0
+  "@langfuse/otel": ^5.10.0
+  "@langfuse/tracing": ^5.10.0
+  "@modelcontextprotocol/sdk": ^1.29.0
+  "@opentelemetry/resources": ^2.10.0
+  "@opentelemetry/sdk-node": ^0.221.0
+  "@types/cors": ^2.8.17
+  "@types/express": ^5.0.3
+  "@types/pg": ^8.15.5
+  bullmq: ^5.58.5
+  chalk: ^6.0.0
+  cors: ^2.8.5
+  dotenv: ^16.6.1
+  drizzle-orm: ^0.44.5
+  express: ^5.1.0
+  ioredis: ^5.7.0
+  pg: ^8.16.3
+  zod: ^4.4.3
+  "@elastic/elasticsearch": ^8.17.0
+  mysql2: ^3.14.0

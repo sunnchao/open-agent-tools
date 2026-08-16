@@ -9,18 +9,38 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./graph": {
+      "types": "./dist/graph/index.d.ts",
+      "import": "./dist/graph/index.js"
+    },
+    "./graph/*": {
+      "types": "./dist/graph/*.d.ts",
+      "import": "./dist/graph/*.js"
+    },
+    "./crag": {
+      "types": "./dist/crag/index.d.ts",
+      "import": "./dist/crag/index.js"
+    },
+    "./crag/*": {
+      "types": "./dist/crag/*.d.ts",
+      "import": "./dist/crag/*.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "tsx --test src/*.test.ts test/*.test.ts",
+    "test": "tsx --test src/*.test.ts test/*.test.ts test/graph/*.test.ts test/crag/*.test.ts",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@langchain/community": "^1.1.29",
-    "@langchain/core": "^1.2.3",
-    "@langchain/textsplitters": "^1.0.1"
-  }
+    "@langchain/community": "catalog:",
+    "@langchain/core": "catalog:",
+    "@langchain/textsplitters": "catalog:"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ]
 }

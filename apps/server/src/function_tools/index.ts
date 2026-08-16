@@ -1,6 +1,7 @@
 // 预置函数定义
 
 import type { ChatCompletionFunctionTool } from "openai/resources/chat/completions/completions";
+import { QUERY_SQL_TOOL, executeQuerySql } from "./sqlQueryBuiltin.js";
 
 export const tools: ChatCompletionFunctionTool[] = [
   {
@@ -20,9 +21,10 @@ export const tools: ChatCompletionFunctionTool[] = [
       },
     },
   },
+  QUERY_SQL_TOOL,
 ];
 
-interface FinancialReport {
+export interface FinancialReport {
   id: string;
   name: string;
   status: string;
@@ -38,9 +40,9 @@ interface FinancialReportToolResult {
 interface ToolExecutionResult {
   ok: true;
   ui: {
-    type: "financial_report_card";
+    type: string;
     content: string;
-    props: FinancialReportToolResult["data"];
+    props: unknown;
   };
 }
 
@@ -70,8 +72,16 @@ const reportsByStatus = new Map<string, FinancialReport[]>([
 ]);
 
 export async function executeTool(name: string, argsJson: string): Promise<ToolExecutionResult> {
-  const args = (argsJson ? JSON.parse(argsJson) : {}) as { status?: unknown };
+  const args = (argsJson ? JSON.parse(argsJson) : {}) as { status?: unknown; sql?: unknown };
   switch (name) {
+    case "query_sql": {
+      const result = await executeQuerySql(String(args.sql ?? ""));
+      if (!result.ok) throw new Error(result.error);
+      return {
+        ok: true,
+        ui: { type: "sql_result", content: JSON.stringify(result.rows), props: { rows: result.rows } },
+      };
+    }
     // 调用 get_financial_reports 工具获取报表数据
     case "get_financial_reports": {
       const status = typeof args.status === "string" ? args.status : "unknown";

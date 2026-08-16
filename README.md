@@ -18,7 +18,7 @@
 - 为 MCP 客户端签发一次性可见的 API Key，按服务、Scope、Tool 名称和 Prompt 名称授权。
 - 通过 Streamable HTTP 提供 `tools/list`、`tools/call`、`prompts/list` 和 `prompts/get`。
 - 提供 React 管理界面，用于服务、Tool、Prompt、构建和版本操作。
-- IM 协同入口：Agent Server 支持飞书长连接机器人，群聊 @机器人即可走 Agent Chat + RAG 知识库问答（未配置飞书凭据时自动禁用）。
+- IM 协同入口：Studio Web「设置 → IM 渠道」可视化配置飞书/钉钉机器人（多渠道、密钥加密存储、知识库绑定），群聊 @机器人即可走 Agent Chat + RAG 知识库问答。
 
 当前托管运行时只支持 Node.js 20、ESM 和 npm。Python、Java、托管 MCP Resources，以及远程 MCP 代理尚未包含在当前可运行范围内。
 

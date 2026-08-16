@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Rag } from "@open-agent-tools/rag";
-import { KnowledgeGraph } from "@open-agent-tools/rag-graph";
+import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
 import { GraphLifecycle } from "./lifecycle.js";
 
 const silent = { log: () => {}, error: () => {} };

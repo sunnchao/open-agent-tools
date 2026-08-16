@@ -46,7 +46,10 @@ export async function startFeishuBot(config: ImConfig): Promise<FeishuBotHandle>
     onReady: () => {
       connected = true;
       fatalError = undefined;
-      logTrace("im.feishu.ready", { platform: "feishu", ragSources: config.ragSources });
+      logTrace("im.feishu.ready", {
+        channel: config.name,
+        ragSources: config.ragSources,
+      });
     },
     onError: (error) => {
       connected = false;

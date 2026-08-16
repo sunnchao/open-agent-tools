@@ -1,0 +1,52 @@
+{
+  "name": "@open-agent-tools/database",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres/index.d.ts",
+      "import": "./dist/postgres/index.js"
+    },
+    "./mysql": {
+      "types": "./dist/mysql/index.d.ts",
+      "import": "./dist/mysql/index.js"
+    },
+    "./redis": {
+      "types": "./dist/redis/index.d.ts",
+      "import": "./dist/redis/index.js"
+    },
+    "./elasticsearch": {
+      "types": "./dist/elasticsearch/index.d.ts",
+      "import": "./dist/elasticsearch/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "tsx --test src/*.test.ts src/*/*.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@elastic/elasticsearch": "catalog:",
+    "drizzle-orm": "catalog:",
+    "ioredis": "catalog:",
+    "mysql2": "catalog:",
+    "pg": "catalog:"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@types/pg": "catalog:"
+  }
+}

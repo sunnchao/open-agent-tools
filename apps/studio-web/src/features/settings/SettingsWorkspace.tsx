@@ -21,6 +21,7 @@ import {
   type ProviderMetadata,
 } from "../providers/api.js";
 import { PROVIDER_FORMATS, PROVIDER_FORMAT_LABELS } from "../providers/api.js";
+import { ImChannelsSection } from "../im/ImChannelsWorkspace.js";
 
 type Draft = {
   id?: string;
@@ -47,6 +48,7 @@ export function SettingsWorkspace() {
   const [saving, setSaving] = useState(false);
   const [defaultingId, setDefaultingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<"providers" | "im">("providers");
 
   const refresh = async () => {
     setLoading(true);
@@ -109,158 +111,188 @@ export function SettingsWorkspace() {
         <div>
           <p className="domain-eyebrow">RUNTIME CONFIGURATION</p>
           <h1>
-            <SettingOutlined /> 模型 Provider
+            <SettingOutlined /> {activeSection === "providers" ? "模型 Provider" : "IM 渠道"}
           </h1>
-          <p className="domain-subtitle">集中管理 OpenAI 兼容服务和可用模型。</p>
+          <p className="domain-subtitle">
+            {activeSection === "providers"
+              ? "集中管理 OpenAI 兼容服务和可用模型。"
+              : "接入飞书 / 钉钉机器人，配置知识库绑定与群聊响应规则。"}
+          </p>
         </div>
-        <div className="domain-header-actions">
-          <button
-            className="studio-button secondary"
-            type="button"
-            onClick={() => void refresh()}
-            disabled={loading}
-          >
-            <ReloadOutlined spin={loading} /> <span>刷新</span>
-          </button>
-          <button
-            className="studio-button primary"
-            type="button"
-            onClick={() => setDraft(emptyDraft())}
-          >
-            <PlusOutlined /> <span>新建 Provider</span>
-          </button>
-        </div>
+        {activeSection === "providers" ? (
+          <div className="domain-header-actions">
+            <button
+              className="studio-button secondary"
+              type="button"
+              onClick={() => void refresh()}
+              disabled={loading}
+            >
+              <ReloadOutlined spin={loading} /> <span>刷新</span>
+            </button>
+            <button
+              className="studio-button primary"
+              type="button"
+              onClick={() => setDraft(emptyDraft())}
+            >
+              <PlusOutlined /> <span>新建 Provider</span>
+            </button>
+          </div>
+        ) : null}
       </header>
       <div className="settings-body">
         <aside className="settings-sections">
-          <div className="settings-section is-active">
+          <div
+            className={`settings-section${activeSection === "providers" ? " is-active" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => setActiveSection("providers")}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") setActiveSection("providers");
+            }}
+          >
             <span>01</span>
             <b>模型 Provider</b>
             <small>路由与模型目录</small>
           </div>
-          <div className="settings-section is-muted">
+          <div
+            className={`settings-section${activeSection === "im" ? " is-active" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => setActiveSection("im")}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") setActiveSection("im");
+            }}
+          >
             <span>02</span>
-            <b>更多设置</b>
-            <small>即将开放</small>
+            <b>IM 渠道</b>
+            <small>飞书 / 钉钉机器人</small>
           </div>
         </aside>
-        <main className="settings-content">
-          {error ? <div className="settings-alert">{error}</div> : null}
-          <div className="settings-intro">
-            <div>
-              <span className="settings-kicker">MODEL ROUTING</span>
-              <h2>服务商目录</h2>
+        {activeSection === "providers" ? (
+          <main className="settings-content">
+            {error ? <div className="settings-alert">{error}</div> : null}
+            <div className="settings-intro">
+              <div>
+                <span className="settings-kicker">MODEL ROUTING</span>
+                <h2>服务商目录</h2>
+              </div>
+              <span>{providers.length} 个 Provider</span>
             </div>
-            <span>{providers.length} 个 Provider</span>
-          </div>
-          <div className="provider-table-wrap">
-            <table className="provider-table">
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>Base URL</th>
-                  <th>API Key</th>
-                  <th>格式</th>
-                  <th>模型</th>
-                  <th>状态</th>
-                  <th>默认</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {loading && providers.length === 0 ? (
+            <div className="provider-table-wrap">
+              <table className="provider-table">
+                <thead>
                   <tr>
-                    <td colSpan={8} className="table-empty">
-                      正在加载 Provider...
-                    </td>
+                    <th>名称</th>
+                    <th>Base URL</th>
+                    <th>API Key</th>
+                    <th>格式</th>
+                    <th>模型</th>
+                    <th>状态</th>
+                    <th>默认</th>
+                    <th />
                   </tr>
-                ) : null}
-                {!loading && providers.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="table-empty">
-                      还没有 Provider
-                    </td>
-                  </tr>
-                ) : null}
-                {providers.map((provider) => (
-                  <tr key={provider.id}>
-                    <td data-label="Provider">
-                      <div className="provider-name">
-                        <span
-                          className={`provider-dot${provider.enabled ? "" : " is-disabled"}`}
-                        />
-                        <b>{provider.name}</b>
-                        <small>{provider.id}</small>
-                      </div>
-                    </td>
-                    <td data-label="Base URL">
-                      <code title={provider.baseUrl}>{provider.baseUrl}</code>
-                    </td>
-                    <td data-label="API Key">
-                      <span className="masked-key">{provider.apiKeyMasked ?? "未配置"}</span>
-                    </td>
-                    <td data-label="格式">
-                      <span className="format-pill">{PROVIDER_FORMAT_LABELS[provider.format]}</span>
-                    </td>
-                    <td data-label="模型">
-                      <span className="model-count">{provider.models.length}</span>
-                    </td>
-                    <td data-label="状态">
-                      <span className={`status-pill${provider.enabled ? " is-enabled" : ""}`}>
-                        {provider.enabled ? "启用" : "停用"}
-                      </span>
-                    </td>
-                    <td data-label="默认路由">
-                      {provider.isDefault ? (
-                        <span className="default-mark">DEFAULT</span>
-                      ) : (
-                        <button
-                          className="set-default-button"
-                          type="button"
-                          title={provider.enabled ? "设为默认" : "请先启用 Provider"}
-                          disabled={!provider.enabled || defaultingId !== null}
-                          onClick={() => void makeDefault(provider)}
-                        >
-                          <StarOutlined />
-                          <span>{defaultingId === provider.id ? "设置中" : "设为默认"}</span>
-                        </button>
-                      )}
-                    </td>
-                    <td data-label="操作">
-                      <div className="table-actions">
-                        <button
-                          type="button"
-                          title="编辑"
-                          aria-label={`编辑 ${provider.name}`}
-                          onClick={() => edit(provider)}
-                        >
-                          <EditOutlined />
-                        </button>
-                        {provider.isDefault ? null : (
+                </thead>
+                <tbody>
+                  {loading && providers.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="table-empty">
+                        正在加载 Provider...
+                      </td>
+                    </tr>
+                  ) : null}
+                  {!loading && providers.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="table-empty">
+                        还没有 Provider
+                      </td>
+                    </tr>
+                  ) : null}
+                  {providers.map((provider) => (
+                    <tr key={provider.id}>
+                      <td data-label="Provider">
+                        <div className="provider-name">
+                          <span
+                            className={`provider-dot${provider.enabled ? "" : " is-disabled"}`}
+                          />
+                          <b>{provider.name}</b>
+                          <small>{provider.id}</small>
+                        </div>
+                      </td>
+                      <td data-label="Base URL">
+                        <code title={provider.baseUrl}>{provider.baseUrl}</code>
+                      </td>
+                      <td data-label="API Key">
+                        <span className="masked-key">{provider.apiKeyMasked ?? "未配置"}</span>
+                      </td>
+                      <td data-label="格式">
+                        <span className="format-pill">
+                          {PROVIDER_FORMAT_LABELS[provider.format]}
+                        </span>
+                      </td>
+                      <td data-label="模型">
+                        <span className="model-count">{provider.models.length}</span>
+                      </td>
+                      <td data-label="状态">
+                        <span className={`status-pill${provider.enabled ? " is-enabled" : ""}`}>
+                          {provider.enabled ? "启用" : "停用"}
+                        </span>
+                      </td>
+                      <td data-label="默认路由">
+                        {provider.isDefault ? (
+                          <span className="default-mark">DEFAULT</span>
+                        ) : (
                           <button
+                            className="set-default-button"
                             type="button"
-                            title="删除"
-                            aria-label={`删除 ${provider.name}`}
-                            onClick={() => {
-                              if (window.confirm(`删除 ${provider.name}？`))
-                                void removeProvider(provider.id)
-                                  .then(refresh)
-                                  .catch((reason) =>
-                                    setError(reason instanceof Error ? reason.message : "删除失败"),
-                                  );
-                            }}
+                            title={provider.enabled ? "设为默认" : "请先启用 Provider"}
+                            disabled={!provider.enabled || defaultingId !== null}
+                            onClick={() => void makeDefault(provider)}
                           >
-                            <DeleteOutlined />
+                            <StarOutlined />
+                            <span>{defaultingId === provider.id ? "设置中" : "设为默认"}</span>
                           </button>
                         )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </main>
+                      </td>
+                      <td data-label="操作">
+                        <div className="table-actions">
+                          <button
+                            type="button"
+                            title="编辑"
+                            aria-label={`编辑 ${provider.name}`}
+                            onClick={() => edit(provider)}
+                          >
+                            <EditOutlined />
+                          </button>
+                          {provider.isDefault ? null : (
+                            <button
+                              type="button"
+                              title="删除"
+                              aria-label={`删除 ${provider.name}`}
+                              onClick={() => {
+                                if (window.confirm(`删除 ${provider.name}？`))
+                                  void removeProvider(provider.id)
+                                    .then(refresh)
+                                    .catch((reason) =>
+                                      setError(
+                                        reason instanceof Error ? reason.message : "删除失败",
+                                      ),
+                                    );
+                              }}
+                            >
+                              <DeleteOutlined />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </main>
+        ) : (
+          <ImChannelsSection />
+        )}
       </div>
       {draft
         ? createPortal(

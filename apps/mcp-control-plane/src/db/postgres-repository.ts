@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, getTableColumns, ne, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { createPostgresConnection, isPostgresError } from "@open-agent-tools/pg";
+import { createPostgresConnection, isPostgresError } from "@open-agent-tools/database/postgres";
 import {
   RepositoryConflictError,
   RepositoryNotFoundError,

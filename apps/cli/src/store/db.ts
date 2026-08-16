@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
-import type { BaseMessage } from "@langchain/core/messages";
+import type { CliMessage } from "./messages.ts";
 
 export type Role = "user" | "assistant" | "system" | "tool" | "reasoning";
 export type MessageStatus = "streaming" | "complete" | "error";
@@ -515,20 +515,19 @@ export function clearAudit(): void {
   openDb().exec(`DELETE FROM audit_log`);
 }
 
-export function messageToDbFormat(msg: BaseMessage): {
+export function messageToDbFormat(msg: CliMessage): {
   role: Role;
   content: string;
   tool_call_id?: string;
   tool_name?: string;
 } {
-  const type = msg._getType();
   let role: Role;
 
-  switch (type) {
-    case "human":
+  switch (msg.role) {
+    case "user":
       role = "user";
       break;
-    case "ai":
+    case "assistant":
       role = "assistant";
       break;
     case "system":
@@ -541,15 +540,13 @@ export function messageToDbFormat(msg: BaseMessage): {
       role = "user";
   }
 
-  const content = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+  const result: ReturnType<typeof messageToDbFormat> = { role, content: msg.content };
 
-  const result: ReturnType<typeof messageToDbFormat> = { role, content };
-
-  if ("tool_call_id" in msg && typeof msg.tool_call_id === "string") {
-    result.tool_call_id = msg.tool_call_id;
+  if (msg.toolCallId) {
+    result.tool_call_id = msg.toolCallId;
   }
-  if ("name" in msg && typeof msg.name === "string") {
-    result.tool_name = msg.name;
+  if (msg.toolName) {
+    result.tool_name = msg.toolName;
   }
 
   return result;

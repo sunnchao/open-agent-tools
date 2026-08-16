@@ -6,7 +6,7 @@ import {
   type ManagedMcpManifest,
 } from "@open-agent-tools/mcp-contracts";
 import type { Pool, PoolClient } from "pg";
-import { createPostgresPool } from "@open-agent-tools/pg";
+import { createPostgresPool } from "@open-agent-tools/database/postgres";
 
 import type {
   ArtifactInspectionRepository,

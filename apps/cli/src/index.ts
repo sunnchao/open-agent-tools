@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   console.log(chalk.dim(`数据库路径: ${getDbPath()}`));
   console.log(chalk.dim(`项目记忆: ${memoryStore.projectRoot}`));
   console.log(chalk.dim(`全局记忆: ${memoryStore.globalRoot}`));
-  console.log(chalk.bold.cyan("\nopen-agent-tools · coding agent (agent 模式)"));
+  console.log(chalk.bold.cyan("\nopen-agent-tools · coding agent (Pi Agent 底座)"));
   console.log(
     chalk.dim("输入 /help 查看命令。危险工具（写文件/编辑/执行命令）运行前会请求授权。\n"),
   );

@@ -1,16 +1,17 @@
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from "node:fs";
-import { resolve, relative, basename, extname, sep } from "node:path";
+import { resolve, relative, basename, dirname, extname, sep } from "node:path";
 
 /**
  * 项目上下文生成模块（对应 Claude Code 的 /init）。
  *
  * generateProjectContext 会确定性地扫描当前仓库：目录树、技术栈、关键文件内容，
- * 再由 contextToMarkdown 渲染成一份放在仓库根目录的 AGENT.md。该文件会在每次会话
+ * 再由 contextToMarkdown 渲染成一份放在仓库根目录的 AGENTS.md。该文件会在每次会话
  * 开始时自动加载到系统提示词中，让 agent 无需每轮重新探索就能理解代码库。
  */
 
 /** 上下文文件名（类似 Claude Code 的 CLAUDE.md，但与该 agent 工具绑定）。 */
-export const CONTEXT_FILE_NAME = "AGENT.md";
+export const CONTEXT_FILE_NAME = "AGENTS.md";
+export const LEGACY_CONTEXT_FILE_NAME = "AGENT.md";
 
 /** 无论如何都要跳过的目录（与 .gitignore 之外的硬规则）。 */
 const ALWAYS_SKIP = new Set([
@@ -87,18 +88,35 @@ interface GitIgnore {
   matches(rel: string): boolean;
 }
 
-/** 读取仓库根目录的 .gitignore，返回一个宽松的子集匹配器（支持 * 通配与目录模式）。 */
+/**
+ * 读取当前目录到 Git 仓库根目录的 .gitignore。
+ *
+ * monorepo 子包通常没有自己的 .gitignore，必须继承仓库根规则，否则本地密钥、
+ * SQLite 和运行时数据会进入生成的项目上下文。
+ */
 function loadGitignore(root: string): GitIgnore {
-  const path = resolve(root, ".gitignore");
-  const patterns: RegExp[] = [];
-  if (existsSync(path)) {
+  const ignoreDirs: string[] = [];
+  let current = resolve(root);
+  while (true) {
+    if (existsSync(resolve(current, ".gitignore"))) ignoreDirs.push(current);
+    if (existsSync(resolve(current, ".git"))) break;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  const rules: Array<{ ignoreDir: string; pattern: RegExp; ignored: boolean }> = [];
+  for (const ignoreDir of ignoreDirs.reverse()) {
+    const path = resolve(ignoreDir, ".gitignore");
     try {
       const text = readFileSync(path, "utf-8");
       for (const raw of text.split("\n")) {
         const line = raw.trim();
         if (!line || line.startsWith("#")) continue;
-        const dirOnly = line.endsWith("/");
-        const p = line.replace(/\/+$/, "");
+        const ignored = !line.startsWith("!");
+        const body = ignored ? line : line.slice(1);
+        const dirOnly = body.endsWith("/");
+        const p = body.replace(/^\/+|\/+$/g, "");
         if (!p) continue;
         let re = "";
         for (const ch of p) {
@@ -111,7 +129,7 @@ function loadGitignore(root: string): GitIgnore {
         if (dirOnly) re += "(/|$)";
         else re += "($|/)";
         try {
-          patterns.push(new RegExp(re));
+          rules.push({ ignoreDir, pattern: new RegExp(re), ignored });
         } catch {
           /* 跳过非法 pattern */
         }
@@ -120,9 +138,19 @@ function loadGitignore(root: string): GitIgnore {
       /* 忽略读取错误 */
     }
   }
+
+  const scanRootFromGitignore = new Map(
+    ignoreDirs.map((ignoreDir) => [ignoreDir, relative(ignoreDir, resolve(root))]),
+  );
   return {
     matches(rel: string): boolean {
-      return patterns.some((re) => re.test(rel));
+      let ignored = false;
+      for (const rule of rules) {
+        const prefix = scanRootFromGitignore.get(rule.ignoreDir);
+        const scopedRel = prefix ? `${prefix}${sep}${rel}` : rel;
+        if (rule.pattern.test(scopedRel)) ignored = rule.ignored;
+      }
+      return ignored;
     },
   };
 }
@@ -216,7 +244,7 @@ export function generateProjectContext(root: string): ProjectContext {
   const keyFiles: { path: string; content: string }[] = [];
   for (const f of files) {
     const base = basename(f);
-    if (base === CONTEXT_FILE_NAME) continue;
+    if (base === CONTEXT_FILE_NAME || base === LEGACY_CONTEXT_FILE_NAME) continue;
     const atRoot = !f.includes(sep);
     const isHint = KEY_FILE_HINTS.some((re) => re.test(base));
     if (!isHint && !(atRoot && /\.(toml|yml|yaml|json|md|env)$/i.test(f))) continue;
@@ -251,7 +279,7 @@ export function generateProjectContext(root: string): ProjectContext {
   };
 }
 
-/** 把结构化上下文渲染成 markdown（即 AGENT.md 的内容）。 */
+/** 把结构化上下文渲染成 markdown（即 AGENTS.md 的内容）。 */
 export function contextToMarkdown(c: ProjectContext): string {
   const lines: string[] = [];
   lines.push(`# 项目上下文 (${CONTEXT_FILE_NAME})`);
@@ -282,11 +310,16 @@ export function contextToMarkdown(c: ProjectContext): string {
     lines.push("");
   }
   for (const kf of c.keyFiles) {
+    const longestBacktickRun = Math.max(
+      0,
+      ...(kf.content.match(/`+/g) ?? []).map((run) => run.length),
+    );
+    const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
     lines.push(`### ${kf.path}`);
     lines.push("");
-    lines.push("```");
+    lines.push(fence);
     lines.push(kf.content);
-    lines.push("```");
+    lines.push(fence);
     lines.push("");
   }
   lines.push(`---`);
@@ -294,20 +327,23 @@ export function contextToMarkdown(c: ProjectContext): string {
   return lines.join("\n");
 }
 
-/** 把 markdown 写入仓库根目录的 AGENT.md，返回绝对路径。 */
+/** 把 markdown 写入仓库根目录的 AGENTS.md，返回绝对路径。 */
 export function writeContextFile(root: string, md: string): string {
   const path = resolve(root, CONTEXT_FILE_NAME);
   writeFileSync(path, md, "utf-8");
   return path;
 }
 
-/** 读取已存在的 AGENT.md（若存在），否则返回 null。 */
+/** 优先读取 AGENTS.md，并兼容迁移前的 AGENT.md。 */
 export function loadContextFile(root: string): string | null {
-  const path = resolve(root, CONTEXT_FILE_NAME);
-  if (!existsSync(path)) return null;
-  try {
-    return readFileSync(path, "utf-8");
-  } catch {
-    return null;
+  for (const name of [CONTEXT_FILE_NAME, LEGACY_CONTEXT_FILE_NAME]) {
+    const path = resolve(root, name);
+    if (!existsSync(path)) continue;
+    try {
+      return readFileSync(path, "utf-8");
+    } catch {
+      continue;
+    }
   }
+  return null;
 }

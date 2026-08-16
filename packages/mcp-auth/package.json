@@ -17,5 +17,9 @@
     "lint": "eslint .",
     "test": "tsx --test",
     "clean": "rm -rf dist"
-  }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ]
 }

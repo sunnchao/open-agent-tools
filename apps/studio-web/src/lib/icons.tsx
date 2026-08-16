@@ -40,6 +40,7 @@ import {
   Plus,
   RefreshCcw,
   RefreshCw,
+  Redo2,
   Rocket,
   Save,
   Search,
@@ -104,6 +105,7 @@ export const UploadOutlined = adapt(Upload);
 export const ReloadOutlined = adapt(RefreshCw);
 export const SyncOutlined = adapt(RefreshCcw);
 export const UndoOutlined = adapt(Undo2);
+export const RedoOutlined = adapt(Redo2);
 export const SendOutlined = adapt(Send);
 export const EyeOutlined = adapt(Eye);
 export const SettingOutlined = adapt(Settings);

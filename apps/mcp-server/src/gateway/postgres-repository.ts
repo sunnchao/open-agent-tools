@@ -14,7 +14,7 @@ import type {
   McpScope,
   ServiceSummary,
 } from "./repository.js";
-import { createPostgresPool } from "@open-agent-tools/pg";
+import { createPostgresPool } from "@open-agent-tools/database/postgres";
 
 const ClientStatusSchema = z.enum(["ACTIVE", "REVOKED"]);
 const KeyStatusSchema = z.enum(["ACTIVE", "REVOKED"]);

@@ -4,7 +4,7 @@ import {
   createGraphDomain,
   HeuristicRetrievalEvaluator,
   type RetrievalEvaluator,
-} from "@open-agent-tools/rag-crag";
+} from "@open-agent-tools/rag/crag";
 import { retrieveRag, retrieveRagGraph } from "./resources.js";
 
 /** 组装 chat 侧 CRAG 控制器：block 域 = rag-server /query，graph 域 = /graph/retrieve。 */

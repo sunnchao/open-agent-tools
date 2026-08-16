@@ -1,4 +1,3 @@
-import { HumanMessage } from "@langchain/core/messages";
 import chalk from "chalk";
 import { handleCommand } from "../commands/commands.ts";
 import { createSlashCommandPicker, getPrompt } from "../ui/cliUi.ts";
@@ -41,7 +40,7 @@ export async function replLoop(runtime: Runtime): Promise<void> {
       console.log(chalk.dim(`自动创建新会话: ${cli.currentSession.id}`));
     }
 
-    cli.messages.push(new HumanMessage(input));
+    cli.messages.push({ role: "user", content: input });
     if (cli.currentSession) {
       addMessage(cli.currentSession.id, { role: "user", content: input, status: "complete" });
     }
@@ -50,15 +49,13 @@ export async function replLoop(runtime: Runtime): Promise<void> {
     callbacks.startActivity();
 
     try {
-      const answer = await runtime.agent.runTurn(
-        cli.messages,
-        buildSystemPrompt({
-          projectContext: cli.projectContext,
-          memoryStore,
-          taskHint: input,
-        }),
-        callbacks,
-      );
+      const systemPrompt = buildSystemPrompt({
+        projectContext: cli.projectContext,
+        memoryStore,
+        taskHint: input,
+      });
+      const answer = await runtime.pi.prompt(input, { systemPrompt, callbacks });
+      cli.messages.push({ role: "assistant", content: answer });
       // 流式渲染用 \x1b[2K\r 留在当前行，这里先换行再收尾空行，让 prompt 不重叠
       callbacks.stopActivity();
       process.stdout.write("\n");

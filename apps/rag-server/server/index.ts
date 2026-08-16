@@ -6,7 +6,7 @@ import multer from "multer";
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { CallbackHandler } from "@langfuse/langchain";
 import { DEFAULT_SEPARATORS, Rag } from "@open-agent-tools/rag";
-import { KnowledgeGraph } from "@open-agent-tools/rag-graph";
+import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
 import { parseSeparators } from "./chunk-settings.js";
 import { querySources } from "./query-settings.js";
 import { buildCragController, graphRouter } from "./graph.js";

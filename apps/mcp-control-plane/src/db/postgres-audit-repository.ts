@@ -1,6 +1,6 @@
 import { and, desc, eq, ilike, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { createPostgresConnection } from "@open-agent-tools/pg";
+import { createPostgresConnection } from "@open-agent-tools/database/postgres";
 
 import type { AuditEventQuery, AuditEventRecord, AuditRepository } from "../audit-repository.js";
 import * as schema from "./schema.js";

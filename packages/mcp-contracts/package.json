@@ -20,6 +20,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "zod": "^4.4.3"
-  }
+    "zod": "catalog:"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ]
 }

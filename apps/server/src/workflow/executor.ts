@@ -1,6 +1,6 @@
 import { callMcpTool, retrieveRag, retrieveRagGraph, type McpToolBinding } from "../resources.js";
 import { getDefaultProvider, getProvider, type ProviderWithKey } from "../providers/store.js";
-import { createLlmClient } from "../providers/clients/index.js";
+import { createLlmClient, type LlmMessage } from "../providers/clients/index.js";
 import {
   runTraced,
   startObservation,
@@ -8,16 +8,10 @@ import {
   slimValue,
   type ObservationKind,
 } from "../tracing.js";
+import { logTrace } from "../trace.js";
 
 export type WorkflowNodeKind =
-  | "start"
-  | "input"
-  | "rag"
-  | "graph"
-  | "llm"
-  | "mcp"
-  | "condition"
-  | "end";
+  "start" | "input" | "rag" | "graph" | "llm" | "mcp" | "condition" | "end";
 
 export interface WorkflowNodeInput {
   id: string;
@@ -85,14 +79,28 @@ export interface NodeOutputBinding {
   selector: string;
 }
 
+/** 节点运行指标（随 node_result 事件回传，供前端运行轨迹日志展示）。 */
+export interface WorkflowNodeResultMetadata {
+  durationMs: number;
+  tokenUsage: WorkflowTokenUsage;
+}
+
 export interface WorkflowEvent {
   type: "node_start" | "node_result" | "run_done" | "run_error";
   nodeId?: string;
   label?: string;
+  kind?: string;
   status?: "success" | "error";
+  inputs?: Record<string, unknown>;
   outputs?: Record<string, unknown>;
+  result?: unknown;
   output?: unknown;
+  /** LLM 节点插值后的最终请求内容（user 消息）。 */
+  prompt?: string;
+  /** LLM 节点插值后的系统提示词（system 消息）。 */
+  systemPrompt?: string;
   error?: string;
+  metadata?: WorkflowNodeResultMetadata;
 }
 
 export interface WorkflowDependencies {
@@ -103,7 +111,7 @@ export interface WorkflowDependencies {
   getDefaultProvider?: (options?: { requireEnabled?: boolean }) => ProviderWithKey | null;
   completeLlm?: (
     provider: ProviderWithKey,
-    input: { model: string; prompt: string; temperature?: number },
+    input: { model: string; systemPrompt?: string; prompt: string; temperature?: number },
   ) => Promise<string | WorkflowLlmCompletion>;
   timeoutMs?: Partial<Record<"rag" | "llm" | "mcp" | "graph", number>>;
   signal?: AbortSignal;
@@ -292,6 +300,18 @@ function interpolate(
   });
 }
 
+/** 将 LLM 节点解析后的输入变量拼接为 user 消息文本（当未配置 prompt 模板时自动生成）。 */
+function formatInputsAsUserMessage(inputs: Record<string, unknown>): string {
+  const entries = Object.entries(inputs);
+  if (entries.length === 0) return "";
+  return entries
+    .map(([name, value]) => {
+      const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+      return `${name}:\n${text}`;
+    })
+    .join("\n\n");
+}
+
 function interpolateJsonValue(value: unknown, inputs: Record<string, unknown>): unknown {
   if (Array.isArray(value)) return value.map((item) => interpolateJsonValue(item, inputs));
   if (value && typeof value === "object") {
@@ -345,13 +365,20 @@ function withTimeout<T>(promise: Promise<T>, timeout: number, signal?: AbortSign
 interface NodeExecution {
   result: unknown;
   tokenUsage?: Partial<WorkflowTokenUsage>;
+  /** LLM 节点插值后的最终 user 请求内容，随事件回传用于日志调试。 */
+  prompt?: string;
+  /** LLM 节点插值后的系统提示词（system 消息）。 */
+  systemPrompt?: string;
 }
-
 const emptyTokenUsage = (): WorkflowTokenUsage => ({
   inputTokens: 0,
   outputTokens: 0,
   totalTokens: 0,
 });
+
+/** SSE 事件载荷上限：保留完整信息用于调试，仅对极端超长值做截断保护。 */
+const EVENT_SLIM_MAX_STRING = 20_000;
+const EVENT_SLIM_MAX_ITEMS = 200;
 
 function normalizeTokenUsage(usage?: Partial<WorkflowTokenUsage>): WorkflowTokenUsage {
   const inputTokens = Number(usage?.inputTokens) || 0;
@@ -394,6 +421,10 @@ async function runNode(
     WorkflowDependencies,
 ): Promise<NodeExecution> {
   const config = configOf(node);
+  logTrace("workflow.node.start", {
+    node,
+    inputs,
+  });
   switch (node.kind) {
     case "start":
       return { result: null };
@@ -445,7 +476,21 @@ async function runNode(
       const model =
         typeof config.model === "string" && config.model ? config.model : provider.models[0];
       if (!model) throw new Error(`Provider ${provider.id} has no models`);
-      const prompt = interpolate(config.prompt ?? "", inputs, "text");
+      // 系统提示词与用户消息分离：systemPrompt → system 消息；prompt 模板 → user 消息。
+      // prompt 未配置（或插值后为空）时，自动将解析后的输入变量拼接为 user 消息，避免入参数据被覆盖丢失。
+      const systemPrompt =
+        typeof config.systemPrompt === "string" && config.systemPrompt
+          ? interpolate(config.systemPrompt, inputs, "text")
+          : "";
+      const promptTemplate =
+        typeof config.prompt === "string" && config.prompt
+          ? interpolate(config.prompt, inputs, "text")
+          : "";
+      const prompt = promptTemplate || formatInputsAsUserMessage(inputs);
+      if (!prompt)
+        throw new Error(
+          "LLM 节点未配置用户提示词（prompt），且没有输入变量可自动拼接，请检查节点配置",
+        );
       const temperature = typeof config.temperature === "number" ? config.temperature : undefined;
       const complete =
         deps.completeLlm ??
@@ -454,9 +499,15 @@ async function runNode(
             throw new Error(
               `Provider「${resolvedProvider.name}」未配置 API Key，请在「设置」中为该 Provider 填写 API Key`,
             );
+          const messages: LlmMessage[] = [
+            ...(value.systemPrompt
+              ? [{ role: "system" as const, content: value.systemPrompt }]
+              : []),
+            { role: "user" as const, content: value.prompt },
+          ];
           const completion = await createLlmClient(resolvedProvider).complete({
             model: value.model,
-            messages: [{ role: "user", content: value.prompt }],
+            messages,
             ...(value.temperature === undefined ? {} : { temperature: value.temperature }),
             signal: deps.signal,
           });
@@ -470,14 +521,33 @@ async function runNode(
             },
           };
         });
-      const completion = await withTimeout(
-        complete(provider, { model, prompt, temperature }),
-        deps.timeoutMs?.llm ?? 30_000,
-        deps.signal,
-      );
+      let completion: string | WorkflowLlmCompletion;
+      try {
+        completion = await withTimeout(
+          complete(provider, {
+            model,
+            systemPrompt: systemPrompt || undefined,
+            prompt,
+            temperature,
+          }),
+          deps.timeoutMs?.llm ?? 30_000,
+          deps.signal,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const wrapped = new Error(message);
+        (wrapped as { prompt?: string }).prompt = prompt;
+        if (systemPrompt) (wrapped as { systemPrompt?: string }).systemPrompt = systemPrompt;
+        throw wrapped;
+      }
       return typeof completion === "string"
-        ? { result: completion }
-        : { result: completion.content, tokenUsage: completion.tokenUsage };
+        ? { result: completion, prompt, systemPrompt: systemPrompt || undefined }
+        : {
+            result: completion.content,
+            tokenUsage: completion.tokenUsage,
+            prompt,
+            systemPrompt: systemPrompt || undefined,
+          };
     }
     case "mcp": {
       const serviceSlug = String(config.serviceSlug ?? "");
@@ -525,6 +595,15 @@ function resolveInputs(
   request: WorkflowRunRequest,
   outputContext: Map<string, Record<string, unknown>>,
 ): Record<string, unknown> {
+  logTrace(
+    "resolveInputs",
+    {
+      node,
+      request,
+      outputContext,
+    },
+    "info",
+  );
   const values: Record<string, unknown> = {};
   for (const binding of inputsOf(node)) {
     const source = binding.source;
@@ -611,14 +690,22 @@ export async function executeWorkflow(
             if (incoming.some((edge) => statuses.get(edge.source) !== "success")) continue;
             if (nodeId && !request.input)
               throw new WorkflowNodeError(nodeId, "workflow input is required");
-            emit({ type: "node_start", nodeId, label: node.label ?? node.kind });
+            emit({
+              type: "node_start",
+              nodeId,
+              label: node.label ?? node.kind,
+              kind: node.kind,
+            });
             const nodeObservation = startObservation(
               node.label ?? node.kind,
               nodeObservationAttributes(node),
               { asType: nodeKindAsType(node.kind) },
             );
+            const startedAtMs = Date.now();
+            let resolvedInputs: Record<string, unknown> | undefined;
             try {
               const inputs = resolveInputs(node, request, outputContext);
+              resolvedInputs = inputs;
               const execution = await runNode(node, inputs, deps);
               const result = execution.result;
               nodeObservation.update({
@@ -638,7 +725,39 @@ export async function executeWorkflow(
                 nodeOutputs[output.name] = selectValue(output.selector, result, inputs);
               outputContext.set(nodeId, nodeOutputs);
               statuses.set(nodeId, "success");
-              emit({ type: "node_result", nodeId, status: "success", outputs: nodeOutputs });
+              emit({
+                type: "node_result",
+                nodeId,
+                status: "success",
+                inputs: slimValue(inputs, EVENT_SLIM_MAX_STRING, EVENT_SLIM_MAX_ITEMS) as Record<
+                  string,
+                  unknown
+                >,
+                outputs: nodeOutputs,
+                result: slimValue(result, EVENT_SLIM_MAX_STRING, EVENT_SLIM_MAX_ITEMS),
+                ...(execution.prompt !== undefined
+                  ? {
+                      prompt: slimValue(
+                        execution.prompt,
+                        EVENT_SLIM_MAX_STRING,
+                        EVENT_SLIM_MAX_ITEMS,
+                      ) as string,
+                    }
+                  : {}),
+                ...(execution.systemPrompt !== undefined
+                  ? {
+                      systemPrompt: slimValue(
+                        execution.systemPrompt,
+                        EVENT_SLIM_MAX_STRING,
+                        EVENT_SLIM_MAX_ITEMS,
+                      ) as string,
+                    }
+                  : {}),
+                metadata: {
+                  durationMs: Date.now() - startedAtMs,
+                  tokenUsage: normalizeTokenUsage(execution.tokenUsage),
+                },
+              });
               const outgoing = validation.outgoing.get(nodeId)!;
               if (node.kind === "condition") {
                 const condition = result === true;
@@ -658,7 +777,43 @@ export async function executeWorkflow(
               const message = error instanceof Error ? error.message : String(error);
               nodeObservation.update({ level: "ERROR", statusMessage: message });
               statuses.set(nodeId, "error");
-              emit({ type: "node_result", nodeId, status: "error", error: message });
+              const failedPrompt = (error as { prompt?: unknown })?.prompt;
+              const failedSystemPrompt = (error as { systemPrompt?: unknown })?.systemPrompt;
+              emit({
+                type: "node_result",
+                nodeId,
+                status: "error",
+                inputs: resolvedInputs
+                  ? (slimValue(
+                      resolvedInputs,
+                      EVENT_SLIM_MAX_STRING,
+                      EVENT_SLIM_MAX_ITEMS,
+                    ) as Record<string, unknown>)
+                  : undefined,
+                ...(typeof failedPrompt === "string"
+                  ? {
+                      prompt: slimValue(
+                        failedPrompt,
+                        EVENT_SLIM_MAX_STRING,
+                        EVENT_SLIM_MAX_ITEMS,
+                      ) as string,
+                    }
+                  : {}),
+                ...(typeof failedSystemPrompt === "string"
+                  ? {
+                      systemPrompt: slimValue(
+                        failedSystemPrompt,
+                        EVENT_SLIM_MAX_STRING,
+                        EVENT_SLIM_MAX_ITEMS,
+                      ) as string,
+                    }
+                  : {}),
+                error: message,
+                metadata: {
+                  durationMs: Date.now() - startedAtMs,
+                  tokenUsage: emptyTokenUsage(),
+                },
+              });
               throw new WorkflowNodeError(nodeId, message);
             } finally {
               nodeObservation.end();

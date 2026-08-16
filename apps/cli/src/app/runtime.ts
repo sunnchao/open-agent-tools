@@ -1,59 +1,29 @@
 import readline from "node:readline";
-import { ChatOpenAI } from "@langchain/openai";
-import {
-  Agent,
-  DEEPAGENT_BUILTIN_TOOL_NAMES,
-  LocalShellBackend,
-  getBuiltinTools,
-  loadMcpTools,
-  type AgentOptions,
-} from "@open-agent-tools/deepagent";
-import chalk from "chalk";
 import { createAgentCallbacks, type StreamableAgentCallbacks } from "../ui/agentCallbacks.ts";
 import { createAsk, createConfirm } from "../ui/cliUi.ts";
 import type { CliContext } from "../commands/commands.ts";
+import type { CliMessage } from "../store/messages.ts";
 import { MemoryStore } from "../store/memory.ts";
-import { createMemoryTools } from "../tools/memory.ts";
 import { PermissionManager } from "../tools/permissions.ts";
 import { logAudit } from "../store/db.ts";
-
-const INTERRUPT_ON: NonNullable<AgentOptions["interruptOn"]> = {
-  write_file: { allowedDecisions: ["approve", "reject"] },
-  edit_file: { allowedDecisions: ["approve", "reject"] },
-  execute: { allowedDecisions: ["approve", "reject"] },
-};
+import { createPiRuntime, type PiRuntime } from "./piRuntime.ts";
 
 export interface Runtime {
   rl: readline.Interface;
   cli: CliContext;
-  /** 首次 rebuildTools 之后才可用。 */
-  agent: Agent;
+  /** PI Agent 底座（唯一执行内核）。 */
+  pi: PiRuntime;
   callbacks: StreamableAgentCallbacks;
   permissionManager: PermissionManager;
   memoryStore: MemoryStore;
-  baseModel: ChatOpenAI;
   rebuildTools: () => Promise<void>;
 }
 
-/** 创建 readline、模型、权限、CliContext 与可重建的工具/Agent 装配。 */
+/** 创建 readline、权限、CliContext 与可重建的 Pi 工具/会话装配。 */
 export async function createRuntime(): Promise<Runtime> {
-  const backend = await LocalShellBackend.create({
-    rootDir: process.cwd(),
-    virtualMode: false,
-    inheritEnv: true,
-    timeout: 30,
-  });
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-  });
-
-  const baseModel = new ChatOpenAI({
-    modelName: process.env.OPENAI_API_MODEL || "Qwen3.6-35B-A3B",
-    configuration: {
-      baseURL: process.env.OPENAI_API_BASE_URL,
-      apiKey: process.env.OPENAI_API_KEY,
-    },
   });
 
   const memoryStore = new MemoryStore({ cwd: process.cwd() });
@@ -63,7 +33,6 @@ export async function createRuntime(): Promise<Runtime> {
   const cli: CliContext = {
     currentSession: null,
     messages: [],
-    allTools: [],
     projectContext: null,
     mcpToolServers: new Map<string, string>(),
     rebuildTools: async () => {},
@@ -78,6 +47,7 @@ export async function createRuntime(): Promise<Runtime> {
     toolName: string;
     decision: "allowed" | "denied" | "auto";
     argsSummary?: string;
+    error?: string | null;
   }): void => {
     logAudit({ ...entry, sessionId: cli.currentSession?.id ?? null });
   };
@@ -85,43 +55,40 @@ export async function createRuntime(): Promise<Runtime> {
   const callbacks = createAgentCallbacks({
     cli,
     permissionManager,
-    modelName: process.env.OPENAI_API_MODEL || "Qwen3.6-35B-A3B",
   });
 
   const runtime: Runtime = {
     rl,
     cli,
-    agent: null as unknown as Agent,
+    pi: null as unknown as PiRuntime,
     callbacks,
     permissionManager,
     memoryStore,
-    baseModel,
     rebuildTools: async () => {
-      const builtins = getBuiltinTools();
-      const memoryTools = createMemoryTools({
-        store: memoryStore,
-        currentSessionId: () => cli.currentSession?.id,
-        modelName: process.env.OPENAI_API_MODEL || "Qwen3.6-35B-A3B",
-      });
-      const customTools = [...builtins, ...memoryTools];
-      const names = new Set(DEEPAGENT_BUILTIN_TOOL_NAMES);
-      for (const tool of customTools) names.add(tool.name);
-      const mcp = await loadMcpTools(names, {
-        permission: (name, args) => permissionManager.decide(name, args),
-        audit: recordAudit,
-      });
-      for (const e of mcp.errors) console.log(chalk.yellow(`MCP: ${e}`));
-      if (mcp.tools.length > 0) {
-        console.log(chalk.dim(`已加载 ${mcp.tools.length} 个 MCP 工具`));
-      }
-      cli.allTools = [...customTools, ...mcp.tools];
-      cli.mcpToolServers = new Map(mcp.toolServers.map((t) => [t.name, t.server]));
-      cli.mcpCleanup = mcp.cleanup;
-      runtime.agent = new Agent(baseModel, cli.allTools, {
-        backend,
-        interruptOn: INTERRUPT_ON,
-      });
+      await runtime.pi.rebuild();
+      cli.allToolNames = runtime.pi.getToolNames();
+      cli.mcpToolServers = new Map(runtime.pi.getMcpToolServers().map((t) => [t.name, t.server]));
     },
+  };
+
+  runtime.pi = await createPiRuntime({
+    cwd: process.cwd(),
+    onAudit: recordAudit,
+    memoryStore,
+    currentSessionId: () => cli.currentSession?.id,
+    requestPermission: (name, args) => permissionManager.decide(name, args),
+  });
+  // 退出时清理 Pi 底座（含 MCP 连接）。
+  cli.mcpCleanup = async () => {
+    runtime.pi.dispose();
+  };
+  // /load /new 时把历史同步给 Pi 底座（仅 user/assistant 纯文本轮次）。
+  cli.setAgentHistory = (messages: CliMessage[]) => {
+    return runtime.pi.setHistory(
+      messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    );
   };
 
   cli.rebuildTools = () => runtime.rebuildTools();

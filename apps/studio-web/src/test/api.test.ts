@@ -96,6 +96,71 @@ describe("parseSseBuffer", () => {
     });
   });
 
+  it("calls onDone when the stream closes without a done event (fallback)", async () => {
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"delta":"hello"}\n\n'));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const deltas: string[] = [];
+    await new Promise<void>((resolve, reject) => {
+      streamChat(
+        [{ role: "user", content: "hi" }],
+        undefined,
+        {
+          onDelta: (value) => deltas.push(value),
+          onDone: () => resolve(),
+          onError: reject,
+        },
+      );
+    });
+    expect(deltas).toEqual(["hello"]);
+  });
+
+  it("does not call onDone twice when the server sends done then closes", async () => {
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"done":true}\n\n'));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    let doneCalls = 0;
+    await new Promise<void>((resolve, reject) => {
+      streamChat(
+        [{ role: "user", content: "hi" }],
+        undefined,
+        {
+          onDelta: () => undefined,
+          onDone: () => {
+            doneCalls += 1;
+            resolve();
+          },
+          onError: reject,
+        },
+      );
+    });
+    expect(doneCalls).toBe(1);
+  });
+
   it("consumes workflow node events and final outputs", async () => {
     const encoder = new TextEncoder();
     const fetchMock = vi.fn(
@@ -104,11 +169,13 @@ describe("parseSseBuffer", () => {
           new ReadableStream({
             start(controller) {
               controller.enqueue(
-                encoder.encode('data: {"type":"node_start","nodeId":"a","label":"Start"}\n\n'),
+                encoder.encode(
+                  'data: {"type":"node_start","nodeId":"a","label":"Start","kind":"start"}\n\n',
+                ),
               );
               controller.enqueue(
                 encoder.encode(
-                  'data: {"type":"node_result","nodeId":"a","status":"success","outputs":{"value":"ok"}}\n\n',
+                  'data: {"type":"node_result","nodeId":"a","status":"success","inputs":{"text":"hi"},"outputs":{"value":"ok"},"result":"ok","prompt":"请回答：hi","systemPrompt":"你是助手","metadata":{"durationMs":12,"tokenUsage":{"inputTokens":1,"outputTokens":2,"totalTokens":3}}}\n\n',
                 ),
               );
               controller.enqueue(
@@ -121,14 +188,14 @@ describe("parseSseBuffer", () => {
         ),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const starts: string[] = [];
-    const results: string[] = [];
+    const starts: Array<[string, string | undefined]> = [];
+    const results: Array<{ id: string; status: string; meta: unknown }> = [];
     await new Promise<void>((resolve, reject) => {
       streamWorkflow(
         { nodes: [{ id: "a", kind: "start", label: "Start", config: {} }], edges: [], input: {} },
         {
-          onNodeStart: (id) => starts.push(id),
-          onNodeResult: (id, status) => results.push(`${id}:${status}`),
+          onNodeStart: (id, _label, kind) => starts.push([id, kind]),
+          onNodeResult: (id, status, meta) => results.push({ id, status, meta }),
           onDone: (outputs) => {
             expect(outputs.a?.value).toBe("ok");
             resolve();
@@ -137,8 +204,24 @@ describe("parseSseBuffer", () => {
         },
       );
     });
-    expect(starts).toEqual(["a"]);
-    expect(results).toEqual(["a:success"]);
+    expect(starts).toEqual([["a", "start"]]);
+    expect(results).toEqual([
+      {
+        id: "a",
+        status: "success",
+        meta: {
+          inputs: { text: "hi" },
+          outputs: { value: "ok" },
+          result: "ok",
+          prompt: "请回答：hi",
+          systemPrompt: "你是助手",
+          metadata: {
+            durationMs: 12,
+            tokenUsage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+          },
+        },
+      },
+    ]);
   });
 
   it("tests a single workflow node and preserves observable result metadata", async () => {

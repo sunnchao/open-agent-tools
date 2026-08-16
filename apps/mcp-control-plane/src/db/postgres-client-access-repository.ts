@@ -1,6 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { createPostgresConnection } from "@open-agent-tools/pg";
+import { createPostgresConnection } from "@open-agent-tools/database/postgres";
 import type {
   ApiClientRecord,
   ClientAccessRepository,

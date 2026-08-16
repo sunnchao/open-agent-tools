@@ -9,11 +9,13 @@ import {
   type WorkflowNodeTestRequest,
   type WorkflowRunRequest,
 } from "../workflow/executor.js";
+import { logTrace } from "../trace.js";
 
 export const workflowRouter: ReturnType<typeof Router> = Router();
 
 workflowRouter.post("/api/workflow/run", async (req: Request, res: Response) => {
   const request = req.body as WorkflowRunRequest;
+  logTrace("workflow.run", { request });
   try {
     validateWorkflow(request);
   } catch (error) {

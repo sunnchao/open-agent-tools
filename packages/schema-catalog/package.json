@@ -1,0 +1,35 @@
+{
+  "name": "@open-agent-tools/schema-catalog",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./mysql": {
+      "types": "./dist/mysql.d.ts",
+      "import": "./dist/mysql.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "clean": "rm -rf dist",
+    "collect": "tsx scripts/collect.ts",
+    "enrich-newapi": "tsx scripts/enrich-newapi.ts"
+  },
+  "dependencies": {
+    "@open-agent-tools/database": "workspace:*",
+    "mysql2": "catalog:"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ]
+}

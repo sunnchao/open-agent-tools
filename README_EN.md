@@ -18,7 +18,7 @@ This repository is a pnpm and TypeScript monorepo. This README focuses on the MC
 - Issue one-time-visible API Keys for MCP clients and authorize by service, scope, Tool name, and Prompt name.
 - Expose `tools/list`, `tools/call`, `prompts/list`, and `prompts/get` over Streamable HTTP.
 - Provide a React administration console for service, Tool, Prompt, build, and version workflows.
-- IM collaboration entry: the Agent Server supports a Feishu long-connection bot, so @-mentioning the bot in a group answers from Agent Chat + RAG knowledge base (auto-disabled when Feishu credentials are absent).
+- IM collaboration entry: configure Feishu/DingTalk bots visually in Studio Web "Settings → IM Channels" (multi-channel, encrypted secrets, knowledge base binding); @-mentioning a bot in a group answers from Agent Chat + RAG knowledge base.
 
 The managed runtime currently supports Node.js 20, ESM, and npm only. Python, Java, managed MCP Resources, and remote MCP proxying are outside the currently runnable scope.
 

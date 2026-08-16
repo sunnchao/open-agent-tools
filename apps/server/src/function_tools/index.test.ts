@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { executeFinancialReportTool, executeTool, tools } from "./index.js";
+import type { FinancialReport } from "./index.js";
 
 describe("function calling — 获取财务报表数据", () => {
   describe("tool schema definition", () => {
@@ -80,8 +81,9 @@ describe("function calling — 获取财务报表数据", () => {
     it("dispatches to get_financial_reports with parsed args", async () => {
       const result = await executeTool("get_financial_reports", '{"status":"approved"}');
       assert.equal(result.ui.type, "financial_report_card");
-      assert.equal(result.ui.props.reports[0]?.id, "report1");
-      assert.equal(result.ui.props.reports[0]?.status, "approved");
+      const props = result.ui.props as { reports: FinancialReport[] };
+      assert.equal(props.reports[0]?.id, "report1");
+      assert.equal(props.reports[0]?.status, "approved");
     });
 
     it("rejects unknown tool names", async () => {
@@ -91,7 +93,8 @@ describe("function calling — 获取财务报表数据", () => {
     it("handles empty args string gracefully", async () => {
       const result = await executeTool("get_financial_reports", "");
       assert.equal(result.ui.content, "Here are the financial reports with status unknown ");
-      assert.deepEqual(result.ui.props.reports, []);
+      const props = result.ui.props as { reports: FinancialReport[] };
+      assert.deepEqual(props.reports, []);
     });
 
     it("rejects malformed JSON args", async () => {

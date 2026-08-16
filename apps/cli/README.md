@@ -2,18 +2,19 @@
 
 [English](./README_EN.md) | [平台总览](../../README.md)
 
-基于 LangChain 与 [Deep Agents](https://github.com/langchain-ai/deepagents) 的命令行 coding agent。支持流式对话、文件系统与 Shell 工具调用、SQLite 历史会话持久化、长期记忆、项目上下文和 MCP 服务接入。
+基于 [Pi Agent](https://pi.dev)（`@earendil-works/pi-coding-agent` / `pi-ai`）的命令行 coding agent。支持流式对话、文件系统与 Shell 工具调用、SQLite 历史会话持久化、长期记忆、项目上下文和 MCP 服务接入。
 
 ## 功能特性
 
 - ✅ 流式对话输出
-- ✅ Deep Agents 驱动：文件读写、Shell 执行、任务规划（Todo）、子代理委派与异步任务
-- ✅ 内置 `getCurrentTime` 工具与长期记忆（`memory_*`）工具
+- ✅ Pi Agent 驱动：文件读写、Shell 执行、搜索检索（read / write / edit / bash / grep / ls / find）
+- ✅ 隔离的只读子代理（`task`）与项目任务清单（`todo`）
+- ✅ 内置 `get_current_time` 工具与长期记忆（`memory_*`）工具
 - ✅ MCP 服务动态加载与工具调用（信任确认、按工具授权）
 - ✅ SQLite 历史会话持久化（`sessions` / `messages` / `audit_log` 三表）
 - ✅ 会话管理（创建、加载、删除、自动标题）
 - ✅ 长期记忆（file-backed + SQLite 索引，global/project 双作用域）
-- ✅ 项目上下文（`AGENT.md` 扫描生成，`/init`、`/context` 管理）
+- ✅ 项目上下文（`AGENTS.md` 扫描生成，兼容 `AGENT.md`，由 `/init`、`/context` 管理）
 - ✅ 危险工具授权确认（`a=允许 / n=拒绝 / A=本次会话始终允许`）
 - ✅ 工具调用审计日志
 - ✅ Markdown 渲染与发送后的等待反馈动画（Ora）
@@ -26,7 +27,7 @@
 pnpm install
 ```
 
-构建 CLI 及其依赖（`@open-agent-tools/deepagent` 等）：
+构建 CLI 及其依赖（Pi Agent / MCP SDK 等）：
 
 ```bash
 pnpm --filter @open-agent-tools/cli build
@@ -63,34 +64,33 @@ pnpm start
 
 ## 可用命令
 
-| 命令 | 说明 |
-|------|------|
-| `/new` | 创建新会话 |
-| `/list` | 列出所有历史会话 |
-| `/load <id>` | 加载指定会话（支持部分 ID） |
-| `/delete <id>` | 删除指定会话 |
-| `/tools` | 列出当前可用工具（含来源 `mcp:server`） |
-| `/init` | 扫描仓库结构，生成项目上下文（`AGENT.md`） |
-| `/context` | 查看当前已加载的项目上下文 |
-| `/memory` | 长期记忆子命令（`search` / `list` / `read` / `review` / `accept` / `daily` / `organize` / `quota` / `wipe`） |
-| `/help` | 显示帮助信息 |
-| `exit` | 退出程序 |
+| 命令           | 说明                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `/new`         | 创建新会话                                                                                                   |
+| `/list`        | 列出所有历史会话                                                                                             |
+| `/load <id>`   | 加载指定会话（支持部分 ID）                                                                                  |
+| `/delete <id>` | 删除指定会话                                                                                                 |
+| `/tools`       | 列出当前可用工具（含来源 `mcp:server`）                                                                      |
+| `/init`        | 扫描仓库结构，生成项目上下文（`AGENTS.md`）                                                                  |
+| `/context`     | 查看当前已加载的项目上下文                                                                                   |
+| `/memory`      | 长期记忆子命令（`search` / `list` / `read` / `review` / `accept` / `daily` / `organize` / `quota` / `wipe`） |
+| `/help`        | 显示帮助信息                                                                                                 |
+| `exit`         | 退出程序                                                                                                     |
 
 ## 工具
 
-Agent 由 Deep Agents（`deepagents`）驱动，内置以下工具：
+Agent 由 Pi Agent（`pi-coding-agent`）驱动，内置以下工具：
 
-| 工具 | 说明 | 授权 |
-|------|------|------|
-| `ls` / `glob` / `grep` / `read_file` | 文件系统读取与检索 | 自动 |
-| `write_file` / `edit_file` | 写入与编辑文件 | 逐次确认 |
-| `execute` | 执行 shell 命令 | 逐次确认 |
-| `write_todos` | 任务规划清单 | 自动 |
-| `task` | 委派子代理 | 自动 |
-| `start_async_task` / `check_async_task` / `update_async_task` / `cancel_async_task` / `list_async_tasks` | 异步子任务管理 | 自动 |
-| `getCurrentTime` / `memory_*` / MCP 工具 | 时间、长期记忆、MCP 服务 | 按配置 |
+| 工具                                       | 说明                                   | 授权                                       |
+| ------------------------------------------ | -------------------------------------- | ------------------------------------------ |
+| `ls` / `grep` / `find` / `read`            | 文件系统读取与检索                     | 自动                                       |
+| `write` / `edit`                           | 写入与编辑文件                         | 逐次确认                                   |
+| `bash`                                     | 执行 shell 命令                        | 逐次确认                                   |
+| `task`                                     | 在隔离上下文中委派复杂的只读检索与分析 | 自动（子会话仅有 read / grep / find / ls） |
+| `todo`                                     | 管理项目根目录 `TODO.md`               | 自动                                       |
+| `get_current_time` / `memory_*` / MCP 工具 | 时间、长期记忆、MCP 服务               | 按配置                                     |
 
-危险工具（`write_file`、`edit_file`、`execute`）运行前会请求授权：`a=允许 / n=拒绝 / A=本次会话始终允许`。
+危险工具（`write`、`edit`、`bash`）运行前会请求授权：`a=允许 / n=拒绝 / A=本次会话始终允许`。
 
 ## 使用示例
 
@@ -141,6 +141,7 @@ Enter: /delete xyz789
 OPENAI_API_KEY=your_api_key
 OPENAI_API_BASE_URL=https://api.openai.com/v1
 OPENAI_API_MODEL=gpt-4
+OPENAI_API_REASONING_EFFORT=off  # 可选：off/minimal/low/medium/high/xhigh/max
 SQLITE_PATH=./data/chat.sqlite  # 可选，默认在 apps/cli/data/chat.sqlite
 ```
 
@@ -182,11 +183,12 @@ pnpm --filter @open-agent-tools/cli test
 
 ## 技术栈
 
-- **LangChain**: AI 应用框架
-- **Deep Agents**: 多 Agent 编排与内置工具
-- **OpenAI**: LLM 提供商
+- **Pi Agent（`pi-ai` / `pi-coding-agent`）**: Agent 运行时与统一 LLM 抽象
+- **OpenAI 兼容 LLM**: 经 `OPENAI_API_BASE_URL` / `OPENAI_API_KEY` 接入
+- **MCP SDK（`@modelcontextprotocol/sdk`）**: MCP 服务动态接入
 - **SQLite（`node:sqlite`）**: 会话与记忆持久化
 - **Chalk**: 终端颜色
 - **Ora**: 加载动画
 - **Marked / Marked Terminal**: Markdown 渲染
-- **Zod**: 输入校验
+- **TypeBox（`@sinclair/typebox`）**: 工具参数 Schema 校验
+- **Zod**: 命令层输入校验

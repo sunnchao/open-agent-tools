@@ -77,6 +77,21 @@ export function openDb(path = getDbPath()): DatabaseSync {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS im_channels (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      app_secret_enc TEXT,
+      encrypt_key_enc TEXT,
+      rag_sources_json TEXT NOT NULL DEFAULT '[]',
+      rag_top_k INTEGER NOT NULL DEFAULT 5,
+      require_mention INTEGER NOT NULL DEFAULT 1,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   migrateMessagesTable(db);

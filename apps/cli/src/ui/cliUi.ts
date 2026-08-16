@@ -1,5 +1,5 @@
 import readline from "node:readline";
-import { listConfiguredServers, trustStore } from "@open-agent-tools/deepagent";
+import { listConfiguredMcpServers, mcpTrustStore } from "../tools/mcpPi.ts";
 import chalk from "chalk";
 import {
   filterSlashCommands,
@@ -157,10 +157,21 @@ export function createConfirm(
 }
 
 /** 启动前交互式信任确认：未信任的 server 必须显式信任，否则不会静默加载。 */
-export async function promptForTrust(rl: readline.Interface): Promise<void> {
+export async function promptForTrust(
+  rl: readline.Interface,
+  services?: {
+    listServers: () => Array<{ name: string; trust: string }>;
+    store: {
+      isTrusted: (name: string) => boolean;
+      markAlways: (name: string) => void;
+      markSession: (name: string) => void;
+    };
+  },
+): Promise<void> {
+  const { listServers, store } = services ?? { listServers: listConfiguredMcpServers, store: mcpTrustStore };
   const select = createMenuSelect(rl);
-  const pending = listConfiguredServers().filter(
-    (s) => s.trust !== "trusted" && !trustStore.isTrusted(s.name),
+  const pending = listServers().filter(
+    (s) => s.trust !== "trusted" && !store.isTrusted(s.name),
   );
   for (const s of pending) {
     const i = await select(chalk.yellow(`⚠ 是否信任 MCP server ${chalk.bold(s.name)}？`), [
@@ -169,10 +180,10 @@ export async function promptForTrust(rl: readline.Interface): Promise<void> {
       "拒绝",
     ]);
     if (i === 1) {
-      trustStore.markAlways(s.name);
+      store.markAlways(s.name);
       console.log(chalk.green(`✓ 已信任并记住: ${s.name}`));
     } else if (i === 0) {
-      trustStore.markSession(s.name);
+      store.markSession(s.name);
       console.log(chalk.green(`✓ 本次会话信任: ${s.name}`));
     } else {
       console.log(chalk.dim(`✗ 已拒绝: ${s.name}`));
@@ -184,21 +195,21 @@ export async function promptForTrust(rl: readline.Interface): Promise<void> {
 export function toolLabel(name: string, args: unknown): string {
   const a = (args ?? {}) as Record<string, unknown>;
   switch (name) {
-    case "read_file":
-    case "write_file":
-    case "edit_file":
-      return typeof a.file_path === "string" ? a.file_path : "";
+    case "read":
+    case "write":
+    case "edit":
+      return typeof a.path === "string" ? a.path : "";
     case "ls":
       return typeof a.path === "string" ? a.path : ".";
-    case "glob":
     case "grep":
       return typeof a.pattern === "string" ? `pattern="${a.pattern}"` : "";
-    case "execute":
+    case "bash":
       return typeof a.command === "string" ? a.command.slice(0, 80) : "";
-    case "write_todos": {
-      const todos = typeof a.todos === "string" ? a.todos : JSON.stringify(a.todos ?? "");
-      return todos.slice(0, 80);
-    }
+    case "memory_propose":
+      return typeof a.slug === "string" ? a.slug : "";
+    case "memory_search":
+    case "memory_read":
+      return typeof a.query === "string" ? a.query : typeof a.slug === "string" ? a.slug : "";
     default:
       return "";
   }

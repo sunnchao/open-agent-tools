@@ -8,6 +8,7 @@ import {
 } from "./nodeTest.js";
 
 const data: WorkflowNodeData = {
+  id: "llm-1",
   kind: "llm",
   label: "LLM",
   description: "",

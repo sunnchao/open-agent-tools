@@ -17,8 +17,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@open-agent-tools/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "catalog:",
     "@xyflow/react": "^12.11.2",
     "antd": "^6.5.2",
     "lucide-react": "^1.30.0",

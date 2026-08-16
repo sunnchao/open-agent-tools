@@ -44,10 +44,10 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
 | RAG Server     | `@open-agent-tools/rag-server`        | Document ingestion, retrieval, and optional LLM answer API                                |
 | Contracts      | `@open-agent-tools/mcp-contracts`     | Shared Zod contracts for manifests, Prompts, jobs, and Runner I/O                         |
 | Auth           | `@open-agent-tools/mcp-auth`          | API Key generation, parsing, hashing, verification                                        |
-| Pg             | `@open-agent-tools/pg`                | Shared PostgreSQL connection helpers (pg Pool, Drizzle database, error codes)             |
+| Database       | `@open-agent-tools/database`          | Unified database layer: PostgreSQL / MySQL / Redis / Elasticsearch connection helpers    |
 | Node.js Runner | `@open-agent-tools/mcp-nodejs-runner` | Loads handlers inside Tool containers and validates MCP results                           |
 
-The `packages/deepagent` package is a LangGraph-driven Deep Agent adapter used by `apps/cli`. It wraps `createDeepAgent` from `deepagents`, adds HITL interrupt handling, tool-call streaming callbacks, and MCP/time/memory tools.
+The `apps/cli` coding agent runs on a Pi Agent base (`@earendil-works/pi-coding-agent`). `apps/cli/src/app/piRuntime.ts` wraps `createAgentSession`, bridging Pi events to the CLI's streaming callbacks, with HITL permission gating (`tool_call` event), MCP tool loading (`tools/mcpPi.ts`), memory tools (`tools/memoryPi.ts`), and an isolated read-only `task` subagent (`tools/subagentPi.ts`).
 
 ## Key Concepts
 

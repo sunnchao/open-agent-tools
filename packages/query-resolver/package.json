@@ -20,7 +20,11 @@
     "demo": "tsx src/demo.ts"
   },
   "dependencies": {
-    "@langchain/core": "^1.2.3",
-    "zod": "^4.4.3"
-  }
+    "@langchain/core": "catalog:",
+    "zod": "catalog:"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ]
 }

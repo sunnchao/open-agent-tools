@@ -1,18 +1,5 @@
-import {
-  SystemMessage,
-  HumanMessage,
-  AIMessage,
-  ToolMessage,
-  type BaseMessage,
-} from "@langchain/core/messages";
-import type { StructuredToolInterface } from "@langchain/core/tools";
-import {
-  DEEPAGENT_BUILTIN_TOOL_NAMES,
-  isDangerous,
-  listConfiguredServers,
-  trustStore,
-} from "@open-agent-tools/deepagent";
 import chalk from "chalk";
+import type { CliMessage } from "../store/messages.ts";
 import {
   createSession,
   listSessions,
@@ -30,6 +17,26 @@ import {
 import type { MemoryStore } from "../store/memory.ts";
 import { handleMemoryCommand } from "./memoryCommands.ts";
 import { formatTokens } from "../ui/terminal.ts";
+import { listConfiguredMcpServers, mcpTrustStore, type McpServerTrust } from "../tools/mcpPi.ts";
+
+/** 危险工具判断（Pi 名 + deepagents 名，P1.3 工具名统一过渡期兼容两者）。 */
+const DANGEROUS_TOOL_NAMES = new Set([
+  "write",
+  "edit",
+  "bash",
+  "write_file",
+  "edit_file",
+  "execute",
+]);
+
+function isDangerousTool(name: string): boolean {
+  return DANGEROUS_TOOL_NAMES.has(name);
+}
+
+/** MCP 配置/信任存储（P1.4 后统一走 cli 侧 mcpPi）。 */
+function mcpServices(ctx: CliContext) {
+  return ctx.mcpServices ?? { listServers: listConfiguredMcpServers, store: mcpTrustStore };
+}
 
 /** 斜杠命令目录项：用于菜单选择与 /help 展示。 */
 export interface SlashCommandDef {
@@ -130,8 +137,7 @@ function usageLabel(input: number, output: number, reasoning: number): string {
  */
 export interface CliContext {
   currentSession: Session | null;
-  messages: BaseMessage[];
-  allTools: StructuredToolInterface[];
+  messages: CliMessage[];
   projectContext: string | null;
   /** 工具名 → 所属 MCP server 名（内置工具不在其中）。 */
   mcpToolServers: Map<string, string>;
@@ -143,6 +149,15 @@ export interface CliContext {
   memoryStore: MemoryStore;
   /** 复用主 readline 发起命令内交互，避免双 readline 回显。 */
   ask: (question: string) => Promise<string>;
+  /** 同步历史到 Agent 底座；/load /new 时调用。 */
+  setAgentHistory?: (messages: CliMessage[]) => Promise<void>;
+  /** 当前可用工具名（/tools 展示用）。 */
+  allToolNames?: string[];
+  /** MCP 命令依赖；默认使用本地配置和信任存储，测试可注入隔离替身。 */
+  mcpServices?: {
+    listServers: () => Array<{ name: string; trust: McpServerTrust }>;
+    store: Pick<typeof mcpTrustStore, "isTrusted" | "markAlways" | "untrust">;
+  };
 }
 
 /** 处理斜杠命令。返回 true 表示已处理（主循环无需再当作普通对话发给模型）。 */
@@ -156,6 +171,7 @@ export async function handleCommand(input: string, ctx: CliContext): Promise<boo
   if (trimmed === "/new") {
     ctx.currentSession = createSession();
     ctx.messages.length = 0;
+    await ctx.setAgentHistory?.([]);
     console.log(chalk.green(`✓ 新会话已创建: ${ctx.currentSession.id}`));
     return true;
   }
@@ -247,16 +263,21 @@ export async function handleCommand(input: string, ctx: CliContext): Promise<boo
     ctx.currentSession = session;
     ctx.messages.length = 0;
     for (const msg of session.messages) {
-      if (msg.role === "user") ctx.messages.push(new HumanMessage(msg.content));
-      else if (msg.role === "assistant") ctx.messages.push(new AIMessage(msg.content));
-      else if (msg.role === "system") ctx.messages.push(new SystemMessage(msg.content));
+      if (msg.role === "user") ctx.messages.push({ role: "user", content: msg.content });
+      else if (msg.role === "assistant")
+        ctx.messages.push({ role: "assistant", content: msg.content });
+      else if (msg.role === "system") ctx.messages.push({ role: "system", content: msg.content });
       else if (msg.role === "tool") {
-        ctx.messages.push(
-          new ToolMessage({ content: msg.content, tool_call_id: msg.tool_call_id || "" }),
-        );
+        ctx.messages.push({
+          role: "tool",
+          content: msg.content,
+          toolCallId: msg.tool_call_id || "",
+          toolName: msg.tool_name,
+        });
       }
     }
     console.log(chalk.green(`✓ 已加载会话: ${session.title} (${session.messages.length} 条消息)`));
+    await ctx.setAgentHistory?.(ctx.messages);
     return true;
   }
 
@@ -270,6 +291,7 @@ export async function handleCommand(input: string, ctx: CliContext): Promise<boo
       if (ctx.currentSession?.id === sessionId) {
         ctx.currentSession = null;
         ctx.messages.length = 0;
+        await ctx.setAgentHistory?.([]);
       }
     }
     return true;
@@ -277,15 +299,11 @@ export async function handleCommand(input: string, ctx: CliContext): Promise<boo
 
   if (trimmed === "/tools") {
     console.log(chalk.bold("\n可用工具:"));
-    for (const t of ctx.allTools) {
-      const dangerTag = isDangerous(t.name) ? chalk.red(" [需授权]") : "";
-      const src = ctx.mcpToolServers.get(t.name);
+    for (const name of ctx.allToolNames ?? []) {
+      const dangerTag = isDangerousTool(name) ? chalk.red(" [需授权]") : "";
+      const src = ctx.mcpToolServers.get(name);
       const srcTag = src ? chalk.magenta(` (mcp: ${src})`) : "";
-      console.log(`  ${chalk.cyan(t.name)}${dangerTag}${srcTag}`);
-    }
-    for (const name of DEEPAGENT_BUILTIN_TOOL_NAMES) {
-      const dangerTag = isDangerous(name) ? chalk.red(" [需授权]") : "";
-      console.log(`  ${chalk.cyan(name)}${dangerTag}${chalk.dim(" (deepagents)")}`);
+      console.log(`  ${chalk.cyan(name)}${dangerTag}${srcTag}`);
     }
     console.log();
     return true;
@@ -326,9 +344,10 @@ export async function handleCommand(input: string, ctx: CliContext): Promise<boo
   }
 
   if (trimmed === "/mcp") {
+    const { listServers, store } = mcpServices(ctx);
     console.log(chalk.bold("\n已配置的 MCP server:"));
-    for (const s of listConfiguredServers()) {
-      const trusted = trustStore.isTrusted(s.name);
+    for (const s of listServers()) {
+      const trusted = store.isTrusted(s.name);
       const status =
         s.trust === "deny"
           ? chalk.red("deny")
@@ -342,38 +361,41 @@ export async function handleCommand(input: string, ctx: CliContext): Promise<boo
   }
 
   if (trimmed === "/mcp trust") {
-    const servers = listConfiguredServers().filter((s) => s.trust !== "deny");
+    const { listServers, store } = mcpServices(ctx);
+    const servers = listServers().filter((s) => s.trust !== "deny");
     if (servers.length === 0) {
       console.log(chalk.dim("没有可信任的 MCP server（均为 deny）"));
     } else {
-      for (const s of servers) trustStore.markAlways(s.name);
+      for (const s of servers) store.markAlways(s.name);
       console.log(chalk.green(`✓ 已信任全部 server: ${servers.map((s) => s.name).join(", ")}`));
-      void ctx.mcpCleanup().catch(() => {});
-      void ctx.rebuildTools().then(() => console.log(chalk.green("✓ 工具已重新加载\n")));
+      await ctx.rebuildTools();
+      console.log(chalk.green("✓ 工具已重新加载\n"));
     }
     return true;
   }
 
   if (trimmed.startsWith("/mcp trust ")) {
+    const { listServers, store } = mcpServices(ctx);
     const name = trimmed.slice("/mcp trust ".length).trim();
-    const configured = listConfiguredServers().some((s) => s.name === name);
+    const configured = listServers().some((s) => s.name === name);
     if (!configured) {
       console.log(chalk.red(`✗ 未配置的 MCP server: ${name}`));
     } else {
-      trustStore.markAlways(name);
+      store.markAlways(name);
       console.log(chalk.green(`✓ 已信任并记录: ${name}`));
-      void ctx.mcpCleanup().catch(() => {});
-      void ctx.rebuildTools().then(() => console.log(chalk.green("✓ 工具已重新加载\n")));
+      await ctx.rebuildTools();
+      console.log(chalk.green("✓ 工具已重新加载\n"));
     }
     return true;
   }
 
   if (trimmed.startsWith("/mcp untrust ")) {
+    const { store } = mcpServices(ctx);
     const name = trimmed.slice("/mcp untrust ".length).trim();
-    trustStore.untrust(name);
+    store.untrust(name);
     console.log(chalk.dim(`已取消信任: ${name}`));
-    void ctx.mcpCleanup().catch(() => {});
-    void ctx.rebuildTools().then(() => console.log(chalk.green("✓ 工具已重新加载\n")));
+    await ctx.rebuildTools();
+    console.log(chalk.green("✓ 工具已重新加载\n"));
     return true;
   }
 

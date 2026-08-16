@@ -1,12 +1,39 @@
 import chalk from "chalk";
 import ora from "ora";
-import type { AgentCallbacks, ToolCallLike } from "@open-agent-tools/deepagent";
+import type { ToolCallLike } from "../store/messages.ts";
 import { resetMarkdownStream, renderMarkdownStream } from "./markdown.ts";
 import { createClearRenderedLinesSequence, formatTokens } from "./terminal.ts";
 import { addMessage, addSessionUsage, logAudit } from "../store/db.ts";
 import type { PermissionManager } from "../tools/permissions.ts";
 import type { CliContext } from "../commands/commands.ts";
 import { toolLabel } from "./cliUi.ts";
+
+/** 一轮对话的 token 用量汇总（原 deepagent 的 TokenUsage）。 */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
+/** Agent 回调契约（原 deepagent 的 AgentCallbacks，自建以解耦底座）。 */
+export interface AgentCallbacks {
+  onToken?: (text: string) => void;
+  onReasoning?: (text: string) => void;
+  onUsage?: (usage: TokenUsage) => void;
+  onToolCall?: (tc: ToolCallLike) => void;
+  onToolStart?: (tc: ToolCallLike) => void;
+  onToolResult?: (tc: ToolCallLike, resultText: string) => void;
+  onToolDenied?: (tc: ToolCallLike) => void;
+  requestPermission?: (name: string, args: string) => Promise<boolean>;
+  onAudit?: (entry: {
+    source: "builtin" | "mcp";
+    server?: string | null;
+    toolName: string;
+    decision: "allowed" | "denied" | "auto";
+    argsSummary: string;
+    error?: string | null;
+  }) => void;
+}
 
 export interface AgentCallbacksDeps {
   cli: CliContext;
