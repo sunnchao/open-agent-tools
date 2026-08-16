@@ -1,9 +1,9 @@
 import { MarkerType, type Edge } from "@xyflow/react";
-import { defaultConfig, migrateNodeData } from "../../features/workflow/model.js";
+import { defaultConfig, migrateNodeData } from "./model.js";
 import type {
   NodeKind,
   WorkflowConfigValue,
-} from "../../features/workflow/model.js";
+} from "./model.js";
 import { palette } from "./palette.js";
 import type { WorkflowNode, WorkflowSnapshot } from "./types.js";
 

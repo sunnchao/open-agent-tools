@@ -1,1 +1,1 @@
-export { WorkflowWorkspace } from "../../components/workflow/WorkflowWorkspace.js";
+export { WorkflowWorkspace } from "./WorkflowWorkspaceMain.js";

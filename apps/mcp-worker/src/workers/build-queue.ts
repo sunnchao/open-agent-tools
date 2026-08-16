@@ -4,7 +4,7 @@ import {
   type ArtifactInspectionJob,
 } from "@open-agent-tools/mcp-contracts";
 import { Worker, type Job } from "bullmq";
-import { Redis } from "ioredis";
+import { createRedisClient } from "@open-agent-tools/database/redis";
 
 import type {
   ArtifactInspectionResult,
@@ -49,7 +49,7 @@ export function createArtifactInspectionWorker(
   service: ArtifactInspectionService,
   concurrency = 2,
 ): { close: () => Promise<void> } {
-  const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  const connection = createRedisClient(redisUrl, { maxRetriesPerRequest: null }).client;
   const worker = new Worker<ArtifactInspectionJob, ArtifactInspectionResult>(
     MCP_BUILD_QUEUE,
     createArtifactInspectionProcessor(service),
@@ -68,7 +68,7 @@ export function createBuildQueueWorker(
   services: { inspection: ArtifactInspectionService; build: ToolBuildService },
   concurrency = 2,
 ): { close: () => Promise<void> } {
-  const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  const connection = createRedisClient(redisUrl, { maxRetriesPerRequest: null }).client;
   const worker = new Worker<ArtifactInspectionJob, ArtifactInspectionResult | ToolBuildResult>(
     MCP_BUILD_QUEUE,
     createBuildQueueProcessor(services),

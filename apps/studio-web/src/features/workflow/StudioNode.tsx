@@ -1,7 +1,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { CheckCircleFilled, CloseCircleFilled } from "../../lib/icons.js";
-import { nodeInputs, nodeOutputs } from "../../features/workflow/model.js";
-import type { NodeRunStatus, WorkflowNodeData } from "../../features/workflow/model.js";
+import { nodeInputs, nodeOutputs } from "./model.js";
+import type { NodeRunStatus, WorkflowNodeData } from "./model.js";
 import { iconByKind } from "./palette.js";
 import type { WorkflowNode } from "./types.js";
 

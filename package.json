@@ -13,7 +13,8 @@
     "format:check": "prettier --check .",
     "test": "pnpm -r --if-present run test",
     "clean": "pnpm -r --if-present run clean",
-    "typecheck": "pnpm -r --if-present run typecheck"
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "build:deps": "pnpm --filter @open-agent-tools/mcp-auth --filter @open-agent-tools/mcp-contracts --filter @open-agent-tools/database run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
@@ -29,12 +30,5 @@
   "engines": {
     "node": ">=22.5",
     "pnpm": ">=10"
-  },
-  "dependencies": {
-    "@langchain/core": "^1.2.3",
-    "@langchain/openai": "^1.5.5",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "dotenv": "^16.6.1",
-    "langsmith": "^0.8.9"
   }
 }

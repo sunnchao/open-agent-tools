@@ -2,7 +2,7 @@ import type { Edge, Node } from "@xyflow/react";
 import type {
   NodeKind,
   WorkflowNodeData,
-} from "../../features/workflow/model.js";
+} from "./model.js";
 import type { WorkflowTokenUsage } from "../../lib/api.js";
 
 export type WorkflowNode = Node<WorkflowNodeData, "studio">;

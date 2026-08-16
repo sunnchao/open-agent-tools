@@ -8,7 +8,7 @@ import {
   PlayCircleFilled,
   UserOutlined,
 } from "../../lib/icons.js";
-import type { NodeKind } from "../../features/workflow/model.js";
+import type { NodeKind } from "./model.js";
 import type { PaletteItem } from "./types.js";
 
 export const palette: PaletteItem[] = [

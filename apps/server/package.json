@@ -23,13 +23,12 @@
     "@langchain/openai": "catalog:",
     "@langchain/textsplitters": "catalog:",
     "@langfuse/core": "catalog:",
-    "@langfuse/otel": "catalog:",
-    "@langfuse/tracing": "catalog:",
     "@larksuiteoapi/node-sdk": "^1.72.0",
     "@modelcontextprotocol/sdk": "catalog:",
+    "@open-agent-tools/database": "workspace:*",
+    "@open-agent-tools/observability": "workspace:*",
     "@open-agent-tools/rag": "workspace:*",
-    "@opentelemetry/resources": "catalog:",
-    "@opentelemetry/sdk-node": "catalog:",
+    "@open-agent-tools/schema-catalog": "workspace:*",
     "chalk": "catalog:",
     "cors": "catalog:",
     "dotenv": "catalog:",
@@ -37,9 +36,7 @@
     "langchain": "^1.5.4",
     "openai": "^6.48.0",
     "pdf-parse": "^1.1.4",
-    "zod": "catalog:",
-    "@open-agent-tools/schema-catalog": "workspace:*",
-    "@open-agent-tools/database": "workspace:*"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/cors": "catalog:",

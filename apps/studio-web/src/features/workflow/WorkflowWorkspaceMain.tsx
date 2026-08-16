@@ -45,7 +45,7 @@ import {
   testWorkflowNode,
   type WorkflowNodeTestResult,
 } from "../../lib/api.js";
-import { createNodeTestInputDraft, parseNodeTestValue } from "../../features/workflow/nodeTest.js";
+import { createNodeTestInputDraft, parseNodeTestValue } from "./nodeTest.js";
 import {
   nodeInputs,
   validateWorkflowGraph,
@@ -53,7 +53,7 @@ import {
   type WorkflowConfigValue,
   type WorkflowNodeData,
   type WorkflowValidationIssue,
-} from "../../features/workflow/model.js";
+} from "./model.js";
 import {
   createEdge,
   createNode,

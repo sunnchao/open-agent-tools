@@ -1,11 +1,13 @@
 packages:
   - "apps/*"
   - "packages/*"
+  # function-tools 是聚合目录：每个子目录是独立 npm 工具包（自带 package-lock），不作为 workspace 包。
   - "!packages/function-tools"
   - "runtimes/*/*"
 
 catalog:
   "@aws-sdk/client-s3": ^3.883.0
+  "@aws-sdk/s3-request-presigner": ^3.883.0
   "@langchain/community": ^1.1.29
   "@langchain/core": ^1.2.3
   "@langchain/openai": ^1.5.5

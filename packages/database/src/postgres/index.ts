@@ -14,3 +14,5 @@ export {
   isPostgresError,
   isUniqueViolation,
 } from "./errors.js";
+/** 底层 pg 类型透传：业务层无需直接依赖 `pg` 包即可使用 Pool / PoolClient。 */
+export type { Pool, PoolClient, PoolConfig, QueryResult, QueryResultRow } from "pg";

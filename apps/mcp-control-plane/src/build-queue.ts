@@ -4,7 +4,7 @@ import {
   type ArtifactInspectionJob,
 } from "@open-agent-tools/mcp-contracts";
 import { Queue } from "bullmq";
-import { Redis } from "ioredis";
+import { createRedisClient } from "@open-agent-tools/database/redis";
 
 import type { ArtifactInspectionQueue } from "./artifact-upload.js";
 
@@ -57,7 +57,7 @@ export function createArtifactInspectionQueue(redisUrl: string): {
   queue: BullMqArtifactInspectionQueue;
   close: () => Promise<void>;
 } {
-  const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  const connection = createRedisClient(redisUrl, { maxRetriesPerRequest: null }).client;
   const queue = new Queue<ArtifactInspectionJob>(MCP_BUILD_QUEUE, { connection });
   return {
     queue: new BullMqArtifactInspectionQueue(queue),

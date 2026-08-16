@@ -7,8 +7,8 @@ import {
   PauseCircleOutlined,
   PlayCircleOutlined,
 } from "../../lib/icons.js";
-import { nodeOutputs } from "../../features/workflow/model.js";
-import { formatWorkflowRunOutput } from "../../features/workflow/runOutput.js";
+import { nodeOutputs } from "./model.js";
+import { formatWorkflowRunOutput } from "./runOutput.js";
 import { formatNodeTestDuration } from "./format.js";
 import type { RunLogEntry, WorkflowNode } from "./types.js";
 import type { Edge } from "@xyflow/react";

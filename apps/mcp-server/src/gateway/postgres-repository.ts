@@ -3,7 +3,7 @@ import {
   ManagedToolSchema,
   PromptDefinitionSchema,
 } from "@open-agent-tools/mcp-contracts";
-import type { Pool } from "pg";
+import { createPostgresPool, type Pool } from "@open-agent-tools/database/postgres";
 import { z } from "zod";
 import type {
   ApiClientRecord,
@@ -14,7 +14,6 @@ import type {
   McpScope,
   ServiceSummary,
 } from "./repository.js";
-import { createPostgresPool } from "@open-agent-tools/database/postgres";
 
 const ClientStatusSchema = z.enum(["ACTIVE", "REVOKED"]);
 const KeyStatusSchema = z.enum(["ACTIVE", "REVOKED"]);

@@ -1,7 +1,8 @@
 import { config as loadEnv } from "dotenv";
 import { resolve } from "node:path";
-// 必须在任何使用 @langfuse/* 的模块之前加载并初始化 Langfuse（读取 LANGFUSE_* 环境变量）。
-import "./instrumentation.js";
+// 必须在任何使用 @langfuse/* 的模块之前初始化 Langfuse（读取 LANGFUSE_* 环境变量）。
+import { initLangfuse } from "@open-agent-tools/observability";
+initLangfuse({ serviceName: "open-agent-server", envRoot: "../" });
 import { createApp } from "./app.js";
 import { port } from "./config.js";
 import { getDbPath, openDb } from "./db.js";

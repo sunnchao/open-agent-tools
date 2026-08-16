@@ -25,7 +25,7 @@ import {
   withTraceAttributes,
   slimValue,
   type ObservationHandle,
-} from "../tracing.js";
+} from "@open-agent-tools/observability";
 
 export const chatRouter: ReturnType<typeof Router> = Router();
 

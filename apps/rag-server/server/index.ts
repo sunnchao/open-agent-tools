@@ -12,8 +12,8 @@ import { querySources } from "./query-settings.js";
 import { buildCragController, graphRouter } from "./graph.js";
 import { GraphLifecycle } from "./lifecycle.js";
 // Langfuse 必须在创建 LangChain 模型（llm/embeddings）之前初始化并附加 CallbackHandler。
-import "./instrumentation.js";
-import { runTraced, withTraceAttributes } from "./tracing.js";
+import { initLangfuse, runTraced, withTraceAttributes } from "@open-agent-tools/observability";
+initLangfuse({ serviceName: "open-agent-rag-server", envRoot: "../" });
 
 loadEnv({ path: resolve(import.meta.dirname, "../.env") });
 loadEnv({ path: resolve(import.meta.dirname, "../.env.local"), override: true });

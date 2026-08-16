@@ -1,6 +1,6 @@
 import { CloseOutlined, PlayCircleOutlined } from "../../lib/icons.js";
-import { nodeInputs } from "../../features/workflow/model.js";
-import { describeNodeTestInputSource } from "../../features/workflow/nodeTest.js";
+import { nodeInputs } from "./model.js";
+import { describeNodeTestInputSource } from "./nodeTest.js";
 import type { WorkflowNode } from "./types.js";
 
 export function NodeTestInputDialog({

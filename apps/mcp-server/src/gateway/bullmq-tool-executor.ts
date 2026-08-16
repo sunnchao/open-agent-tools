@@ -1,7 +1,7 @@
 import { ToolExecutionJobSchema } from "@open-agent-tools/mcp-contracts";
 import { CallToolResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { Queue, QueueEvents } from "bullmq";
-import { Redis } from "ioredis";
+import { createRedisClient } from "@open-agent-tools/database/redis";
 
 import type { ToolExecutionRequest, ToolExecutor } from "./tool-executor.js";
 
@@ -63,8 +63,8 @@ export function createBullMqToolExecutor(redisUrl: string): {
   executor: BullMqToolExecutor;
   close: () => Promise<void>;
 } {
-  const queueConnection = new Redis(redisUrl, { maxRetriesPerRequest: null });
-  const eventConnection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  const queueConnection = createRedisClient(redisUrl, { maxRetriesPerRequest: null }).client;
+  const eventConnection = createRedisClient(redisUrl, { maxRetriesPerRequest: null }).client;
   const queue = new Queue<ToolExecutionRequest>(TOOL_EXECUTION_QUEUE, {
     connection: queueConnection,
   });

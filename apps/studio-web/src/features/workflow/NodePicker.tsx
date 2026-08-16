@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { CloseOutlined, SearchOutlined } from "../../lib/icons.js";
 import { iconByKind, palette } from "./palette.js";
-import type { NodeKind } from "../../features/workflow/model.js";
+import type { NodeKind } from "./model.js";
 import type { NodePickerState } from "./types.js";
 
 export function NodePicker({

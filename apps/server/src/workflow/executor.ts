@@ -7,7 +7,7 @@ import {
   withTraceAttributes,
   slimValue,
   type ObservationKind,
-} from "../tracing.js";
+} from "@open-agent-tools/observability";
 import { logTrace } from "../trace.js";
 
 export type WorkflowNodeKind =

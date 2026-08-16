@@ -6,36 +6,36 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "prebuild": "pnpm --filter @open-agent-tools/mcp-auth build && pnpm --filter @open-agent-tools/mcp-contracts build && pnpm --filter @open-agent-tools/database build",
+    "prebuild": "pnpm -w run build:deps",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "pretypecheck": "pnpm --filter @open-agent-tools/mcp-auth build && pnpm --filter @open-agent-tools/mcp-contracts build && pnpm --filter @open-agent-tools/database build",
+    "pretypecheck": "pnpm -w run build:deps",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "pretest": "pnpm --filter @open-agent-tools/mcp-auth build && pnpm --filter @open-agent-tools/mcp-contracts build && pnpm --filter @open-agent-tools/database build",
+    "pretest": "pnpm -w run build:deps",
     "test": "tsx --test --test-concurrency=1",
     "clean": "rm -rf dist",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "catalog:",
+    "@aws-sdk/s3-request-presigner": "catalog:",
+    "@open-agent-tools/database": "workspace:*",
     "@open-agent-tools/mcp-auth": "workspace:*",
     "@open-agent-tools/mcp-contracts": "workspace:*",
-    "@aws-sdk/client-s3": "catalog:",
-    "@aws-sdk/s3-request-presigner": "^3.883.0",
     "bullmq": "catalog:",
     "dotenv": "catalog:",
     "drizzle-orm": "catalog:",
     "express": "catalog:",
-    "ioredis": "catalog:",
     "jose": "^6.1.0",
-    "pg": "catalog:",
-    "zod": "catalog:",
-    "@open-agent-tools/database": "workspace:*"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/express": "catalog:",
     "@types/pg": "catalog:",
-    "drizzle-kit": "^0.31.4"
+    "drizzle-kit": "^0.31.4",
+    "ioredis": "catalog:",
+    "pg": "catalog:"
   }
 }

@@ -5,8 +5,11 @@ import {
   type ArtifactInspectionJob,
   type ManagedMcpManifest,
 } from "@open-agent-tools/mcp-contracts";
-import type { Pool, PoolClient } from "pg";
-import { createPostgresPool } from "@open-agent-tools/database/postgres";
+import {
+  createPostgresPool,
+  type Pool,
+  type PoolClient,
+} from "@open-agent-tools/database/postgres";
 
 import type {
   ArtifactInspectionRepository,

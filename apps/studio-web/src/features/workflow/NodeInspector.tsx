@@ -6,7 +6,7 @@ import {
 import type { ProviderMetadata } from "../../features/providers/api.js";
 import type { ResourceCatalog } from "../../features/resources/api.js";
 import type { WorkflowNodeTestResult } from "../../lib/api.js";
-import type { WorkflowConfigValue } from "../../features/workflow/model.js";
+import type { WorkflowConfigValue } from "./model.js";
 import { iconByKind, palette } from "./palette.js";
 import { VariableBindingsEditor } from "./VariableBindingsEditor.js";
 import { NodeTestResultPanel } from "./NodeTestResultPanel.js";

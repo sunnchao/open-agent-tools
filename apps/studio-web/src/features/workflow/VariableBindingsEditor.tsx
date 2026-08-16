@@ -1,9 +1,9 @@
 import { DeleteOutlined, PlusOutlined } from "../../lib/icons.js";
-import { nodeInputs, nodeOutputs } from "../../features/workflow/model.js";
+import { nodeInputs, nodeOutputs } from "./model.js";
 import type {
   NodeInputBinding,
   NodeOutputBinding,
-} from "../../features/workflow/model.js";
+} from "./model.js";
 import type { Edge } from "@xyflow/react";
 import type { WorkflowNode } from "./types.js";
 

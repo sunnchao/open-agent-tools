@@ -1,7 +1,7 @@
 import { ToolExecutionJobSchema, type ToolExecutionJob } from "@open-agent-tools/mcp-contracts";
 import { CallToolResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { Worker } from "bullmq";
-import { Redis } from "ioredis";
+import { createRedisClient } from "@open-agent-tools/database/redis";
 
 export const TOOL_EXECUTION_QUEUE = "mcp-tool-execution";
 
@@ -32,7 +32,7 @@ export function createToolExecutionWorker(
   runtime: ToolContainerRuntime,
   concurrency = 4,
 ): { close: () => Promise<void> } {
-  const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  const connection = createRedisClient(redisUrl, { maxRetriesPerRequest: null }).client;
   const processor = new ToolExecutionProcessor(runtime);
   const worker = new Worker(TOOL_EXECUTION_QUEUE, async (job) => processor.process(job.data), {
     connection,

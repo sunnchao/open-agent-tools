@@ -1,5 +1,5 @@
 import { CopyOutlined, PlayCircleOutlined } from "../../lib/icons.js";
-import { formatWorkflowRunOutput } from "../../features/workflow/runOutput.js";
+import { formatWorkflowRunOutput } from "./runOutput.js";
 import type { WorkflowNodeTestResult } from "../../lib/api.js";
 import { formatNodeTestDuration, formatNodeTestTime } from "./format.js";
 
