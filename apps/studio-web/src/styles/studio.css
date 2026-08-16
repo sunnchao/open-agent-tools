@@ -5756,7 +5756,7 @@ select:focus-visible {
 
 .composer-select {
   min-width: 0;
-  max-width: min(220px, 100%);
+  max-width: min(260px, 100%);
 }
 
 .composer-select .ant-select-selector {
@@ -5776,6 +5776,17 @@ select:focus-visible {
 
 .composer-select:hover .ant-select-selector {
   background: var(--studio-surface-raised) !important;
+}
+
+/* 模型下拉：完整展示模型名（弹层自适应宽度，超长自动换行不截断） */
+.composer-select-popup {
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.composer-select-popup .ant-select-item-option-content {
+  overflow: visible;
+  white-space: normal;
+  word-break: break-word;
 }
 
 @media (max-width: 1100px) {

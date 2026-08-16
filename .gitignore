@@ -38,8 +38,6 @@ temp
 
 docs/**
 !docs/superpowers/
-!docs/superpowers/specs/
-!docs/superpowers/specs/2026-08-10-cli-pi-migration-design.md
 .playwright-cli/*
 
 schema-catalog*.json

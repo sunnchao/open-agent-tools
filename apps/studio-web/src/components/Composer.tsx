@@ -31,6 +31,16 @@ export interface ComposerHandle {
   focus: () => void;
 }
 
+/** 按 12px 字号粗略估算文本渲染宽度（px），用于让模型下拉触发框自适应模型名长度。 */
+function estimateTextWidth(text: string): number {
+  let width = 0;
+  for (const ch of text) {
+    // 全角字符（中文等）按两倍宽度估算，其余按平均字符宽度估算
+    width += ch.charCodeAt(0) > 0xff ? 12 : 7;
+  }
+  return width;
+}
+
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   {
     value,
@@ -76,6 +86,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   const modelOptions = [...new Set([selectedModel, ...(selectedProvider?.models ?? [])])].filter(
     Boolean,
   );
+  // 模型名可能很长：让触发框宽度随选中模型自适应，避免截断显示
+  const modelSelectWidth = Math.min(Math.max(120, estimateTextWidth(selectedModel) + 36), 260);
 
   const resourceCount = resources.rag.sources.length + resources.mcpTools.length;
 
@@ -151,11 +163,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   size="small"
                   variant="borderless"
                   value={selectedModel}
-                  options={modelOptions.map((m) => ({ value: m, label: m }))}
-                  style={{ minWidth: 120, maxWidth: 220 }}
+                  options={modelOptions.map((m) => ({ value: m, label: m, title: m }))}
+                  style={{ width: modelSelectWidth }}
                   placeholder="模型"
-                  title="模型"
+                  title={selectedModel}
                   className="composer-select"
+                  popupMatchSelectWidth={false}
+                  classNames={{ popup: { root: "composer-select-popup" } }}
                   onChange={(val) => onRoutingChange({ model: val })}
                 />
               ) : null}
