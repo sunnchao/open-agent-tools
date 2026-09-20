@@ -3,11 +3,12 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
   Background,
+  ConnectionMode,
   Controls,
+  Handle,
   MarkerType,
   ReactFlow,
   ReactFlowProvider,
-  type Edge,
   type Node,
   type NodeProps,
   type NodeTypes,
@@ -29,11 +30,20 @@ import {
   retrieveGraph,
   syncStatus,
   type EntityInfo,
+  type GraphEdge,
   type GraphExport,
   type GraphNode,
   type RelationTypeStat,
   type SyncStatus,
 } from "./api.js";
+import { RelationEdge } from "./RelationEdge.js";
+import {
+  parallelCurveOffsets,
+  RELATION_PORTS,
+  relationPortsForNodes,
+  rerouteRelationEdges,
+  type RelationFlowEdge,
+} from "./relationRouting.js";
 
 /** 实体类型 → 配色（浅色主题）。 */
 const TYPE_COLORS: Record<string, { fill: string; stroke: string; text: string }> = {
@@ -61,6 +71,7 @@ function GraphNodeView({ data }: NodeProps<GraphFlowNode>) {
   const color = colorFor(data.type);
   return (
     <div
+      className="graph-node"
       style={{
         background: color.fill,
         border: `1px solid ${color.stroke}`,
@@ -74,11 +85,30 @@ function GraphNodeView({ data }: NodeProps<GraphFlowNode>) {
     >
       <div style={{ fontWeight: 500, color: color.text, whiteSpace: "nowrap" }}>{data.name}</div>
       <div style={{ fontSize: 10, color: color.stroke, marginTop: 2 }}>{data.type}</div>
+      {RELATION_PORTS.map((port) => (
+        <Handle
+          key={`${port.name}-target`}
+          id={`${port.name}-target`}
+          type="target"
+          position={port.position}
+          isConnectable={false}
+        />
+      ))}
+      {RELATION_PORTS.map((port) => (
+        <Handle
+          key={`${port.name}-source`}
+          id={`${port.name}-source`}
+          type="source"
+          position={port.position}
+          isConnectable={false}
+        />
+      ))}
     </div>
   );
 }
 
 const nodeTypes: NodeTypes = { graphNode: GraphNodeView };
+const edgeTypes = { relation: RelationEdge };
 
 /** 简单环形布局：seed 居中，其余节点围绕排列。 */
 function layoutGraph(exportData: GraphExport): GraphFlowNode[] {
@@ -87,38 +117,59 @@ function layoutGraph(exportData: GraphExport): GraphFlowNode[] {
   return exportData.nodes.map((node) => {
     const ringIndex = ring.findIndex((n) => n.id === node.id);
     const isCenter = node.id === centerId;
-    const angle = ringIndex >= 0 ? (ringIndex / Math.max(1, ring.length)) * Math.PI * 2 : 0;
-    const radius = 160;
+    const ringNumber = ringIndex >= 0 ? Math.floor(ringIndex / 12) : 0;
+    const indexInRing = ringIndex >= 0 ? ringIndex % 12 : 0;
+    const countInRing = Math.min(12, Math.max(1, ring.length - ringNumber * 12));
+    const angle = (indexInRing / countInRing) * Math.PI * 2 - Math.PI / 2;
+    const radius = 160 + ringNumber * 110;
     return {
       id: `node-${node.id}`,
       type: "graphNode",
       position: isCenter
-        ? { x: 300, y: 200 }
+        ? { x: 320, y: 210 }
         : {
-            x: 300 + Math.cos(angle) * radius - 40,
-            y: 200 + Math.sin(angle) * radius - 24,
+            x: 320 + Math.cos(angle) * radius - 40,
+            y: 210 + Math.sin(angle) * radius - 24,
           },
       data: { name: node.name, type: node.type, entityId: node.id },
     };
   });
 }
 
-function edgesFrom(exportData: GraphExport): Edge[] {
-  return exportData.edges.map((edge) => ({
-    id: `edge-${edge.id}`,
-    source: `node-${edge.source}`,
-    target: `node-${edge.target}`,
-    label: edge.relType,
-    style: { stroke: "#B4B2A9", strokeWidth: 1 },
-    labelStyle: { fontSize: 10, fill: "#888780" },
-    markerEnd: { type: MarkerType.ArrowClosed, color: "#B4B2A9" },
-  }));
+function edgesFrom(exportData: GraphExport, nodes: GraphFlowNode[]): RelationFlowEdge[] {
+  const offsets = parallelCurveOffsets(exportData.edges);
+  return exportData.edges.map((edge) => {
+    const source = `node-${edge.source}`;
+    const target = `node-${edge.target}`;
+    const ports = relationPortsForNodes(source, target, nodes);
+    return {
+      id: `edge-${edge.id}`,
+      source,
+      target,
+      sourceHandle: ports.sourceHandle,
+      targetHandle: ports.targetHandle,
+      type: "relation",
+      label: edge.relType,
+      data: {
+        relType: edge.relType,
+        rawId: edge.id,
+        curveOffset: offsets.get(edge.id) ?? 0,
+        showLabel: exportData.edges.length <= 24,
+      },
+      interactionWidth: 26,
+      style: { stroke: "#9a978f", strokeWidth: 1.3 },
+      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "#9a978f" },
+    };
+  });
 }
 
 /** 合并子图：按 id 去重合并节点与边。 */
 function mergeExport(current: GraphExport | null, incoming: GraphExport): GraphExport {
   const nodeMap = new Map<string, GraphNode>();
-  const edgeMap = new Map<string, { id: string; source: string; target: string; relType: string; weight: number }>();
+  const edgeMap = new Map<
+    string,
+    { id: string; source: string; target: string; relType: string; weight: number }
+  >();
   for (const group of [current, incoming]) {
     if (!group) continue;
     for (const node of group.nodes) nodeMap.set(node.id, node);
@@ -131,9 +182,21 @@ function mergeExport(current: GraphExport | null, incoming: GraphExport): GraphE
   };
 }
 
-function GraphCanvas({ data, onNodeClick }: { data: GraphExport | null; onNodeClick: (id: string) => void }) {
+function GraphCanvas({
+  data,
+  selectedEdgeId,
+  onNodeClick,
+  onEdgeClick,
+  onPaneClick,
+}: {
+  data: GraphExport | null;
+  selectedEdgeId: string | null;
+  onNodeClick: (id: string) => void;
+  onEdgeClick: (edgeId: string, sourceName: string, targetName: string) => void;
+  onPaneClick: () => void;
+}) {
   const [nodes, setNodes] = useState<GraphFlowNode[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
+  const [edges, setEdges] = useState<RelationFlowEdge[]>([]);
 
   useEffect(() => {
     if (!data) {
@@ -141,18 +204,45 @@ function GraphCanvas({ data, onNodeClick }: { data: GraphExport | null; onNodeCl
       setEdges([]);
       return;
     }
-    setNodes(layoutGraph(data));
-    setEdges(edgesFrom(data));
+    const nextNodes = layoutGraph(data);
+    setNodes(nextNodes);
+    setEdges(edgesFrom(data, nextNodes));
   }, [data]);
+
+  useEffect(() => {
+    const showAll = (data?.edges.length ?? 0) <= 24;
+    setEdges((current) =>
+      current.map((edge) => ({
+        ...edge,
+        data: edge.data
+          ? {
+              ...edge.data,
+              showLabel: showAll || edge.data?.rawId === selectedEdgeId,
+            }
+          : {
+              relType: String(edge.label ?? ""),
+              rawId: edge.id.replace(/^edge-/, ""),
+              curveOffset: 0,
+              showLabel: showAll,
+            },
+      })),
+    );
+  }, [data, selectedEdgeId]);
+
+  useEffect(() => {
+    setEdges((current) => rerouteRelationEdges(current, nodes));
+  }, [nodes]);
 
   const onNodesChange = useCallback<OnNodesChange<GraphFlowNode>>(
     (changes) => setNodes((current) => applyNodeChanges(changes, current)),
     [],
   );
-  const onEdgesChange = useCallback<OnEdgesChange>(
-    (changes) => setEdges((current) => applyEdgeChanges(changes, current)),
+  const onEdgesChange = useCallback<OnEdgesChange<RelationFlowEdge>>(
+    (changes) => setEdges((current) => applyEdgeChanges(changes, current) as RelationFlowEdge[]),
     [],
   );
+
+  const nodeByFlowId = new Map(nodes.map((node) => [node.id, node.data.name]));
 
   return (
     <div style={{ height: "100%", minHeight: 420 }}>
@@ -160,14 +250,27 @@ function GraphCanvas({ data, onNodeClick }: { data: GraphExport | null; onNodeCl
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={(_event, node) => onNodeClick((node.data as GraphNodeData).entityId)}
+        onEdgeClick={(_event, edge) => {
+          onEdgeClick(
+            edge.data?.rawId ?? edge.id.replace(/^edge-/, ""),
+            nodeByFlowId.get(edge.source) ?? "",
+            nodeByFlowId.get(edge.target) ?? "",
+          );
+        }}
+        onPaneClick={onPaneClick}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         nodesDraggable
+        elementsSelectable
+        edgesFocusable
+        connectionMode={ConnectionMode.Loose}
         minZoom={0.3}
         maxZoom={2}
+        proOptions={{ hideAttribution: true }}
       >
         <Background gap={16} />
         <Controls />
@@ -225,6 +328,11 @@ export function GraphWorkspace() {
   const [query, setQuery] = useState("");
   const [exportData, setExportData] = useState<GraphExport | null>(null);
   const [selected, setSelected] = useState<EntityInfo | null>(null);
+  const [selectedRelation, setSelectedRelation] = useState<{
+    edge: GraphEdge;
+    sourceName: string;
+    targetName: string;
+  } | null>(null);
   const [entities, setEntities] = useState<EntityInfo[]>([]);
   const [relTypes, setRelTypes] = useState<RelationTypeStat[]>([]);
   const [busy, setBusy] = useState<"search" | "expand" | "list" | null>(null);
@@ -243,7 +351,10 @@ export function GraphWorkspace() {
   const refreshEntities = useCallback(async () => {
     setBusy("list");
     try {
-      const [entityResult, typeResult] = await Promise.all([listEntities({ limit: 100 }), relationTypes()]);
+      const [entityResult, typeResult] = await Promise.all([
+        listEntities({ limit: 100 }),
+        relationTypes(),
+      ]);
       setEntities(entityResult.entities);
       setRelTypes(typeResult.types);
     } catch (reason) {
@@ -302,13 +413,18 @@ export function GraphWorkspace() {
     setNotice(null);
     try {
       const result = await retrieveGraph(trimmed, 2);
+      setSelected(null);
+      setSelectedRelation(null);
       if (!result.subgraph || result.subgraph.nodes.length === 0) {
         setExportData(null);
         setNotice({ type: "error", text: "知识图谱中未找到相关实体" });
         return;
       }
       setExportData(result.subgraph);
-      setNotice({ type: "success", text: `命中种子: ${result.seeds.map((s) => s.name).join("、") || "无"}` });
+      setNotice({
+        type: "success",
+        text: `命中种子: ${result.seeds.map((s) => s.name).join("、") || "无"}`,
+      });
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
@@ -318,18 +434,29 @@ export function GraphWorkspace() {
 
   const expandEntity = async (entityId: string) => {
     setBusy("expand");
+    setSelectedRelation(null);
     try {
+      const entityName = exportData?.nodes.find((node) => node.id === entityId)?.name ?? entityId;
       const [neighbors, info] = await Promise.all([
         neighborsOf(entityId, 2),
-        listEntities({ search: entityId, limit: 1 }),
+        listEntities({ search: entityName, limit: 20 }),
       ]);
-      setSelected(info.entities[0] ?? null);
+      setSelected(
+        info.entities.find((entity) => entity.id === entityId) ?? info.entities[0] ?? null,
+      );
       setExportData((current) => mergeExport(current, neighbors));
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
       setBusy(null);
     }
+  };
+
+  const selectRelation = (edgeId: string, sourceName: string, targetName: string) => {
+    const edge = exportData?.edges.find((item) => item.id === edgeId);
+    if (!edge) return;
+    setSelected(null);
+    setSelectedRelation({ edge, sourceName, targetName });
   };
 
   const stats = exportData?.stats ?? null;
@@ -361,7 +488,11 @@ export function GraphWorkspace() {
 
       <GraphSyncBar status={sync} syncing={syncing} onReconcile={() => void handleReconcile()} />
 
-      {notice ? <div className={`workspace-notice ${notice.type}`} role="status">{notice.text}</div> : null}
+      {notice ? (
+        <div className={`workspace-notice ${notice.type}`} role="status">
+          {notice.text}
+        </div>
+      ) : null}
 
       <div className="graph-search-bar">
         <SearchOutlined />
@@ -418,26 +549,45 @@ export function GraphWorkspace() {
         <div className="graph-canvas-panel">
           <div className="graph-canvas-heading">
             <span>
-              <ApartmentOutlined /> 子图 {stats ? `${stats.entities} 实体 · ${stats.relations} 关系` : "未检索"}
+              <ApartmentOutlined /> 子图{" "}
+              {stats ? `${stats.entities} 实体 · ${stats.relations} 关系` : "未检索"}
             </span>
             <span className="graph-legend">
               {Object.keys(TYPE_COLORS).map((type) => (
                 <span key={type} className="graph-legend-item">
-                  <span className="graph-legend-dot" style={{ background: colorFor(type).stroke }} />
+                  <span
+                    className="graph-legend-dot"
+                    style={{ background: colorFor(type).stroke }}
+                  />
                   {type}
                 </span>
               ))}
             </span>
           </div>
-          <GraphCanvas data={exportData} onNodeClick={(id) => void expandEntity(id)} />
-          <div className="graph-canvas-hint">点击节点可动态展开 2 跳邻域；拖拽节点调整布局。</div>
+          <GraphCanvas
+            data={exportData}
+            selectedEdgeId={selectedRelation?.edge.id ?? null}
+            onNodeClick={(id) => void expandEntity(id)}
+            onEdgeClick={selectRelation}
+            onPaneClick={() => setSelectedRelation(null)}
+          />
+          <div className="graph-canvas-hint">
+            点击节点展开 2 跳邻域；点击连线查看关系；拖拽节点调整布局。
+          </div>
         </div>
 
         <aside className="graph-inspector">
           <div className="panel-heading">
-            <span>实体详情</span>
+            <span>{selectedRelation ? "关系详情" : "实体详情"}</span>
           </div>
-          {selected ? (
+          {selectedRelation ? (
+            <div className="graph-relation-detail">
+              <span>{selectedRelation.sourceName}</span>
+              <strong>{selectedRelation.edge.relType}</strong>
+              <span>{selectedRelation.targetName}</span>
+              <small>权重 {selectedRelation.edge.weight}</small>
+            </div>
+          ) : selected ? (
             <div className="graph-inspector-content">
               <div className="graph-inspector-name">{selected.name}</div>
               <div className="graph-inspector-type">{selected.type}</div>
@@ -451,11 +601,13 @@ export function GraphWorkspace() {
                   ))}
                 </div>
               ) : (
-                <p className="graph-inspector-empty">该实体暂无附加属性（规则抽取通常无 props）。</p>
+                <p className="graph-inspector-empty">
+                  该实体暂无附加属性（规则抽取通常无 props）。
+                </p>
               )}
             </div>
           ) : (
-            <div className="panel-state">点击图中节点查看实体详情</div>
+            <div className="panel-state">点击图中节点或连线查看详情</div>
           )}
           {relTypes.length > 0 ? (
             <div className="graph-rel-types">

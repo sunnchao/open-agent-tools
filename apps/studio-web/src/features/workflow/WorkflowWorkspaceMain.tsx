@@ -1,10 +1,6 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { runVariables, validVariableName } from "@open-agent-tools/workflow-contracts";
+import { variableNodes, renameVariable } from "./variables.js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   addEdge,
@@ -30,21 +26,20 @@ import {
   EditOutlined,
   ExperimentOutlined,
   PauseCircleOutlined,
+  PanelLeftCloseOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   RedoOutlined,
+  RocketOutlined,
   SaveOutlined,
   SearchOutlined,
   ThunderboltOutlined,
   UndoOutlined,
+  ApiOutlined,
 } from "../../lib/icons.js";
 import { useResourceCatalog } from "../../features/resources/useResourceCatalog.js";
 import { fetchProviders, type ProviderMetadata } from "../../features/providers/api.js";
-import {
-  streamWorkflow,
-  testWorkflowNode,
-  type WorkflowNodeTestResult,
-} from "../../lib/api.js";
+import { streamWorkflow, testWorkflowNode, type WorkflowNodeTestResult } from "../../lib/api.js";
 import { createNodeTestInputDraft, parseNodeTestValue } from "./nodeTest.js";
 import {
   nodeInputs,
@@ -58,12 +53,11 @@ import {
   createEdge,
   createNode,
   historyLimit,
+  hydrateWorkflowSnapshot,
   initialEdges,
   initialNodes,
-  loadSavedGraph,
   snapshotGraph,
   snapshotKey,
-  storageKey,
 } from "./graph.js";
 import { iconByKind, nodeColor, palette } from "./palette.js";
 import { StudioNode } from "./StudioNode.js";
@@ -74,6 +68,12 @@ import { RunPreview } from "./RunPreview.js";
 import { RunInputDialog } from "./RunInputDialog.js";
 import { NodeTestInputDialog } from "./NodeTestInputDialog.js";
 import type { NodePickerState, RunLogEntry, WorkflowNode, WorkflowSnapshot } from "./types.js";
+import {
+  fetchWorkflow,
+  publishWorkflow,
+  saveWorkflowDraft,
+  type WorkflowDetailRecord,
+} from "./api.js";
 
 interface NodeTestDialogState {
   nodeId: string;
@@ -85,24 +85,41 @@ type WorkflowMobileView = "palette" | "canvas" | "inspector";
 const nodeTypes = { studio: StudioNode };
 const edgeTypes = { studio: StudioEdge };
 
-export function WorkflowWorkspace() {
+export function WorkflowEditor({
+  workflowId,
+  onBack,
+  onOpenAccess,
+}: {
+  workflowId: string;
+  onBack: () => void;
+  onOpenAccess: () => void;
+}) {
   return (
     <ReactFlowProvider>
-      <WorkflowCanvas />
+      <WorkflowCanvas workflowId={workflowId} onBack={onBack} onOpenAccess={onOpenAccess} />
     </ReactFlowProvider>
   );
 }
 
-function WorkflowCanvas() {
+function WorkflowCanvas({
+  workflowId,
+  onBack,
+  onOpenAccess,
+}: {
+  workflowId: string;
+  onBack: () => void;
+  onOpenAccess: () => void;
+}) {
   const resources = useResourceCatalog();
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
   const [providerError, setProviderError] = useState<string | null>(null);
-  const saved = useMemo(loadSavedGraph, []);
-  const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(
-    saved?.nodes ?? initialNodes,
-  );
-  const [edges, setEdges, onEdgesChange] = useEdgesState(saved?.edges ?? initialEdges);
-  const [name, setName] = useState(saved?.name ?? "知识库问答工作流");
+  const [workflow, setWorkflow] = useState<WorkflowDetailRecord | null>(null);
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [publishState, setPublishState] = useState<"idle" | "publishing" | "error">("idle");
+  const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [name, setName] = useState("知识库问答工作流");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<WorkflowMobileView>("canvas");
   const [compactLayout, setCompactLayout] = useState(
@@ -120,7 +137,6 @@ function WorkflowCanvas() {
   const [runOutputs, setRunOutputs] = useState<Record<string, Record<string, unknown>> | null>(
     null,
   );
-  const [runInputNames, setRunInputNames] = useState<string[]>([]);
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
   const [showRunInputs, setShowRunInputs] = useState(false);
   const [nodeTestDialog, setNodeTestDialog] = useState<NodeTestDialogState | null>(null);
@@ -134,6 +150,10 @@ function WorkflowCanvas() {
   const nodeTestController = useRef<AbortController | null>(null);
   const flowCanvasRef = useRef<HTMLDivElement>(null);
   const historyTimer = useRef<number | null>(null);
+  const draftRevisionRef = useRef(1);
+  const loadedRef = useRef(false);
+  const savePromiseRef = useRef<Promise<number | null> | null>(null);
+  const pendingSaveRef = useRef(false);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const nameRef = useRef(name);
@@ -221,6 +241,7 @@ function WorkflowCanvas() {
 
   useEffect(
     () => () => {
+      loadedRef.current = false;
       runToken.current += 1;
       runController.current?.abort();
       nodeTestToken.current += 1;
@@ -229,6 +250,47 @@ function WorkflowCanvas() {
     },
     [],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    loadedRef.current = false;
+    setWorkspaceLoading(true);
+    setWorkspaceError(null);
+    void fetchWorkflow(workflowId)
+      .then(({ workflow: loaded }) => {
+        if (cancelled) return;
+        const snapshot = hydrateWorkflowSnapshot(loaded.draft);
+        setWorkflow(loaded);
+        setName(snapshot.name);
+        setNodes(snapshot.nodes);
+        setEdges(snapshot.edges);
+        nodesRef.current = snapshot.nodes;
+        edgesRef.current = snapshot.edges;
+        nameRef.current = snapshot.name;
+        draftRevisionRef.current = loaded.app.draftRevision;
+        historyRef.current = [snapshotGraph(snapshot.name, snapshot.nodes, snapshot.edges)];
+        historyIndexRef.current = 0;
+        setHistoryRevision((revision) => revision + 1);
+        setDirty(false);
+        setSaveState("saved");
+        loadedRef.current = true;
+        window.requestAnimationFrame(() => {
+          void fitView({ padding: 0.18, minZoom: 0.25, maxZoom: 0.9, duration: 180 });
+        });
+      })
+      .catch((reason) => {
+        if (!cancelled) {
+          setWorkspaceError(reason instanceof Error ? reason.message : "工作流加载失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      loadedRef.current = false;
+    };
+  }, [fitView, setEdges, setNodes, workflowId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -264,22 +326,50 @@ function WorkflowCanvas() {
     };
   }, [commitHistory, editRevision]);
 
-  useEffect(() => {
-    if (!dirty) return;
-    const timer = window.setTimeout(() => {
+  const persistDraft = useCallback((): Promise<number | null> => {
+    if (!loadedRef.current) return Promise.resolve(null);
+    if (savePromiseRef.current) {
+      pendingSaveRef.current = true;
+      return savePromiseRef.current;
+    }
+    const operation = (async () => {
+      let latestRevision: number | null = draftRevisionRef.current;
       try {
-        localStorage.setItem(
-          storageKey,
-          JSON.stringify(snapshotGraph(nameRef.current, nodesRef.current, edgesRef.current)),
-        );
+        do {
+          pendingSaveRef.current = false;
+          const snapshot = snapshotGraph(nameRef.current, nodesRef.current, edgesRef.current);
+          const savedKey = snapshotKey(snapshot);
+          setSaveState("saving");
+          const saved = await saveWorkflowDraft(workflowId, draftRevisionRef.current, snapshot);
+          latestRevision = saved.app.draftRevision;
+          draftRevisionRef.current = saved.app.draftRevision;
+          setWorkflow(saved);
+          const currentKey = snapshotKey(
+            snapshotGraph(nameRef.current, nodesRef.current, edgesRef.current),
+          );
+          if (currentKey !== savedKey) pendingSaveRef.current = true;
+        } while (pendingSaveRef.current);
         setDirty(false);
         setSaveState("saved");
-      } catch {
+        setWorkspaceError(null);
+        return latestRevision;
+      } catch (reason) {
         setSaveState("error");
+        setWorkspaceError(reason instanceof Error ? reason.message : "工作流保存失败");
+        return null;
+      } finally {
+        savePromiseRef.current = null;
       }
-    }, 700);
+    })();
+    savePromiseRef.current = operation;
+    return operation;
+  }, [workflowId]);
+
+  useEffect(() => {
+    if (!dirty || !loadedRef.current) return;
+    const timer = window.setTimeout(() => void persistDraft(), 700);
     return () => window.clearTimeout(timer);
-  }, [dirty, editRevision, historyRevision]);
+  }, [dirty, editRevision, historyRevision, persistDraft]);
 
   const selectedNode = nodes.find((node) => node.id === selectedId) ?? null;
 
@@ -486,6 +576,37 @@ function WorkflowCanvas() {
     updateSelected({ config: { ...selectedNode.data.config, [key]: value } });
   };
 
+  const renameBinding = (
+    kind: "inputs" | "outputs" | "runVariables",
+    index: number,
+    name: string,
+  ) => {
+    if (!selectedNode) return;
+    const items = selectedNode.data.config[kind] as Array<{ name: string }>;
+    const previous = items[index]?.name;
+    const canRename =
+      validVariableName(name) && !items.some((item, i) => i !== index && item.name === name);
+    if (!canRename) return;
+    setNodes((current) => {
+      const updated = current.map((node) =>
+        node.id === selectedNode.id
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                config: {
+                  ...node.data.config,
+                  [kind]: items.map((item, i) => i === index ? { ...item, name } : item),
+                },
+              },
+            }
+          : node,
+      );
+      return previous ? renameVariable(updated, selectedNode.id, kind, previous, name) : updated;
+    });
+    markEdited();
+  };
+
   const updateEdgeLabel = (edgeId: string, label: string) => {
     setEdges((current) =>
       current.map((edge) => (edge.id === edgeId ? { ...edge, label: label || undefined } : edge)),
@@ -540,17 +661,30 @@ function WorkflowCanvas() {
 
   const save = useCallback(() => {
     commitHistory();
-    try {
-      localStorage.setItem(
-        storageKey,
-        JSON.stringify(snapshotGraph(nameRef.current, nodesRef.current, edgesRef.current)),
-      );
-      setDirty(false);
-      setSaveState("saved");
-    } catch {
-      setSaveState("error");
+    void persistDraft();
+  }, [commitHistory, persistDraft]);
+
+  const publish = useCallback(async () => {
+    if (validationIssues.length > 0) {
+      setShowIssues(true);
+      return;
     }
-  }, [commitHistory]);
+    setPublishState("publishing");
+    setWorkspaceError(null);
+    const revision = await persistDraft();
+    if (revision === null) {
+      setPublishState("error");
+      return;
+    }
+    try {
+      const published = await publishWorkflow(workflowId, revision);
+      setWorkflow(published);
+      setPublishState("idle");
+    } catch (reason) {
+      setPublishState("error");
+      setWorkspaceError(reason instanceof Error ? reason.message : "工作流发布失败");
+    }
+  }, [persistDraft, validationIssues.length, workflowId]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -587,16 +721,7 @@ function WorkflowCanvas() {
       setShowIssues(true);
       return;
     }
-    const names = [
-      ...new Set(
-        nodes.flatMap((node) =>
-          nodeInputs(node.data).flatMap((input) =>
-            input.source.type === "run" ? [input.source.variable] : [],
-          ),
-        ),
-      ),
-    ];
-    setRunInputNames(names);
+    const names = runVariables(variableNodes(nodes)).map((variable) => variable.name);
     setRunInputs((current) => Object.fromEntries(names.map((name) => [name, current[name] ?? ""])));
     if (names.length > 0) {
       setShowRunInputs(true);
@@ -792,13 +917,46 @@ function WorkflowCanvas() {
     );
   };
 
+  if (workspaceLoading && !workflow) {
+    return <div className="workflow-screen-state">正在加载工作流...</div>;
+  }
+
+  if (!workflow) {
+    return (
+      <div className="workflow-screen-state is-error">
+        <p>{workspaceError ?? "工作流不存在"}</p>
+        <button className="studio-button secondary" type="button" onClick={onBack}>
+          返回工作流列表
+        </button>
+      </div>
+    );
+  }
+
+  const liveVersion = workflow.versions.find(
+    (version) => version.id === workflow.app.currentVersionId,
+  );
+
   return (
     <section className="workflow-workspace">
       <header className="workflow-toolbar">
         <div className="workflow-title">
+          <button
+            className="workflow-editor-back"
+            type="button"
+            title="返回工作流列表"
+            aria-label="返回工作流列表"
+            onClick={() => void persistDraft().then((revision) => revision !== null && onBack())}
+          >
+            <PanelLeftCloseOutlined />
+          </button>
           <ApartmentMark />
           <div>
-            <span>工作流编排</span>
+            <span>
+              工作流编排
+              <small className={liveVersion ? "is-live" : undefined}>
+                {liveVersion ? `LIVE v${liveVersion.versionNumber}` : "DRAFT"}
+              </small>
+            </span>
             <label>
               <input
                 value={name}
@@ -813,6 +971,11 @@ function WorkflowCanvas() {
           </div>
         </div>
         <div className="workflow-actions">
+          {workspaceError ? (
+            <span className="workflow-toolbar-error" title={workspaceError}>
+              {workspaceError}
+            </span>
+          ) : null}
           <div className="workflow-history-actions" aria-label="编辑历史">
             <button type="button" title="撤销" aria-label="撤销" disabled={!canUndo} onClick={undo}>
               <UndoOutlined />
@@ -886,6 +1049,25 @@ function WorkflowCanvas() {
           </span>
           <button className="studio-button secondary save-button" type="button" onClick={save}>
             <SaveOutlined /> <span>保存</span>
+          </button>
+          <button
+            className="studio-button secondary"
+            type="button"
+            title="API 与版本"
+            onClick={() =>
+              void persistDraft().then((revision) => revision !== null && onOpenAccess())
+            }
+          >
+            <ApiOutlined /> <span>访问点</span>
+          </button>
+          <button
+            className="studio-button primary workflow-publish"
+            type="button"
+            disabled={publishState === "publishing" || running || validationIssues.length > 0}
+            onClick={() => void publish()}
+          >
+            <RocketOutlined />
+            <span>{publishState === "publishing" ? "发布中" : "发布"}</span>
           </button>
           <button
             className={`studio-button run${running ? " is-stop" : ""}`}
@@ -1088,6 +1270,7 @@ function WorkflowCanvas() {
           </div>
           {selectedNode ? (
             <NodeInspector
+              key={selectedNode.id}
               node={selectedNode}
               nodes={nodes}
               edges={edges}
@@ -1096,6 +1279,11 @@ function WorkflowCanvas() {
               updateEdgeLabel={updateEdgeLabel}
               updateNode={updateSelected}
               updateConfig={updateConfig}
+              renameVariable={renameBinding}
+              onManageVariables={() => {
+                const start = nodes.find((node) => node.data.kind === "start");
+                if (start) setSelectedId(start.id);
+              }}
               catalog={resources.catalog}
               loading={resources.loading}
               resourceError={resources.error}
@@ -1133,11 +1321,11 @@ function WorkflowCanvas() {
       {showRunInputs
         ? createPortal(
             <RunInputDialog
-              names={runInputNames}
+              variables={runVariables(variableNodes(nodes))}
               values={runInputs}
               setValues={setRunInputs}
               onCancel={() => setShowRunInputs(false)}
-              onRun={() => void startRun(runInputs)}
+              onRun={(input) => void startRun(input)}
             />,
             document.body,
           )

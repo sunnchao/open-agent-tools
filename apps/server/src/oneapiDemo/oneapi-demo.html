@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>oneapi schema observatory</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #12110e;
+        --bg-2: #1b1a16;
+        --ink: #ece7d8;
+        --muted: #9a9484;
+        --line: #2d2b25;
+        --amber: #e3b341;
+        --cyan: #7ec8c3;
+        --rose: #d4786a;
+        --ok: #8fb573;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); }
+      body {
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        background-image:
+          radial-gradient(1200px 600px at 10% -10%, rgba(227, 179, 65, 0.08), transparent 55%),
+          radial-gradient(900px 500px at 110% 10%, rgba(126, 200, 195, 0.07), transparent 50%),
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.05'/%3E%3C/svg%3E");
+      }
+      .shell {
+        display: grid;
+        grid-template-columns: 340px 1fr 420px;
+        grid-template-rows: auto 1fr;
+        height: 100%;
+        min-height: 100vh;
+      }
+      header {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        padding: 22px 28px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      h1 {
+        font-family: Newsreader, Georgia, serif;
+        font-size: 34px;
+        font-weight: 600;
+        letter-spacing: -0.03em;
+        margin: 0;
+      }
+      h1 span { color: var(--amber); font-style: italic; }
+      .meta { color: var(--muted); font-size: 12px; }
+      aside, main, section { min-height: 0; }
+      aside {
+        padding: 20px 22px;
+        border-right: 1px solid var(--line);
+        overflow: auto;
+      }
+      main {
+        position: relative;
+        overflow: hidden;
+      }
+      #graph {
+        width: 100%;
+        height: 100%;
+        display: block;
+        cursor: grab;
+      }
+      .legend {
+        position: absolute;
+        left: 16px;
+        bottom: 16px;
+        color: var(--muted);
+        font-size: 11px;
+        background: rgba(18, 17, 14, 0.72);
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        max-width: 280px;
+        line-height: 1.5;
+      }
+      .chain-card {
+        margin-top: 16px;
+        border: 1px solid var(--line);
+        background: var(--bg-2);
+        padding: 10px 12px;
+        font-size: 11px;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+      .chain-card strong { color: var(--ink); font-weight: 500; }
+      .chain-card .ref { color: var(--amber); margin: 6px 0 8px; }
+      .chain-card ul { margin: 0; padding-left: 16px; }
+      .chain-card li { margin: 2px 0; }
+      .right {
+        border-left: 1px solid var(--line);
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        overflow: hidden;
+      }
+      label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+      textarea, button, input {
+        font: inherit;
+        color: var(--ink);
+      }
+      textarea {
+        width: 100%;
+        min-height: 92px;
+        background: var(--bg-2);
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+        resize: vertical;
+      }
+      textarea:focus { outline: 1px solid var(--amber); }
+      .row { display: flex; gap: 8px; margin-top: 10px; }
+      button {
+        background: var(--amber);
+        color: #1a160c;
+        border: 0;
+        padding: 8px 12px;
+        cursor: pointer;
+        font-weight: 500;
+      }
+      button.ghost {
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+      .chip {
+        border: 1px solid var(--line);
+        color: var(--muted);
+        padding: 4px 8px;
+        font-size: 11px;
+        cursor: pointer;
+        background: transparent;
+      }
+      .chip:hover { color: var(--ink); border-color: var(--cyan); }
+      .stat {
+        margin-top: 22px;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      .stat b { color: var(--ink); font-weight: 500; }
+      .pane { padding: 16px 18px; overflow: auto; border-bottom: 1px solid var(--line); }
+      .pane h2 {
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin: 0 0 10px;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        line-height: 1.55;
+        color: #d8d2c2;
+      }
+      .sql { color: var(--amber); }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+      }
+      th, td {
+        border-bottom: 1px solid var(--line);
+        padding: 6px 8px;
+        text-align: left;
+        white-space: nowrap;
+        max-width: 180px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      th { color: var(--muted); font-weight: 500; }
+      .err { color: var(--rose); }
+      .ok { color: var(--ok); }
+      .empty { color: var(--muted); font-size: 12px; }
+      .clarify {
+        margin-top: 12px;
+        border-top: 1px dashed var(--line);
+        padding-top: 12px;
+      }
+      .clarify textarea {
+        min-height: 56px;
+        margin-top: 6px;
+      }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <h1>schema <span>observatory</span></h1>
+        <div class="meta" id="headerMeta">oneapi · GraphRAG text2sql 验证页</div>
+      </header>
+      <aside>
+        <label for="q">问一句运营数据</label>
+        <textarea id="q" placeholder="例如：最近消费日志最多的模型是哪些？"></textarea>
+        <div class="row">
+          <button id="run">生成并执行 SQL</button>
+          <button class="ghost" id="rebuild">重建图谱</button>
+        </div>
+        <div class="chips" id="chips"></div>
+        <div class="stat" id="stats">正在加载图谱…</div>
+        <div class="chain-card empty" id="chain">点击连线或表名，高亮引用链并查看表字段</div>
+      </aside>
+      <main>
+        <canvas id="graph"></canvas>
+        <div class="legend">表 = 圆点 · 推断引用 = 边<br>点击连线高亮整条引用链 · 拖拽节点 · 滚轮缩放</div>
+      </main>
+      <section class="right">
+        <div class="pane">
+          <h2>Selected schema</h2>
+          <pre id="schema" class="empty">提问后按意图 / GraphRAG 注入相关表</pre>
+        </div>
+        <div class="pane">
+          <h2>SQL</h2>
+          <pre id="sql" class="sql empty">等待生成</pre>
+        </div>
+        <div class="pane">
+          <h2>Result</h2>
+          <div id="result" class="empty">最多展示 100 行</div>
+          <div id="clarifyBox" class="clarify hidden">
+            <label for="clarify">回答追问后继续生成 SQL</label>
+            <textarea id="clarify" placeholder="例如：渠道表的 weight 字段"></textarea>
+            <div class="row">
+              <button id="continue">继续查询</button>
+              <button class="ghost" id="reset">新问题</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <script>
+      const examples = [
+        "最近消费日志最多的模型是哪些？",
+        "启用状态的用户有多少？",
+        "查看渠道列表和权重",
+        "本月额度消耗前 10 的用户",
+        "有哪些兑换码还没用",
+      ];
+      const chips = document.getElementById("chips");
+      examples.forEach((text) => {
+        const b = document.createElement("button");
+        b.className = "chip";
+        b.textContent = text;
+        b.onclick = () => {
+          document.getElementById("q").value = text;
+          runQuery();
+        };
+        chips.appendChild(b);
+      });
+
+      const canvas = document.getElementById("graph");
+      const ctx = canvas.getContext("2d");
+      let nodes = [];
+      let edges = [];
+      let highlight = new Set();
+      let edgeHighlight = new Set();
+      let selectedEdgeId = null;
+      let tableMeta = new Map();
+      let queryHighlight = new Set();
+      let transform = { x: 0, y: 0, k: 1 };
+      let drag = null;
+      let moved = false;
+      let history = [];
+
+      function resize() {
+        const rect = canvas.parentElement.getBoundingClientRect();
+        canvas.width = rect.width * devicePixelRatio;
+        canvas.height = rect.height * devicePixelRatio;
+        canvas.style.width = rect.width + "px";
+        canvas.style.height = rect.height + "px";
+        ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      function layout(rawNodes, rawEdges) {
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        nodes = rawNodes.map((n, i) => {
+          const angle = (i / Math.max(1, rawNodes.length)) * Math.PI * 2;
+          return {
+            ...n,
+            x: w / 2 + Math.cos(angle) * Math.min(w, h) * 0.28,
+            y: h / 2 + Math.sin(angle) * Math.min(w, h) * 0.28,
+            vx: 0,
+            vy: 0,
+          };
+        });
+        const idMap = new Map(nodes.map((n) => [n.id, n]));
+        edges = rawEdges
+          .map((e) => ({ ...e, s: idMap.get(e.source), t: idMap.get(e.target) }))
+          .filter((e) => e.s && e.t);
+      }
+
+      function tick() {
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        for (let i = 0; i < nodes.length; i += 1) {
+          for (let j = i + 1; j < nodes.length; j += 1) {
+            const a = nodes[i];
+            const b = nodes[j];
+            let dx = a.x - b.x;
+            let dy = a.y - b.y;
+            let dist = Math.hypot(dx, dy) || 0.01;
+            const force = 1800 / (dist * dist);
+            dx /= dist;
+            dy /= dist;
+            a.vx += dx * force;
+            a.vy += dy * force;
+            b.vx -= dx * force;
+            b.vy -= dy * force;
+          }
+        }
+        for (const e of edges) {
+          const dx = e.t.x - e.s.x;
+          const dy = e.t.y - e.s.y;
+          const dist = Math.hypot(dx, dy) || 0.01;
+          const force = (dist - 140) * 0.01;
+          const fx = (dx / dist) * force;
+          const fy = (dy / dist) * force;
+          e.s.vx += fx;
+          e.s.vy += fy;
+          e.t.vx -= fx;
+          e.t.vy -= fy;
+        }
+        for (const n of nodes) {
+          n.vx += (w / 2 - n.x) * 0.004;
+          n.vy += (h / 2 - n.y) * 0.004;
+          n.vx *= 0.82;
+          n.vy *= 0.82;
+          if (drag !== n) {
+            n.x += n.vx;
+            n.y += n.vy;
+          }
+        }
+      }
+
+      function draw() {
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        ctx.clearRect(0, 0, w, h);
+        ctx.save();
+        ctx.translate(transform.x, transform.y);
+        ctx.scale(transform.k, transform.k);
+        const dimmed = highlight.size > 0 || edgeHighlight.size > 0;
+        for (const e of edges) {
+          const selected = e.id === selectedEdgeId;
+          const hot = edgeHighlight.has(e.id) || (highlight.has(e.s.name) && highlight.has(e.t.name));
+          ctx.lineWidth = selected ? 3.2 : hot ? 2 : 1;
+          ctx.strokeStyle = selected
+            ? "rgba(227,179,65,1)"
+            : hot
+              ? "rgba(227,179,65,.85)"
+              : dimmed
+                ? "rgba(126,200,195,.08)"
+                : "rgba(126,200,195,.28)";
+          ctx.beginPath();
+          ctx.moveTo(e.s.x, e.s.y);
+          ctx.lineTo(e.t.x, e.t.y);
+          ctx.stroke();
+          if (selected || hot) {
+            const mx = (e.s.x + e.t.x) / 2;
+            const my = (e.s.y + e.t.y) / 2;
+            ctx.fillStyle = selected ? "#e3b341" : "#c7b07a";
+            ctx.font = "10px IBM Plex Mono";
+            ctx.fillText(e.relType, mx + 6, my - 4);
+          }
+        }
+        for (const n of nodes) {
+          const hot = highlight.has(n.name);
+          ctx.beginPath();
+          ctx.fillStyle = hot ? "#e3b341" : dimmed ? "#3d4a49" : "#7ec8c3";
+          ctx.arc(n.x, n.y, hot ? 7 : 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = hot ? "#ece7d8" : dimmed ? "#5f5b52" : "#9a9484";
+          ctx.font = "12px IBM Plex Mono";
+          ctx.fillText(n.name, n.x + 9, n.y + 4);
+        }
+        ctx.restore();
+      }
+
+      function loop() {
+        tick();
+        draw();
+        requestAnimationFrame(loop);
+      }
+      requestAnimationFrame(loop);
+
+      function worldPoint(ev) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: (ev.clientX - rect.left - transform.x) / transform.k,
+          y: (ev.clientY - rect.top - transform.y) / transform.k,
+        };
+      }
+      function distToSegment(p, a, b) {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len2 = dx * dx + dy * dy || 1;
+        let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+        t = Math.max(0, Math.min(1, t));
+        return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+      }
+      function hitNode(p) {
+        return nodes.find((n) => Math.hypot(n.x - p.x, n.y - p.y) < 12);
+      }
+      function hitEdge(p) {
+        let best = null;
+        let bestDist = 8;
+        for (const e of edges) {
+          const d = distToSegment(p, e.s, e.t);
+          if (d < bestDist) {
+            best = e;
+            bestDist = d;
+          }
+        }
+        return best;
+      }
+      function neighborsOf(name) {
+        const out = [];
+        for (const e of edges) {
+          if (e.s.name === name) out.push(e.t.name);
+          if (e.t.name === name) out.push(e.s.name);
+        }
+        return [...new Set(out)];
+      }
+      function walkChain(startNames, hops = 2) {
+        const seen = new Set(startNames);
+        let frontier = [...startNames];
+        for (let i = 0; i < hops; i += 1) {
+          const next = [];
+          for (const name of frontier) {
+            for (const n of neighborsOf(name)) {
+              if (!seen.has(n)) {
+                seen.add(n);
+                next.push(n);
+              }
+            }
+          }
+          frontier = next;
+        }
+        return seen;
+      }
+      function edgesInSet(names) {
+        const ids = new Set();
+        for (const e of edges) {
+          if (names.has(e.s.name) && names.has(e.t.name)) ids.add(e.id);
+        }
+        return ids;
+      }
+      function formatTable(name) {
+        const meta = tableMeta.get(name);
+        if (!meta) return `<li><strong>${escapeHtml(name)}</strong></li>`;
+        const cols = (meta.columns || [])
+          .slice(0, 8)
+          .map((c) => c.name + (c.comment ? ` ${c.comment}` : ""))
+          .join(" · ");
+        const more = (meta.columns || []).length > 8 ? " …" : "";
+        return `<li><strong>${escapeHtml(name)}</strong> · ~${meta.rows ?? 0} 行<br>${escapeHtml(cols)}${more}</li>`;
+      }
+      function showChain(title, names, focusEdge) {
+        const list = [...names];
+        const html = [
+          `<strong>${escapeHtml(title)}</strong>`,
+          focusEdge
+            ? `<div class="ref">${escapeHtml(focusEdge.s.name)}.${escapeHtml(focusEdge.relType)} → ${escapeHtml(focusEdge.t.name)}</div>`
+            : "",
+          `<ul>${list.map(formatTable).join("")}</ul>`,
+        ].join("");
+        const el = document.getElementById("chain");
+        el.className = "chain-card";
+        el.innerHTML = html;
+        document.getElementById("schema").textContent = list
+          .map((name) => {
+            const meta = tableMeta.get(name);
+            if (!meta) return `### ${name}`;
+            const cols = (meta.columns || [])
+              .map((c) => `  - \`${c.name}\` ${c.type}${c.comment ? ` -- ${c.comment}` : ""}`)
+              .join("\n");
+            return `### \`${name}\`${meta.comment ? ` -- ${meta.comment}` : ""}\n${cols}`;
+          })
+          .join("\n\n");
+        document.getElementById("schema").className = "";
+      }
+      function selectEdge(edge) {
+        selectedEdgeId = edge.id;
+        highlight = walkChain([edge.s.name, edge.t.name], 2);
+        edgeHighlight = edgesInSet(highlight);
+        showChain("引用链", highlight, edge);
+      }
+      function selectNode(node) {
+        selectedEdgeId = null;
+        highlight = walkChain([node.name], 1);
+        edgeHighlight = edgesInSet(highlight);
+        showChain(`表 ${node.name}`, highlight, null);
+      }
+      function clearSelection() {
+        selectedEdgeId = null;
+        highlight = new Set(queryHighlight);
+        edgeHighlight = new Set();
+        document.getElementById("chain").className = "chain-card empty";
+        document.getElementById("chain").textContent = "点击连线或表名，高亮引用链并查看表字段";
+      }
+      canvas.addEventListener("mousedown", (ev) => {
+        moved = false;
+        const p = worldPoint(ev);
+        drag = hitNode(p) || { pan: true, x: ev.clientX, y: ev.clientY };
+        canvas.style.cursor = "grabbing";
+      });
+      window.addEventListener("mousemove", (ev) => {
+        if (!drag) {
+          const p = worldPoint(ev);
+          canvas.style.cursor = hitEdge(p) || hitNode(p) ? "pointer" : "grab";
+          return;
+        }
+        if (drag.pan) {
+          if (Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) > 3) moved = true;
+          transform.x += ev.clientX - drag.x;
+          transform.y += ev.clientY - drag.y;
+          drag.x = ev.clientX;
+          drag.y = ev.clientY;
+        } else {
+          const p = worldPoint(ev);
+          if (Math.hypot(p.x - drag.x, p.y - drag.y) > 3) moved = true;
+          drag.x = p.x;
+          drag.y = p.y;
+          drag.vx = 0;
+          drag.vy = 0;
+        }
+      });
+      window.addEventListener("mouseup", (ev) => {
+        const p = worldPoint(ev);
+        const wasDrag = drag;
+        drag = null;
+        canvas.style.cursor = "grab";
+        if (moved) return;
+        const node = hitNode(p);
+        if (node && (!wasDrag || wasDrag === node || wasDrag.pan)) {
+          selectNode(node);
+          return;
+        }
+        const edge = hitEdge(p);
+        if (edge) {
+          selectEdge(edge);
+          return;
+        }
+        clearSelection();
+      });
+      canvas.addEventListener(
+        "wheel",
+        (ev) => {
+          ev.preventDefault();
+          const factor = ev.deltaY < 0 ? 1.08 : 0.92;
+          const rect = canvas.getBoundingClientRect();
+          const mx = ev.clientX - rect.left;
+          const my = ev.clientY - rect.top;
+          transform.x = mx - (mx - transform.x) * factor;
+          transform.y = my - (my - transform.y) * factor;
+          transform.k *= factor;
+        },
+        { passive: false },
+      );
+
+      async function loadGraph() {
+        const res = await fetch("/api/oneapi-demo/graph");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "图谱加载失败");
+        layout(data.graph.nodes, data.graph.edges);
+        tableMeta = new Map((data.tables || []).map((t) => [t.name, t]));
+        document.getElementById("headerMeta").textContent =
+          `${data.database} · ${data.tables.length} 张表 · ${data.graph.stats.relations} 条推断引用`;
+        document.getElementById("stats").innerHTML =
+          `<b>${data.database}</b><br>采集 ${data.collectedAt}<br>表 ${data.tables.length} / 边 ${data.graph.stats.relations}<br>图谱实体 ${data.stats.entities} · 关系 ${data.stats.relations}`;
+      }
+
+      function renderRows(rows) {
+        if (!rows || rows.length === 0) return '<div class="empty">无数据</div>';
+        const cols = Object.keys(rows[0]);
+        const head = cols.map((c) => `<th>${escapeHtml(c)}</th>`).join("");
+        const body = rows
+          .slice(0, 100)
+          .map((row) => `<tr>${cols.map((c) => `<td title="${escapeHtml(String(row[c] ?? ""))}">${escapeHtml(String(row[c] ?? ""))}</td>`).join("")}</tr>`)
+          .join("");
+        return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+      }
+      function escapeHtml(s) {
+        return s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+      }
+
+      function showClarify(question) {
+        document.getElementById("clarifyBox").classList.remove("hidden");
+        document.getElementById("clarify").value = "";
+        document.getElementById("clarify").placeholder = "针对刚才的追问作答";
+        document.getElementById("clarify").focus();
+      }
+      function hideClarify() {
+        document.getElementById("clarifyBox").classList.add("hidden");
+        document.getElementById("clarify").value = "";
+      }
+      async function runQuery(question, fromClarify) {
+        const text = (question ?? document.getElementById("q").value).trim();
+        if (!text) return;
+        if (!fromClarify) history = [];
+        document.getElementById("sql").textContent = "生成中…";
+        document.getElementById("schema").textContent = "选表中…";
+        document.getElementById("result").innerHTML = '<div class="empty">查询中…</div>';
+        if (!fromClarify) hideClarify();
+        const res = await fetch("/api/oneapi-demo/query", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ question: text, history }),
+        });
+        const data = await res.json();
+        queryHighlight = new Set(data.selectedTables || []);
+        highlight = new Set(queryHighlight);
+        edgeHighlight = edgesInSet(highlight);
+        selectedEdgeId = null;
+        document.getElementById("schema").textContent = data.schemaPrompt || "(空)";
+        document.getElementById("schema").className = "";
+        if (data.sql) {
+          document.getElementById("sql").textContent = data.sql;
+          document.getElementById("sql").className = "sql";
+        } else if (data.clarifying) {
+          document.getElementById("sql").textContent = data.clarifying;
+          document.getElementById("sql").className = "";
+        } else {
+          document.getElementById("sql").textContent = data.error || "未生成";
+          document.getElementById("sql").className = "err";
+        }
+        if (data.error) {
+          document.getElementById("result").innerHTML = `<div class="err">${escapeHtml(data.error)}</div>`;
+          hideClarify();
+        } else if (data.clarifying) {
+          document.getElementById("result").innerHTML = `<div class="empty">${escapeHtml(data.clarifying)}</div>`;
+          history = [...history, { role: "user", content: text }, { role: "assistant", content: data.clarifying }];
+          showClarify(text);
+        } else {
+          document.getElementById("result").innerHTML = renderRows(data.rows);
+          history = [];
+          hideClarify();
+        }
+      }
+
+      document.getElementById("run").onclick = () => runQuery();
+      document.getElementById("continue").onclick = () => {
+        const answer = document.getElementById("clarify").value.trim();
+        if (!answer) return;
+        runQuery(answer, true);
+      };
+      document.getElementById("reset").onclick = () => {
+        history = [];
+        hideClarify();
+        document.getElementById("q").focus();
+      };
+      document.getElementById("clarify").addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+          ev.preventDefault();
+          document.getElementById("continue").click();
+        }
+      });
+      document.getElementById("rebuild").onclick = async () => {
+        document.getElementById("stats").textContent = "重建中…";
+        await fetch("/api/oneapi-demo/rebuild", { method: "POST" });
+        await loadGraph();
+      };
+      loadGraph().catch((err) => {
+        document.getElementById("stats").innerHTML = `<span class="err">${escapeHtml(err.message)}</span>`;
+      });
+    </script>
+  </body>
+</html>

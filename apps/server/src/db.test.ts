@@ -134,4 +134,33 @@ describe("sqlite chat storage", () => {
     assert.equal(reloaded?.messages[1]?.tool_call_id, "call_1");
     assert.equal(reloaded?.messages[1]?.tool_name, "get_financial_reports");
   });
+
+  it("adds schema_name to legacy schema source tables", () => {
+    closeDb();
+    const path = process.env.SQLITE_PATH!;
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      DROP TABLE IF EXISTS schema_sources;
+      CREATE TABLE schema_sources (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        connector TEXT NOT NULL DEFAULT 'mysql',
+        connection_url_enc TEXT NOT NULL,
+        database_name TEXT,
+        table_filter_json TEXT NOT NULL DEFAULT '[]',
+        semantic_profile TEXT NOT NULL DEFAULT 'generic',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    legacy.close();
+
+    const migrated = openDb();
+    const columns = migrated.prepare(`PRAGMA table_info(schema_sources)`).all() as Array<{
+      name: string;
+    }>;
+    assert.ok(columns.some((column) => column.name === "schema_name"));
+  });
 });

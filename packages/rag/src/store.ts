@@ -1,6 +1,21 @@
 import { DatabaseSync } from "node:sqlite";
-import type { Chunk, ChunkInfo, ScoredChunk, VectorStore } from "./types.js";
-import { addCjkSpacing, cosine, deserializeF32, escapeFtsQuery, escapeFtsQueryOr, serializeF32 } from "./utils.js";
+import type {
+  Chunk,
+  ChunkInfo,
+  DocumentInfo,
+  DocumentMetadataPatch,
+  DocumentWriteMetadata,
+  ScoredChunk,
+  VectorStore,
+} from "./types.js";
+import {
+  addCjkSpacing,
+  cosine,
+  deserializeF32,
+  escapeFtsQuery,
+  escapeFtsQueryOr,
+  serializeF32,
+} from "./utils.js";
 
 export interface SqliteStoreOptions {
   /** SQLite 数据库文件路径，如 "./rag.db"。 */
@@ -16,8 +31,57 @@ interface ChunkRow {
   embedding: Uint8Array;
 }
 
+interface DocumentRow {
+  source: string;
+  title: string;
+  tags_json: string;
+  mime_type: string;
+  byte_size: number;
+  content_hash: string;
+  chunk_count: number;
+  version: number;
+  chunk_strategy: string;
+  chunk_size: number;
+  chunk_overlap: number;
+  separators_json: string;
+  semantic_threshold: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 function toChunk(r: ChunkRow): Chunk {
   return { id: r.id, source: r.source, chunkIndex: r.chunk_index, content: r.content };
+}
+
+function parseStringArray(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function toDocument(r: DocumentRow): DocumentInfo {
+  return {
+    source: r.source,
+    title: r.title,
+    tags: parseStringArray(r.tags_json),
+    mimeType: r.mime_type,
+    byteSize: r.byte_size,
+    contentHash: r.content_hash,
+    chunks: r.chunk_count,
+    version: r.version,
+    chunkStrategy: r.chunk_strategy === "semantic" ? "semantic" : "fixed",
+    chunkSize: r.chunk_size,
+    chunkOverlap: r.chunk_overlap,
+    separators: parseStringArray(r.separators_json),
+    semanticThreshold: r.semantic_threshold,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
 }
 
 /**
@@ -31,6 +95,7 @@ export class SqliteVectorStore implements VectorStore {
 
   constructor(opts: SqliteStoreOptions) {
     this.db = new DatabaseSync(opts.dbPath);
+    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS chunks (
         rowid       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +107,27 @@ export class SqliteVectorStore implements VectorStore {
       );
       CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);
       CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(content);
+      CREATE TABLE IF NOT EXISTS documents (
+        source          TEXT PRIMARY KEY,
+        title           TEXT NOT NULL,
+        tags_json       TEXT NOT NULL DEFAULT '[]',
+        mime_type       TEXT NOT NULL DEFAULT 'application/octet-stream',
+        byte_size       INTEGER NOT NULL DEFAULT 0,
+        content_hash    TEXT NOT NULL DEFAULT '',
+        chunk_count     INTEGER NOT NULL DEFAULT 0,
+        version         INTEGER NOT NULL DEFAULT 1,
+        chunk_strategy  TEXT NOT NULL DEFAULT 'fixed',
+        chunk_size      INTEGER NOT NULL DEFAULT 500,
+        chunk_overlap   INTEGER NOT NULL DEFAULT 50,
+        separators_json TEXT NOT NULL DEFAULT '[]',
+        semantic_threshold REAL,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at DESC);
     `);
+    this.ensureDocumentColumns();
+    this.migrateLegacyDocuments();
   }
 
   insert(chunk: Chunk, embedding: Float32Array): void {
@@ -56,6 +141,72 @@ export class SqliteVectorStore implements VectorStore {
     this.db
       .prepare(`INSERT INTO chunks_fts (rowid, content) VALUES (?, ?)`)
       .run(rowid, addCjkSpacing(chunk.content)); // 索引 CJK 单字分词版，chunks.content 仍存原文
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO documents (
+           source, title, tags_json, mime_type, byte_size, content_hash, chunk_count,
+           version, chunk_strategy, chunk_size, chunk_overlap, separators_json,
+           semantic_threshold, created_at, updated_at
+         ) VALUES (?, ?, '[]', 'application/octet-stream', 0, '', 1, 1, 'fixed', 500, 50, '[]', NULL, ?, ?)
+         ON CONFLICT(source) DO UPDATE SET
+           chunk_count = (SELECT COUNT(*) FROM chunks WHERE source = excluded.source),
+           updated_at = excluded.updated_at`,
+      )
+      .run(chunk.source, chunk.source, now, now);
+  }
+
+  /** 向量生成成功后一次性替换来源，任何写入失败都会回滚并保留旧版本。 */
+  replaceSource(
+    source: string,
+    rows: Array<{ chunk: Chunk; embedding: Float32Array }>,
+    metadata: DocumentWriteMetadata,
+  ): void {
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.deleteSourceRows(source);
+      for (const { chunk, embedding } of rows) this.insertChunkRow(chunk, embedding);
+      this.db
+        .prepare(
+          `INSERT INTO documents (
+             source, title, tags_json, mime_type, byte_size, content_hash, chunk_count,
+             version, chunk_strategy, chunk_size, chunk_overlap, separators_json,
+             semantic_threshold, created_at, updated_at
+           ) VALUES (?, ?, '[]', ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(source) DO UPDATE SET
+             mime_type = excluded.mime_type,
+             byte_size = excluded.byte_size,
+             content_hash = excluded.content_hash,
+             chunk_count = excluded.chunk_count,
+             version = documents.version + 1,
+             chunk_strategy = excluded.chunk_strategy,
+             chunk_size = excluded.chunk_size,
+             chunk_overlap = excluded.chunk_overlap,
+             separators_json = excluded.separators_json,
+             semantic_threshold = excluded.semantic_threshold,
+             updated_at = excluded.updated_at`,
+        )
+        .run(
+          source,
+          source,
+          metadata.mimeType,
+          metadata.byteSize,
+          metadata.contentHash,
+          rows.length,
+          metadata.chunkStrategy,
+          metadata.chunkSize,
+          metadata.chunkOverlap,
+          JSON.stringify(metadata.separators),
+          metadata.semanticThreshold,
+          now,
+          now,
+        );
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   vectorSearch(embedding: number[], k: number, sources?: readonly string[]): ScoredChunk[] {
@@ -90,9 +241,7 @@ export class SqliteVectorStore implements VectorStore {
 
   private matchQuery(query: string, k: number, sources?: readonly string[]): ScoredChunk[] {
     if (!query.trim()) return [];
-    const sourceFilter = sources
-      ? ` AND c.source IN (${sources.map(() => "?").join(", ")})`
-      : "";
+    const sourceFilter = sources ? ` AND c.source IN (${sources.map(() => "?").join(", ")})` : "";
     const rows = this.db
       .prepare(
         `SELECT c.rowid, c.id, c.source, c.chunk_index, c.content,
@@ -109,19 +258,45 @@ export class SqliteVectorStore implements VectorStore {
   }
 
   removeBySource(source: string): void {
-    this.db
-      .prepare(
-        `DELETE FROM chunks_fts WHERE rowid IN (SELECT rowid FROM chunks WHERE source = ?)`,
-      )
-      .run(source);
-    this.db.prepare(`DELETE FROM chunks WHERE source = ?`).run(source);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.deleteSourceRows(source);
+      this.db.prepare(`DELETE FROM documents WHERE source = ?`).run(source);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   listSources(): string[] {
     const rows = this.db
-      .prepare(`SELECT DISTINCT source FROM chunks ORDER BY source`)
+      .prepare(`SELECT source FROM documents ORDER BY source`)
       .all() as unknown as Array<{ source: string }>;
     return rows.map((r) => r.source);
+  }
+
+  listDocuments(): DocumentInfo[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM documents ORDER BY updated_at DESC, source`)
+      .all() as unknown as DocumentRow[];
+    return rows.map(toDocument);
+  }
+
+  updateDocument(source: string, patch: DocumentMetadataPatch): DocumentInfo | null {
+    const current = this.db
+      .prepare(`SELECT * FROM documents WHERE source = ?`)
+      .get(source) as unknown as DocumentRow | undefined;
+    if (!current) return null;
+    const title = patch.title ?? current.title;
+    const tags = patch.tags ?? parseStringArray(current.tags_json);
+    this.db
+      .prepare(`UPDATE documents SET title = ?, tags_json = ?, updated_at = ? WHERE source = ?`)
+      .run(title, JSON.stringify(tags), new Date().toISOString(), source);
+    const updated = this.db
+      .prepare(`SELECT * FROM documents WHERE source = ?`)
+      .get(source) as unknown as DocumentRow;
+    return toDocument(updated);
   }
 
   countChunks(): number {
@@ -143,13 +318,13 @@ export class SqliteVectorStore implements VectorStore {
          FROM chunks WHERE source = ? ORDER BY chunk_index`,
       )
       .all(source) as unknown as Array<{
-        id: string;
-        source: string;
-        chunk_index: number;
-        content: string;
-        length: number;
-        has_embedding: number;
-      }>;
+      id: string;
+      source: string;
+      chunk_index: number;
+      content: string;
+      length: number;
+      has_embedding: number;
+    }>;
     return rows.map((r) => ({
       id: r.id,
       source: r.source,
@@ -162,5 +337,57 @@ export class SqliteVectorStore implements VectorStore {
 
   close(): void {
     this.db.close();
+  }
+
+  private insertChunkRow(chunk: Chunk, embedding: Float32Array): void {
+    const vector = embedding.length > 0 ? serializeF32(embedding) : null;
+    const res = this.db
+      .prepare(
+        `INSERT INTO chunks (id, source, chunk_index, content, embedding) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(chunk.id, chunk.source, chunk.chunkIndex, chunk.content, vector);
+    this.db
+      .prepare(`INSERT INTO chunks_fts (rowid, content) VALUES (?, ?)`)
+      .run(Number(res.lastInsertRowid), addCjkSpacing(chunk.content));
+  }
+
+  private deleteSourceRows(source: string): void {
+    this.db
+      .prepare(`DELETE FROM chunks_fts WHERE rowid IN (SELECT rowid FROM chunks WHERE source = ?)`)
+      .run(source);
+    this.db.prepare(`DELETE FROM chunks WHERE source = ?`).run(source);
+  }
+
+  /** documents 表由旧版本创建时，CREATE TABLE IF NOT EXISTS 不会补新增列。 */
+  private ensureDocumentColumns(): void {
+    const columns = this.db.prepare(`PRAGMA table_info(documents)`).all() as unknown as Array<{
+      name: string;
+    }>;
+    const names = new Set(columns.map((column) => column.name));
+    if (!names.has("chunk_strategy")) {
+      this.db.exec(`ALTER TABLE documents ADD COLUMN chunk_strategy TEXT NOT NULL DEFAULT 'fixed'`);
+    }
+    if (!names.has("semantic_threshold")) {
+      this.db.exec(`ALTER TABLE documents ADD COLUMN semantic_threshold REAL`);
+    }
+  }
+
+  /** 为升级前只有 chunks 表的数据库补齐目录，不改变原分块数据。 */
+  private migrateLegacyDocuments(): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO documents (
+           source, title, tags_json, mime_type, byte_size, content_hash, chunk_count,
+           version, chunk_strategy, chunk_size, chunk_overlap, separators_json,
+           semantic_threshold, created_at, updated_at
+         )
+         SELECT source, source, '[]', 'application/octet-stream', 0, '', COUNT(*),
+                1, 'fixed', 500, 50, '[]', NULL, ?, ?
+         FROM chunks
+         GROUP BY source
+         ON CONFLICT(source) DO NOTHING`,
+      )
+      .run(now, now);
   }
 }

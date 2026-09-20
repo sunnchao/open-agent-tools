@@ -36,7 +36,8 @@
     "langchain": "^1.5.4",
     "openai": "^6.48.0",
     "pdf-parse": "^1.1.4",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "@open-agent-tools/workflow-contracts": "workspace:*"
   },
   "devDependencies": {
     "@types/cors": "catalog:",

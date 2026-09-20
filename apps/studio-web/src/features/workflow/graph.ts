@@ -1,9 +1,8 @@
+import { hasRunDeclarations, runVariables } from "@open-agent-tools/workflow-contracts";
+import { variableNodes } from "./variables.js";
 import { MarkerType, type Edge } from "@xyflow/react";
 import { defaultConfig, migrateNodeData } from "./model.js";
-import type {
-  NodeKind,
-  WorkflowConfigValue,
-} from "./model.js";
+import type { NodeKind, WorkflowConfigValue } from "./model.js";
 import { palette } from "./palette.js";
 import type { WorkflowNode, WorkflowSnapshot } from "./types.js";
 
@@ -47,17 +46,34 @@ export function loadSavedGraph(): { name: string; nodes: WorkflowNode[]; edges: 
     const raw = localStorage.getItem(storageKey);
     if (!raw) return null;
     const saved = JSON.parse(raw) as { name: string; nodes: WorkflowNode[]; edges: Edge[] };
-    return {
-      ...saved,
-      nodes: saved.nodes.map((node) => ({ ...node, data: migrateNodeData(node.data, node.id) })),
-      edges: saved.edges.map((edge) => ({ ...edge, type: "studio" })),
-    };
+    return hydrateWorkflowSnapshot(saved);
   } catch {
     return null;
   }
 }
 
-export function snapshotGraph(name: string, nodes: WorkflowNode[], edges: Edge[]): WorkflowSnapshot {
+export function hydrateWorkflowSnapshot(saved: WorkflowSnapshot): WorkflowSnapshot {
+  let nodes = saved.nodes.map((node) => ({ ...node, data: migrateNodeData(node.data, node.id) }));
+  if (!hasRunDeclarations(variableNodes(nodes))) {
+    const variables = runVariables(variableNodes(nodes));
+    nodes = nodes.map((node) => node.data.kind === "start" ? { ...node, data: { ...node.data, config: { ...node.data.config, runVariables: variables } } } : node);
+  }
+  return {
+    ...saved,
+    nodes,
+    edges: saved.edges.map((edge) => ({
+      ...edge,
+      type: "studio",
+      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+    })),
+  };
+}
+
+export function snapshotGraph(
+  name: string,
+  nodes: WorkflowNode[],
+  edges: Edge[],
+): WorkflowSnapshot {
   return {
     name,
     nodes: nodes.map((node) => ({
@@ -86,7 +102,7 @@ export function snapshotKey(snapshot: WorkflowSnapshot): string {
 }
 
 export const initialNodes: WorkflowNode[] = [
-  createNode("start-1", "start", { x: 80, y: 260 }),
+  createNode("start-1", "start", { x: 80, y: 260 }, { runVariables: [{ name: "query", type: "string", required: true }] }),
   createNode("input-1", "input", { x: 350, y: 260 }),
   createNode(
     "rag-1",

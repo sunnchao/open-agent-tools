@@ -1,3 +1,4 @@
+import { variableIssues } from "@open-agent-tools/workflow-contracts";
 import type { ResourceCatalog } from "../resources/api.js";
 
 export type NodeKind = "start" | "input" | "rag" | "graph" | "llm" | "mcp" | "condition" | "end";
@@ -76,6 +77,7 @@ export function defaultConfig(kind: NodeKind): Record<string, WorkflowConfigValu
       outputs: [{ name: "query", selector: "$inputs.query" }],
     };
   }
+  if (kind === "start") return { inputs: [], outputs: [], runVariables: [] };
   if (kind === "end") return { inputs: [], outputs: [] };
   return { inputs: [], outputs: [] };
 }
@@ -85,7 +87,7 @@ function validInputs(value: unknown): NodeInputBinding[] {
   return value.filter((item): item is NodeInputBinding => {
     if (!item || typeof item !== "object") return false;
     const input = item as Partial<NodeInputBinding>;
-    return typeof input.name === "string" && Boolean(input.name.trim()) && Boolean(input.source);
+    return typeof input.name === "string" && Boolean(input.source);
   });
 }
 
@@ -94,17 +96,15 @@ function validOutputs(value: unknown): NodeOutputBinding[] {
   return value.filter((item): item is NodeOutputBinding => {
     if (!item || typeof item !== "object") return false;
     const output = item as Partial<NodeOutputBinding>;
-    return (
-      typeof output.name === "string" &&
-      Boolean(output.name.trim()) &&
-      typeof output.selector === "string"
-    );
+    return typeof output.name === "string" && typeof output.selector === "string";
   });
 }
 
 export function migrateNodeData(data: WorkflowNodeData, nodeId?: string): WorkflowNodeData {
   const config = { ...defaultConfig(data.kind), ...(data.config ?? {}) };
   const legacyOutput = typeof data.config?.output === "string" ? data.config.output.trim() : "";
+  if (data.kind === "start" && !Object.hasOwn(data.config ?? {}, "runVariables"))
+    delete config.runVariables;
   config.inputs = validInputs(config.inputs);
   config.outputs = validOutputs(config.outputs);
   if (legacyOutput && (config.outputs as NodeOutputBinding[]).length === 0) {
@@ -157,7 +157,7 @@ export function migrateNodeData(data: WorkflowNodeData, nodeId?: string): Workfl
     }
     if (typeof config.prompt !== "string") config.prompt = "";
   }
-  if (data.kind === "input" && (config.inputs as NodeInputBinding[]).length === 0) {
+  if (data.kind === "input" && !Array.isArray(data.config?.inputs)) {
     const variable =
       typeof config.variable === "string" && config.variable ? config.variable : "query";
     config.inputs = [
@@ -398,5 +398,8 @@ export function validateWorkflowGraph(
   }
   if (visited !== nodes.length) issues.push({ code: "cycle", message: "工作流中存在循环连接" });
 
+  issues.push(...variableIssues(
+    nodes.map((node) => ({ id: node.id, kind: node.data.kind, config: node.data.config })),
+  ));
   return issues;
 }

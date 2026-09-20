@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   attachSessionCallbacks,
+  attachSessionErrorCapture,
+  turnFailureMessage,
   assistantText,
   lastAssistantText,
   argsSummary,
@@ -140,6 +142,118 @@ test("attachSessionCallbacks 桥接 text_delta 与 thinking_delta", () => {
 
   assert.deepEqual(text, ["你好"]);
   assert.deepEqual(reasoning, ["思考"]);
+});
+
+test("attachSessionErrorCapture 捕获 auto_retry_end 的 finalError 并在失败回合保持", () => {
+  let listener: AgentSessionEventListener | undefined;
+  const errors: Array<string | null> = [];
+  attachSessionErrorCapture(
+    {
+      subscribe(next) {
+        listener = next;
+        return () => {};
+      },
+    },
+    (message) => errors.push(message),
+  );
+
+  listener?.({
+    type: "auto_retry_end",
+    success: false,
+    attempt: 1,
+    finalError: "401: 无效的令牌",
+  } as AgentSessionEvent);
+  listener?.({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "error", content: [] },
+  } as unknown as AgentSessionEvent);
+
+  assert.deepEqual(errors, ["401: 无效的令牌", "401: 无效的令牌"]);
+});
+
+test("attachSessionErrorCapture 重试成功后重置错误、忽略非 assistant 消息", () => {
+  let listener: AgentSessionEventListener | undefined;
+  const errors: Array<string | null> = [];
+  attachSessionErrorCapture(
+    {
+      subscribe(next) {
+        listener = next;
+        return () => {};
+      },
+    },
+    (message) => errors.push(message),
+  );
+
+  listener?.({
+    type: "auto_retry_end",
+    success: false,
+    attempt: 1,
+    finalError: "boom",
+  } as AgentSessionEvent);
+  listener?.({
+    type: "message_end",
+    message: { role: "user", content: [] },
+  } as unknown as AgentSessionEvent);
+  listener?.({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "ok" }],
+    },
+  } as unknown as AgentSessionEvent);
+
+  assert.deepEqual(errors, ["boom", null]);
+});
+
+test("turnFailureMessage 仅在最后一条 assistant 失败时报错", () => {
+  assert.equal(
+    turnFailureMessage(
+      [
+        { role: "user" },
+        { role: "assistant", stopReason: "error" },
+        { role: "assistant", stopReason: "stop" },
+      ],
+      "401: 无效的令牌",
+    ),
+    null,
+  );
+  assert.equal(
+    turnFailureMessage([{ role: "assistant", stopReason: "error" }], "401: 无效的令牌"),
+    "401: 无效的令牌",
+  );
+  assert.equal(
+    turnFailureMessage([{ role: "assistant", stopReason: "error" }], null),
+    "模型调用失败(未返回内容)",
+  );
+  assert.equal(turnFailureMessage([{ role: "assistant", stopReason: "stop" }], null), null);
+  assert.equal(turnFailureMessage([], null), null);
+});
+
+test("attachSessionErrorCapture 取失败消息自带的 errorMessage(无重试路径)", () => {
+  let listener: AgentSessionEventListener | undefined;
+  const errors: Array<string | null> = [];
+  attachSessionErrorCapture(
+    {
+      subscribe(next) {
+        listener = next;
+        return () => {};
+      },
+    },
+    (message) => errors.push(message),
+  );
+
+  listener?.({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      stopReason: "error",
+      content: [],
+      errorMessage: '401: {"message":"无效的令牌"}',
+    },
+  } as unknown as AgentSessionEvent);
+
+  assert.deepEqual(errors, ['401: {"message":"无效的令牌"}']);
 });
 
 test("handleToolCallEvent 对危险工具默认拒绝并记录审计", async () => {

@@ -13,6 +13,10 @@
     "./mysql": {
       "types": "./dist/mysql.d.ts",
       "import": "./dist/mysql.js"
+    },
+    "./postgres": {
+      "types": "./dist/postgres.d.ts",
+      "import": "./dist/postgres.js"
     }
   },
   "scripts": {

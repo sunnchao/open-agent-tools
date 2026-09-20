@@ -1,6 +1,7 @@
 import type { EmbeddingsInterface } from "@langchain/core/embeddings";
 import type { Document } from "@langchain/core/documents";
 import { MarkdownTextSplitter, RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import type { ChunkStrategy } from "./types.js";
 import { cosine } from "./utils.js";
 
 /** 默认递归切分分隔符（按优先级）。句读标点同时作为「语义单元」的边界。 */
@@ -10,7 +11,8 @@ export interface ChunkingOptions {
   chunkSize: number;
   chunkOverlap: number;
   separators: readonly string[];
-  /** 提供则启用 L2 语义聚合切分（按相邻单元 embedding 相似度断块）；缺省回退 L1 结构切分。 */
+  /** 显式选择固定/结构切分或基于 embedding 相似度的语义切分。 */
+  strategy?: ChunkStrategy;
   embeddings?: EmbeddingsInterface;
   /** L2 相似度阈值（0-1），低于此值判定话题切换而断块。默认 0.75。 */
   semanticThreshold?: number;
@@ -25,22 +27,26 @@ interface Segment {
 const EMPTY_EMBEDDING: number[] = [];
 
 /**
- * 语义切分（L2 + L1 的入口）：
- * - 用户显式传入自定义 separators 时，完全走 RecursiveCharacterTextSplitter（向后兼容）；
- * - 否则按文档类型分流：
- *   - markdown → MarkdownTextSplitter（标题/代码块/引用为强切点，一节 ≈ 一个语义场景）；
- *   - 其余文本（含合并后的 PDF）→ 先切成「句子/短段」最小单元，
- *     有 embeddings 时按相邻单元相似度骤降处断块（L2），否则按长度贪心合并（L1）。
+ * 固定模式保持原结构切分；语义模式把文本拆成句/段，用相邻 embedding 相似度识别话题边界。
+ * strategy 缺省时保留旧调用行为：有 embeddings 走语义，否则走固定。
  */
 export async function chunkDocuments(
   docs: Document[],
   opts: ChunkingOptions,
 ): Promise<Array<{ content: string }>> {
+  const strategy = opts.strategy ?? (opts.embeddings ? "semantic" : "fixed");
+  const merged = mergePdfPages(docs);
+  if (strategy === "semantic") {
+    if (!opts.embeddings) throw new Error("semantic chunking requires embeddings");
+    const out: Array<{ content: string }> = [];
+    for (const doc of merged) out.push(...(await semanticSplit(doc.pageContent, opts)));
+    return out;
+  }
+
   if (!arraysEqual(opts.separators, DEFAULT_SEPARATORS)) {
     return legacySplit(docs, opts);
   }
 
-  const merged = mergePdfPages(docs);
   const out: Array<{ content: string }> = [];
   for (const doc of merged) {
     if (isMarkdown(doc)) {
@@ -50,8 +56,6 @@ export async function chunkDocuments(
       });
       const chunks = await splitter.splitDocuments([doc]);
       out.push(...chunks.map((c) => ({ content: c.pageContent })));
-    } else if (opts.embeddings) {
-      out.push(...(await semanticSplit(doc.pageContent, opts)));
     } else {
       out.push(...structuralSplit(doc.pageContent, opts));
     }
@@ -81,12 +85,12 @@ async function semanticSplit(
   const segments = segmentText(text);
   const units = splitLongUnits(segments, opts.chunkSize);
   if (units.length === 0) return [];
-  if (units.length === 1 || !opts.embeddings) {
+  if (units.length === 1) {
     return assembleUnits(units, opts).map((content) => ({ content }));
   }
 
   const threshold = opts.semanticThreshold ?? 0.75;
-  const vectors = await opts.embeddings.embedDocuments(units.map((s) => s.unit));
+  const vectors = await opts.embeddings!.embedDocuments(units.map((s) => s.unit));
   const chunks: string[] = [];
   let cur = "";
   for (let i = 0; i < units.length; i++) {
@@ -110,10 +114,7 @@ async function semanticSplit(
 }
 
 /** L1：段落/句子单元按长度贪心合并，段落不腰斩、超长段落在句读处切。 */
-function structuralSplit(
-  text: string,
-  opts: ChunkingOptions,
-): Array<{ content: string }> {
+function structuralSplit(text: string, opts: ChunkingOptions): Array<{ content: string }> {
   const units = splitLongUnits(segmentText(text), opts.chunkSize);
   return assembleUnits(units, opts)
     .filter((c) => c.trim().length > 0)

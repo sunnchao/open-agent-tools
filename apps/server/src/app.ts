@@ -10,11 +10,17 @@ import { chatRouter } from "./routes/chat.js";
 import { workflowRouter } from "./routes/workflow.js";
 import { imRouter } from "./routes/im.js";
 import { imChannelsRouter } from "./routes/imChannels.js";
+import { aiQueryRouter } from "./routes/aiQuery.js";
+import { oneapiDemoRouter } from "./routes/oneapiDemo.js";
+import { observatoryRouter } from "./routes/observatory.js";
+import { schemaSourcesRouter } from "./routes/schemaSources.js";
+import { workflowsRouter } from "./routes/workflows.js";
 
 export function createApp(): express.Express {
   const app: express.Express = express();
 
   app.use(cors({ origin: webOrigin }));
+  app.use("/v1", express.json({ limit: "2mb" }));
   app.use(express.json({ limit: "100mb" }));
 
   // 请求级 trace：所有端点进出、状态码与耗时（health 探活静默，避免刷屏）。
@@ -43,8 +49,13 @@ export function createApp(): express.Express {
   app.use(providersRouter);
   app.use(chatRouter);
   app.use(workflowRouter);
+  app.use(workflowsRouter);
   app.use(imRouter);
   app.use(imChannelsRouter);
+  app.use(aiQueryRouter);
+  app.use(schemaSourcesRouter);
+  app.use(observatoryRouter);
+  app.use(oneapiDemoRouter);
 
   return app;
 }

@@ -5,8 +5,8 @@
  * 采集是系统表只读查询，渲染/选择阶段才决定给 LLM 注入多少（Level 0/1/2 渐进加载）。
  */
 
-/** 数据源类型，当前支持 MySQL（PostgreSQL 采集器可后续扩展）。 */
-export type CatalogSource = "mysql";
+/** 支持采集的关系型数据库类型。 */
+export type CatalogSource = "mysql" | "postgresql";
 
 /** 字段敏感度：默认不注入，除非业务显式要求。 */
 export type ColumnSensitivity = "normal" | "sensitive";
@@ -28,7 +28,7 @@ export interface ColumnMeta {
   table: string;
   schema: string;
   name: string;
-  /** MySQL 原生类型（如 varchar(64) / int / decimal(10,2)）。 */
+  /** 数据库原生类型（如 varchar(64) / integer / decimal(10,2)）。 */
   columnType: string;
   /** 是否可空。 */
   nullable: boolean;
@@ -89,7 +89,7 @@ export interface TableCatalog {
 /** 整个 schema 的 catalog。 */
 export interface SchemaCatalog {
   source: CatalogSource;
-  /** 数据库名（MySQL 的 schema 名）。 */
+  /** 查询命名空间：MySQL 数据库名或 PostgreSQL schema 名。 */
   database: string;
   collectedAt: string;
   /** 目录版本（配合 DDL 快照对账 / 工具版本）。 */
@@ -99,10 +99,12 @@ export interface SchemaCatalog {
 
 /** 采集配置：哪些库表要采、采样上限等。 */
 export interface CollectOptions {
-  /** 连接串（mysql://user:pass@host:port/db）。 */
+  /** 连接串（mysql:// 或 postgresql://user:pass@host:port/db）。 */
   connectionString: string;
   /** 目标数据库名；缺省取连接串里的 db。 */
   database?: string;
+  /** PostgreSQL 目标 schema；缺省为 public。 */
+  schema?: string;
   /** 表过滤：不填 = 全部业务表（排除系统表）；支持通配符（如 "report_%"）。 */
   tableFilter?: string[];
   /** 采样：对高频过滤字段采集 TOP 值分布的表数上限。 */

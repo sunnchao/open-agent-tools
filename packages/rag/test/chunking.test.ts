@@ -9,7 +9,13 @@ function doc(text: string, name: string, type?: string): Document {
 }
 
 function opts(partial: Partial<Parameters<typeof chunkDocuments>[1]> = {}) {
-  return { chunkSize: 500, chunkOverlap: 0, separators: [...DEFAULT_SEPARATORS], ...partial };
+  return {
+    chunkSize: 500,
+    chunkOverlap: 0,
+    strategy: "fixed" as const,
+    separators: [...DEFAULT_SEPARATORS],
+    ...partial,
+  };
 }
 
 /** 话题可控的假 embedding：含「苹果」→ 话题 A，「篮球」→ 话题 B。 */
@@ -38,8 +44,18 @@ test("txt 结构切分：句子边界不腰斩 + 每块不超 chunkSize", async 
     assert.ok(/[。！？]$/.test(c.content), `句子被腰斩: ${c.content}`);
   }
   // 无内容丢失
-  assert.ok(chunks.map((c) => c.content).join("").includes("第一句。"));
-  assert.ok(chunks.map((c) => c.content).join("").includes("第五句。"));
+  assert.ok(
+    chunks
+      .map((c) => c.content)
+      .join("")
+      .includes("第一句。"),
+  );
+  assert.ok(
+    chunks
+      .map((c) => c.content)
+      .join("")
+      .includes("第五句。"),
+  );
 });
 
 test("txt 超长句硬切：内容完整还原且每块 ≤ chunkSize", async () => {
@@ -87,7 +103,7 @@ test("语义切分：话题切换处断块", async () => {
   const text = "苹果种植技术要点。苹果施肥方法总结。篮球比赛基本规则。篮球训练注意事项。";
   const chunks = await chunkDocuments(
     [doc(text, "topics.txt", "text")],
-    opts({ chunkSize: 200, embeddings: new TopicEmbeddings() }),
+    opts({ chunkSize: 200, strategy: "semantic", embeddings: new TopicEmbeddings() }),
   );
   assert.equal(chunks.length, 2, "苹果/篮球两个话题应切成两块");
   assert.ok(chunks[0]!.content.includes("苹果"));
@@ -98,19 +114,34 @@ test("语义切分 overlap：新块以上一句开头衔接", async () => {
   const text = "苹果种植技术要点。苹果施肥方法总结。篮球比赛基本规则。篮球训练注意事项。";
   const chunks = await chunkDocuments(
     [doc(text, "topics.txt", "text")],
-    opts({ chunkSize: 200, chunkOverlap: 100, embeddings: new TopicEmbeddings() }),
+    opts({
+      chunkSize: 200,
+      chunkOverlap: 100,
+      strategy: "semantic",
+      embeddings: new TopicEmbeddings(),
+    }),
   );
   assert.equal(chunks.length, 2);
   assert.ok(chunks[1]!.content.startsWith("苹果施肥方法总结。"), "新块应复用上一句做语义衔接");
 });
 
-test("无 embeddings 回退 L1：仅按长度合并", async () => {
+test("固定模式即使有 embeddings 也仅按结构与长度合并", async () => {
   const text = "苹果种植技术要点。苹果施肥方法总结。篮球比赛基本规则。篮球训练注意事项。";
   const chunks = await chunkDocuments(
     [doc(text, "topics.txt", "text")],
-    opts({ chunkSize: 200 }),
+    opts({ chunkSize: 200, strategy: "fixed", embeddings: new TopicEmbeddings() }),
   );
-  assert.equal(chunks.length, 1, "无 embedding 时不做话题切分");
+  assert.equal(chunks.length, 1, "固定模式不应因配置了 embedding 而改变边界");
+});
+
+test("语义模式缺少 embeddings 时明确拒绝", async () => {
+  await assert.rejects(
+    chunkDocuments(
+      [doc("苹果种植技术要点。篮球比赛基本规则。", "topics.txt", "text")],
+      opts({ strategy: "semantic" }),
+    ),
+    /requires embeddings/,
+  );
 });
 
 test("自定义 separators 回退旧版切分行为", async () => {
@@ -139,12 +170,22 @@ test("语义阈值可调：阈值越高切得越碎", async () => {
   }
   const loose = await chunkDocuments(
     [doc(text, "t.txt", "text")],
-    opts({ chunkSize: 200, embeddings: new FixedSim(), semanticThreshold: 0.5 }),
+    opts({
+      chunkSize: 200,
+      strategy: "semantic",
+      embeddings: new FixedSim(),
+      semanticThreshold: 0.5,
+    }),
   );
   assert.equal(loose.length, 1, "低阈值允许弱相关句合并");
   const tight = await chunkDocuments(
     [doc(text, "t.txt", "text")],
-    opts({ chunkSize: 200, embeddings: new FixedSim(), semanticThreshold: 0.8 }),
+    opts({
+      chunkSize: 200,
+      strategy: "semantic",
+      embeddings: new FixedSim(),
+      semanticThreshold: 0.8,
+    }),
   );
   assert.ok(tight.length >= 2, "高阈值在弱相关处断开");
 });

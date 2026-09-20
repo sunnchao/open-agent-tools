@@ -10,6 +10,10 @@ export default defineConfig({
         target: "http://localhost:3000",
         changeOrigin: true,
       },
+      "/v1": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
       "/mcp-api": {
         target: "http://localhost:4200",
         changeOrigin: true,
@@ -20,7 +24,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       "/rag-api": {
-        target: "http://localhost:4001",
+        target: process.env.RAG_API_PROXY_TARGET ?? "http://localhost:4001",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/rag-api/, "/api"),
       },

@@ -1,6 +1,6 @@
 # schema-catalog（Schema 采集 / 存储 / 渐进加载）
 
-把 MySQL（后续可扩 PostgreSQL）的元数据采集成 **Catalog**（表/列/关系/枚举/抽样），
+把 MySQL / PostgreSQL 的元数据采集成 **Catalog**（表/列/关系/枚举/抽样），
 并支持 **Level 0/1/2 渐进式加载**，把注入给 LLM 的 schema 从"全量 180K token"压到"骨架几 K + 按需几 K"。
 
 > 配套设计：`docs/AI报表SQL查询工具开发文档.md` 的 Text-to-SQL 章节、`packages/query-resolver`（口径字典）。
@@ -25,21 +25,35 @@ MYSQL_URL='...' pnpm --filter @open-agent-tools/schema-catalog collect --skip-sa
 
 ## 二、渐进式加载（省 token 三件套）
 
-| 层级 | 内容 | 量级 | 何时用 |
-|---|---|---|---|
-| **Level 0 骨架** | `renderSkeleton()`：表名 + 一句话注释 + 行数级 | 200 表 ≈ 2~6K token | system prompt 常驻 |
-| **Level 1 选中表** | `PreRegisteredSelector`（意图→表）或 `searchTables`（关键词/RAG） | 3 张表 ≈ 1.5~3K token | 意图识别后 |
-| **Level 2 分档裁剪** | `renderTableSchemaTiered()`：required+common 默认，full 按需；敏感字段默认剔除 | 再砍一半 | 每次注入前 |
+| 层级                 | 内容                                                                           | 量级                  | 何时用             |
+| -------------------- | ------------------------------------------------------------------------------ | --------------------- | ------------------ |
+| **Level 0 骨架**     | `renderSkeleton()`：表名 + 一句话注释 + 行数级                                 | 200 表 ≈ 2~6K token   | system prompt 常驻 |
+| **Level 1 选中表**   | `PreRegisteredSelector`（意图→表）或 `searchTables`（关键词/RAG）              | 3 张表 ≈ 1.5~3K token | 意图识别后         |
+| **Level 2 分档裁剪** | `renderTableSchemaTiered()`：required+common 默认，full 按需；敏感字段默认剔除 | 再砍一半              | 每次注入前         |
 
 ```ts
-import { collectMysqlCatalog, renderSkeleton, renderTableSchemaTiered, PreRegisteredSelector } from "@open-agent-tools/schema-catalog";
+import {
+  collectMysqlCatalog,
+  collectPostgresCatalog,
+  renderSkeleton,
+  renderTableSchemaTiered,
+  PreRegisteredSelector,
+} from "@open-agent-tools/schema-catalog";
 
 const catalog = await collectMysqlCatalog({ connectionString });
 
-const skeleton = renderSkeleton(catalog);                                   // Level 0
-const sel = new PreRegisteredSelector([{ intent: "report_approval_query", tables: ["report_submission", "org"] }]);
-const tables = sel.selectTables(catalog, "report_approval_query");          // Level 1
-const prompt = tables.map((t) => renderTableSchemaTiered(t)).join("\n\n");  // Level 2
+// PostgreSQL：schema 默认为 public
+const pgCatalog = await collectPostgresCatalog({
+  connectionString: postgresUrl,
+  schema: "reporting",
+});
+
+const skeleton = renderSkeleton(catalog); // Level 0
+const sel = new PreRegisteredSelector([
+  { intent: "report_approval_query", tables: ["report_submission", "org"] },
+]);
+const tables = sel.selectTables(catalog, "report_approval_query"); // Level 1
+const prompt = tables.map((t) => renderTableSchemaTiered(t)).join("\n\n"); // Level 2
 ```
 
 > 探索式查询兜底：`searchTables(catalog, "待审批的报表")` 关键词评分（中文二元组），
@@ -78,11 +92,13 @@ pnpm --filter @open-agent-tools/schema-catalog enrich-newapi   --in schema-catal
 ```
 
 增强内容（幂等，可重复执行）：
+
 - 27 张表全部补注释；
 - 16 个枚举列补含义（users.role/status、tokens.status、channels.type/status、logs.type、orders.status、top_ups.status、midjourneys.action/status 等）；
 - 21 个敏感字段标记（password/key/token 等默认不注入 LLM）。
 
 渲染时枚举会随字段一起输出：
+
 ```
 - `status` bigint -- 状态：1=启用 2=禁用 [枚举: 1=启用, 2=禁用]
 - `type` bigint -- 日志类型：1=充值 2=消费 3=管理 ... [枚举: ...]

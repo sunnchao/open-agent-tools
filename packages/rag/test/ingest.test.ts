@@ -22,6 +22,19 @@ class FakeEmbeddings implements EmbeddingsInterface {
   }
 }
 
+class TopicEmbeddings implements EmbeddingsInterface {
+  model = "topic-embeddings";
+
+  async embedDocuments(docs: string[]): Promise<number[][]> {
+    return docs.map((text) => (text.includes("苹果") ? [1, 0] : [0, 1]));
+  }
+
+  async embedQuery(query: string): Promise<number[]> {
+    const [embedding] = await this.embedDocuments([query]);
+    return embedding ?? [];
+  }
+}
+
 function tmpDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "rag-ingest-"));
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
@@ -34,6 +47,7 @@ test("ingestBuffer 文本入库 + 幂等重灌", async () => {
   const n1 = await ingestBuffer("部署说明.txt", new TextEncoder().encode(text), {
     store,
     embeddings: new FakeEmbeddings(),
+    chunkStrategy: "fixed",
   });
   assert.ok(n1 > 0);
   assert.equal(store.listSources().length, 1);
@@ -43,9 +57,40 @@ test("ingestBuffer 文本入库 + 幂等重灌", async () => {
   const n2 = await ingestBuffer("部署说明.txt", new TextEncoder().encode(text), {
     store,
     embeddings: new FakeEmbeddings(),
+    chunkStrategy: "fixed",
   });
   assert.equal(n1, n2);
   assert.equal(store.countChunks(), n1);
+  const document = store.listDocuments()[0]!;
+  assert.equal(document.version, 2);
+  assert.equal(document.mimeType, "text/plain");
+  assert.equal(document.chunkStrategy, "fixed");
+  assert.equal(document.byteSize, new TextEncoder().encode(text).byteLength);
+  assert.equal(document.contentHash.length, 64);
+  store.close();
+  cleanup();
+});
+
+test("embedding 失败时保留上一版文档", async () => {
+  const { dir, cleanup } = tmpDir();
+  const store = new SqliteVectorStore({ dbPath: join(dir, "rag.db") });
+  await ingestBuffer("policy.txt", new TextEncoder().encode("可用版本"), { store });
+
+  const failingEmbeddings: EmbeddingsInterface = {
+    embedDocuments: async () => {
+      throw new Error("embedding gateway unavailable");
+    },
+    embedQuery: async () => [],
+  };
+  await assert.rejects(
+    ingestBuffer("policy.txt", new TextEncoder().encode("不完整新版本"), {
+      store,
+      embeddings: failingEmbeddings,
+    }),
+    /gateway unavailable/,
+  );
+  assert.equal(store.listChunksBySource("policy.txt")[0]?.content, "可用版本");
+  assert.equal(store.listDocuments()[0]?.version, 1);
   store.close();
   cleanup();
 });
@@ -114,6 +159,28 @@ test("Rag 门面：单次上传可覆盖分段标识符", async () => {
     rag.listChunks("separators.txt").map((chunk) => chunk.content),
     ["alpha", "|bravo", "|charlie"],
   );
+  rag.close();
+  cleanup();
+});
+
+test("Rag 门面：语义策略按话题切分并记录阈值", async () => {
+  const { dir, cleanup } = tmpDir();
+  const rag = new Rag({ dbPath: join(dir, "rag.db"), embeddings: new TopicEmbeddings() });
+  await rag.ingestBuffers(
+    [
+      {
+        name: "topics.txt",
+        data: new TextEncoder().encode(
+          "苹果种植技术要点。苹果施肥方法总结。篮球比赛基本规则。篮球训练注意事项。",
+        ),
+      },
+    ],
+    { chunkStrategy: "semantic", chunkSize: 200, chunkOverlap: 0, semanticThreshold: 0.75 },
+  );
+  assert.equal(rag.listChunks("topics.txt").length, 2);
+  const document = rag.listDocuments()[0]!;
+  assert.equal(document.chunkStrategy, "semantic");
+  assert.equal(document.semanticThreshold, 0.75);
   rag.close();
   cleanup();
 });

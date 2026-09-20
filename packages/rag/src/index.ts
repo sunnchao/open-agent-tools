@@ -8,12 +8,23 @@ import {
   type IngestOptions,
 } from "./ingest.js";
 import { retrieve, type RetrieveOptions } from "./retriever.js";
-import type { ChunkInfo, IngestResult, RetrievalResult } from "./types.js";
+import type {
+  ChunkInfo,
+  ChunkStrategy,
+  DocumentInfo,
+  DocumentMetadataPatch,
+  IngestResult,
+  RetrievalResult,
+} from "./types.js";
 
 export type {
   Chunk,
+  ChunkStrategy,
   ScoredChunk,
   ChunkInfo,
+  DocumentInfo,
+  DocumentMetadataPatch,
+  DocumentWriteMetadata,
   RetrievalResult,
   IngestResult,
   VectorStore,
@@ -32,6 +43,7 @@ export interface RagOptions {
   dbPath?: string;
   chunkSize?: number;
   chunkOverlap?: number;
+  chunkStrategy?: ChunkStrategy;
   separators?: string[];
   /** 语义切分相似度阈值（0-1），仅在提供 embeddings 时生效。 */
   semanticThreshold?: number;
@@ -49,6 +61,7 @@ export class Rag {
       embeddings: opts.embeddings,
       chunkSize: opts.chunkSize ?? 500,
       chunkOverlap: opts.chunkOverlap ?? 50,
+      chunkStrategy: opts.chunkStrategy ?? "fixed",
       separators: opts.separators ? [...opts.separators] : [...DEFAULT_SEPARATORS],
       semanticThreshold: opts.semanticThreshold,
     };
@@ -65,7 +78,10 @@ export class Rag {
    */
   async ingestBuffers(
     files: Array<{ name: string; data: Uint8Array }>,
-    options: Pick<IngestOptions, "chunkSize" | "chunkOverlap" | "separators"> = {},
+    options: Pick<
+      IngestOptions,
+      "chunkSize" | "chunkOverlap" | "chunkStrategy" | "separators" | "semanticThreshold"
+    > = {},
   ): Promise<IngestResult> {
     const ingestOptions = { ...this.ingestOpts, ...options };
     let total = 0;
@@ -91,6 +107,14 @@ export class Rag {
 
   listSources(): string[] {
     return this.store.listSources();
+  }
+
+  listDocuments(): DocumentInfo[] {
+    return this.store.listDocuments();
+  }
+
+  updateDocument(source: string, patch: DocumentMetadataPatch): DocumentInfo | null {
+    return this.store.updateDocument(source, patch);
   }
 
   clearSource(source: string): void {

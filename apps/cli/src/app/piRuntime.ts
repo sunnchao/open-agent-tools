@@ -187,6 +187,50 @@ export function attachSessionCallbacks(
   return session.subscribe(listener);
 }
 
+/**
+ * 订阅会话错误事件,把最近一次 LLM 回合失败原因写入 onError(回合成功时重置为 null)。
+ * Pi 的 LLM 调用失败不抛异常:回合以 stopReason="error"、空 content 结束,
+ * 不监听这些事件的话,上层只能看到"静默无输出"。
+ */
+export function attachSessionErrorCapture(
+  session: Pick<AgentSession, "subscribe">,
+  onError: (message: string | null) => void,
+): () => void {
+  let reason = "模型调用失败(未返回内容)";
+  const listener: AgentSessionEventListener = (event: AgentSessionEvent) => {
+    if (event.type === "auto_retry_end") {
+      if (!event.success) reason = event.finalError || reason;
+      onError(event.success ? null : reason);
+      return;
+    }
+    if (event.type !== "message_end") return;
+    const message = event.message as
+      | { role?: string; stopReason?: string; errorMessage?: string }
+      | undefined;
+    if (message?.role !== "assistant") return;
+    if (message.stopReason === "error") {
+      // 失败的 assistant 消息本体带 errorMessage(如 "401: ..."),优先于兜底文案。
+      reason = message.errorMessage || reason;
+      onError(reason);
+      return;
+    }
+    // 重试后成功的回合:清掉此前记录的失败原因。
+    reason = "模型调用失败(未返回内容)";
+    onError(null);
+  };
+  return session.subscribe(listener);
+}
+
+/** 取最后一条 assistant 消息;回合失败(stopReason=error)时返回应抛出的错误文本,正常返回 null。 */
+export function turnFailureMessage(
+  messages: Array<{ role: string; stopReason?: string }>,
+  capturedError: string | null,
+): string | null {
+  const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+  if (lastAssistant?.stopReason !== "error") return null;
+  return capturedError ?? "模型调用失败(未返回内容)";
+}
+
 /** 处理工具展示、默认 timeout、HITL 决策与调用审计。 */
 export async function handleToolCallEvent(
   event: ToolCallEvent,
@@ -320,6 +364,8 @@ export async function createPiRuntime(opts: PiRuntimeOptions): Promise<PiRuntime
   let mcpCleanup: (() => Promise<void>) | null = null;
   // 一轮 prompt 内的 token 用量（turn_end 累加）。
   let turnUsage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+  // 最近一次 LLM 回合失败原因（attachSessionErrorCapture 写入，prompt 开始时重置）。
+  let lastTurnError: string | null = null;
   const pendingBuiltinAudits = new Map<string, AuditEntry>();
 
   const settingsManager = SettingsManager.inMemory({
@@ -477,6 +523,9 @@ export async function createPiRuntime(opts: PiRuntimeOptions): Promise<PiRuntime
     currentToolNames = [...BUILTIN_TOOLS, ...customTools.map((t) => t.name)];
     session = created.session;
     attachSessionCallbacks(session, () => activeCallbacks);
+    attachSessionErrorCapture(session, (message) => {
+      lastTurnError = message;
+    });
   };
 
   await rebuild();
@@ -489,6 +538,7 @@ export async function createPiRuntime(opts: PiRuntimeOptions): Promise<PiRuntime
       if (!session) throw new Error("PI 会话未初始化");
       pendingSystemPrompt = systemPrompt;
       turnUsage = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+      lastTurnError = null;
       pendingBuiltinAudits.clear();
       let receivedTextDelta = false;
       const originalOnToken = callbacks.onToken;
@@ -502,6 +552,13 @@ export async function createPiRuntime(opts: PiRuntimeOptions): Promise<PiRuntime
       activeCallbacks = promptCallbacks;
       try {
         await session.prompt(input, { streamingBehavior: "followUp" });
+        // LLM 调用失败时 pi 不抛异常,回合以 stopReason="error" 空结束;
+        // 在这里转成异常,让 repl 的 catch 打印"请求失败",而不是静默无输出。
+        const failure = turnFailureMessage(
+          session.messages as unknown as Array<{ role: string; stopReason?: string }>,
+          lastTurnError,
+        );
+        if (failure) throw new Error(failure);
         const answer = lastAssistantText(
           session.messages as unknown as Array<{ role: string; content: unknown }>,
         );

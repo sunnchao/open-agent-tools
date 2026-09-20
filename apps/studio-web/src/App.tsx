@@ -6,6 +6,7 @@ import {
   MessageOutlined,
   NodeIndexOutlined,
   SettingOutlined,
+  TableOutlined,
 } from "./lib/icons.js";
 import "./styles/studio.css";
 
@@ -39,8 +40,13 @@ const SettingsWorkspace = lazy(() =>
     default: module.SettingsWorkspace,
   })),
 );
+const ObservatoryWorkspace = lazy(() =>
+  import("./features/observatory/ObservatoryWorkspace.js").then((module) => ({
+    default: module.ObservatoryWorkspaceWithProvider,
+  })),
+);
 
-type Workspace = "chat" | "mcp" | "rag" | "graph" | "workflow" | "settings";
+type Workspace = "chat" | "mcp" | "rag" | "graph" | "observatory" | "workflow" | "settings";
 
 const workspaces: Array<{
   id: Workspace;
@@ -52,6 +58,7 @@ const workspaces: Array<{
   { id: "mcp", label: "MCP", en: "Toolkit", icon: <ApiOutlined /> },
   { id: "rag", label: "知识库", en: "Knowledge", icon: <DatabaseOutlined /> },
   { id: "graph", label: "图谱", en: "Graph", icon: <NodeIndexOutlined /> },
+  { id: "observatory", label: "问数", en: "Schema", icon: <TableOutlined /> },
   { id: "workflow", label: "工作流", en: "Workflow", icon: <ApartmentOutlined /> },
   { id: "settings", label: "设置", en: "Settings", icon: <SettingOutlined /> },
 ];
@@ -147,6 +154,7 @@ export function App() {
             {workspace === "mcp" ? <McpWorkspace /> : null}
             {workspace === "rag" ? <RagWorkspace /> : null}
             {workspace === "graph" ? <GraphWorkspace /> : null}
+            {workspace === "observatory" ? <ObservatoryWorkspace /> : null}
             {workspace === "workflow" ? <WorkflowWorkspace /> : null}
             {workspace === "settings" ? <SettingsWorkspace /> : null}
           </Suspense>

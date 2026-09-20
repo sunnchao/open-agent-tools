@@ -45,11 +45,12 @@ async function api(path, init) {
   return { status: res.status, body };
 }
 
-async function upload(files) {
+async function upload(files, settings = {}) {
   const form = new FormData();
   for (const [name, content] of Object.entries(files)) {
     form.append("files", new Blob([content], { type: "text/markdown" }), name);
   }
+  for (const [name, value] of Object.entries(settings)) form.append(name, String(value));
   return api("/api/documents", { method: "POST", body: form });
 }
 
@@ -110,7 +111,19 @@ async function main() {
     const health = await waitHealthy();
     console.log(`服务就绪：embeddings=${health.embeddingsEnabled} llm=${health.llmAvailable}`);
 
-    step("1. 上传两篇文档，图谱应自动重建");
+    step("1. 切分策略能力检查");
+    const semanticWithoutEmbeddings = await upload(
+      { "semantic.md": DOC_A },
+      { chunkStrategy: "semantic", semanticThreshold: "0.75" },
+    );
+    check(
+      "无 Embeddings 时拒绝语义切分而非静默降级",
+      semanticWithoutEmbeddings.status === 400 &&
+        String(semanticWithoutEmbeddings.body?.error).includes("requires embeddings"),
+      JSON.stringify(semanticWithoutEmbeddings.body),
+    );
+
+    step("2. 上传两篇文档，图谱应自动重建");
     const up = await upload({ "a.md": DOC_A, "b.md": DOC_B });
     check("上传返回 201", up.status === 201, `status=${up.status}`);
     check(
@@ -130,7 +143,55 @@ async function main() {
     check("抽出实体与关系", stats1.entities > 0 && stats1.relations > 0, JSON.stringify(stats1));
     console.log(`    图谱规模：实体 ${stats1.entities} / 关系 ${stats1.relations}`);
 
-    step("2. 删除 a.md，图谱应级联回收且不误伤 b.md");
+    step("3. 文档资产、查询反馈与运营指标应形成闭环");
+    const documents = await api("/api/documents");
+    const documentB = (documents.body?.sources ?? []).find((item) => item.source === "b.md");
+    check(
+      "文档目录含版本与内容指纹",
+      documentB?.version === 1 &&
+        documentB?.contentHash?.length === 64 &&
+        documentB?.chunkStrategy === "fixed",
+      JSON.stringify(documentB),
+    );
+    const metadata = await api("/api/documents/b.md", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "阿里生态说明", tags: ["云服务", "支付"] }),
+    });
+    check(
+      "可维护标题与标签",
+      metadata.body?.document?.title === "阿里生态说明" &&
+        metadata.body?.document?.tags?.length === 2,
+      JSON.stringify(metadata.body),
+    );
+    const query = await api("/api/query", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "阿里云提供什么服务", sources: ["b.md"], topK: 3 }),
+    });
+    check(
+      "查询返回 queryId 与命中片段",
+      Boolean(query.body?.queryId) && query.body?.chunks?.length > 0,
+      JSON.stringify(query.body),
+    );
+    const feedback = await api(`/api/query/${query.body?.queryId}/feedback`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rating: "positive" }),
+    });
+    check(
+      "反馈写入成功",
+      feedback.body?.feedback?.rating === "positive",
+      JSON.stringify(feedback.body),
+    );
+    const analytics = await api("/api/analytics/overview?days=14");
+    check(
+      "运营指标聚合查询与好评",
+      analytics.body?.totals?.queries === 1 && analytics.body?.totals?.helpfulRate === 1,
+      JSON.stringify(analytics.body?.totals),
+    );
+
+    step("4. 删除 a.md，图谱应级联回收且不误伤 b.md");
     const del = await api("/api/documents/a.md", { method: "DELETE" });
     check("删除返回 ok", del.body?.ok === true, JSON.stringify(del.body));
     check(
@@ -138,9 +199,7 @@ async function main() {
       (del.body?.graph?.entities ?? 0) > 0 || (del.body?.graph?.relations ?? 0) > 0,
       JSON.stringify(del.body?.graph),
     );
-    console.log(
-      `    回收：实体 ${del.body?.graph?.entities} / 关系 ${del.body?.graph?.relations}`,
-    );
+    console.log(`    回收：实体 ${del.body?.graph?.entities} / 关系 ${del.body?.graph?.relations}`);
 
     const afterDel = await waitSettled();
     check("删除后仍一致（无孤儿）", afterDel.inSync === true, JSON.stringify(afterDel));
@@ -152,7 +211,7 @@ async function main() {
     check("图谱仍保留 b.md 数据", stats2.entities > 0, JSON.stringify(stats2));
     console.log(`    剩余规模：实体 ${stats2.entities} / 关系 ${stats2.relations}`);
 
-    step("3. 制造漂移：绕过编排器清掉 b.md 图谱，应被识别为 missing");
+    step("5. 制造漂移：绕过编排器清掉 b.md 图谱，应被识别为 missing");
     const drop = await api("/api/graph/sources/b.md", { method: "DELETE" });
     check("单来源清理成功", drop.body?.ok === true, JSON.stringify(drop.body));
     const drift = await api("/api/graph/sync-status");
@@ -163,7 +222,7 @@ async function main() {
       JSON.stringify(drift.body?.missing),
     );
 
-    step("4. 一键对账，应自动修复");
+    step("6. 一键对账，应自动修复");
     const rec = await api("/api/graph/reconcile", { method: "POST" });
     check("对账返回 200", rec.status === 200, `status=${rec.status}`);
     check(
@@ -178,17 +237,13 @@ async function main() {
     check("图谱数据已恢复", stats3.entities > 0, JSON.stringify(stats3));
     console.log(`    恢复规模：实体 ${stats3.entities} / 关系 ${stats3.relations}`);
 
-    step("5. 删空知识库，图谱应同步清零");
+    step("7. 删空知识库，图谱应同步清零");
     await api("/api/documents/b.md", { method: "DELETE" });
     const empty = await waitSettled();
     check("清空后一致", empty.inSync === true, JSON.stringify(empty));
     const sources4 = await api("/api/graph/sources");
     const stats4 = sources4.body?.stats ?? {};
-    check(
-      "图谱彻底清零",
-      stats4.entities === 0 && stats4.relations === 0,
-      JSON.stringify(stats4),
-    );
+    check("图谱彻底清零", stats4.entities === 0 && stats4.relations === 0, JSON.stringify(stats4));
     check(
       "来源状态行也清干净",
       (sources4.body?.sources ?? []).length === 0,

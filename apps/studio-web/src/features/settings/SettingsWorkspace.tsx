@@ -22,6 +22,20 @@ import {
 } from "../providers/api.js";
 import { PROVIDER_FORMATS, PROVIDER_FORMAT_LABELS } from "../providers/api.js";
 import { ImChannelsSection } from "../im/ImChannelsWorkspace.js";
+import { SchemaSourcesSection } from "./SchemaSourcesSection.js";
+
+type SettingsSection = "providers" | "schema-sources" | "im";
+
+const sectionCopy: Record<SettingsSection, { title: string; subtitle: string }> = {
+  providers: { title: "模型 Provider", subtitle: "集中管理模型服务、接入协议和路由。" },
+  "schema-sources": { title: "Schema 数据源", subtitle: "管理问数数据库、采集范围与默认路由。" },
+  im: { title: "IM 渠道", subtitle: "接入飞书 / 钉钉机器人，配置知识库绑定与群聊响应规则。" },
+};
+
+function initialSection(): SettingsSection {
+  const stored = sessionStorage.getItem("open-agent-tools.settings-section");
+  return stored === "schema-sources" || stored === "im" ? stored : "providers";
+}
 
 type Draft = {
   id?: string;
@@ -48,7 +62,12 @@ export function SettingsWorkspace() {
   const [saving, setSaving] = useState(false);
   const [defaultingId, setDefaultingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<"providers" | "im">("providers");
+  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
+
+  const selectSection = (section: SettingsSection) => {
+    sessionStorage.setItem("open-agent-tools.settings-section", section);
+    setActiveSection(section);
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -111,13 +130,9 @@ export function SettingsWorkspace() {
         <div>
           <p className="domain-eyebrow">RUNTIME CONFIGURATION</p>
           <h1>
-            <SettingOutlined /> {activeSection === "providers" ? "模型 Provider" : "IM 渠道"}
+            <SettingOutlined /> {sectionCopy[activeSection].title}
           </h1>
-          <p className="domain-subtitle">
-            {activeSection === "providers"
-              ? "集中管理 OpenAI 兼容服务和可用模型。"
-              : "接入飞书 / 钉钉机器人，配置知识库绑定与群聊响应规则。"}
-          </p>
+          <p className="domain-subtitle">{sectionCopy[activeSection].subtitle}</p>
         </div>
         {activeSection === "providers" ? (
           <div className="domain-header-actions">
@@ -145,9 +160,9 @@ export function SettingsWorkspace() {
             className={`settings-section${activeSection === "providers" ? " is-active" : ""}`}
             role="button"
             tabIndex={0}
-            onClick={() => setActiveSection("providers")}
+            onClick={() => selectSection("providers")}
             onKeyDown={(event) => {
-              if (event.key === "Enter") setActiveSection("providers");
+              if (event.key === "Enter") selectSection("providers");
             }}
           >
             <span>01</span>
@@ -155,15 +170,28 @@ export function SettingsWorkspace() {
             <small>路由与模型目录</small>
           </div>
           <div
-            className={`settings-section${activeSection === "im" ? " is-active" : ""}`}
+            className={`settings-section${activeSection === "schema-sources" ? " is-active" : ""}`}
             role="button"
             tabIndex={0}
-            onClick={() => setActiveSection("im")}
+            onClick={() => selectSection("schema-sources")}
             onKeyDown={(event) => {
-              if (event.key === "Enter") setActiveSection("im");
+              if (event.key === "Enter") selectSection("schema-sources");
             }}
           >
             <span>02</span>
+            <b>Schema 数据源</b>
+            <small>问数连接与目录</small>
+          </div>
+          <div
+            className={`settings-section${activeSection === "im" ? " is-active" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => selectSection("im")}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") selectSection("im");
+            }}
+          >
+            <span>03</span>
             <b>IM 渠道</b>
             <small>飞书 / 钉钉机器人</small>
           </div>
@@ -290,6 +318,8 @@ export function SettingsWorkspace() {
               </table>
             </div>
           </main>
+        ) : activeSection === "schema-sources" ? (
+          <SchemaSourcesSection />
         ) : (
           <ImChannelsSection />
         )}

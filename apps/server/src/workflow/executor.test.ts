@@ -346,9 +346,7 @@ describe("workflow executor", () => {
     );
     assert.equal(receivedSystemPrompt, "你是助手，请使用 中文 回答");
     assert.equal(receivedPrompt, "请回答：如何优化 LLM 调用");
-    const llmEvent = events.find(
-      (event) => event.type === "node_result" && event.nodeId === "llm",
-    );
+    const llmEvent = events.find((event) => event.type === "node_result" && event.nodeId === "llm");
     assert.ok(llmEvent);
     assert.equal(llmEvent.status, "success");
     assert.equal(llmEvent.systemPrompt, "你是助手，请使用 中文 回答");
@@ -413,9 +411,7 @@ describe("workflow executor", () => {
     // prompt 未配置时，上游入参数据自动拼接为 user 消息，不再被系统提示词覆盖。
     assert.equal(receivedSystemPrompt, "你是严格的翻译助手");
     assert.equal(receivedPrompt, "q:\n如何优化 LLM 调用");
-    const llmEvent = events.find(
-      (event) => event.type === "node_result" && event.nodeId === "llm",
-    );
+    const llmEvent = events.find((event) => event.type === "node_result" && event.nodeId === "llm");
     assert.ok(llmEvent);
     assert.equal(llmEvent.systemPrompt, "你是严格的翻译助手");
     assert.equal(llmEvent.prompt, "q:\n如何优化 LLM 调用");
@@ -539,4 +535,119 @@ describe("workflow executor", () => {
       /query/,
     );
   });
+});
+
+describe("declared workflow variables", () => {
+  it("rejects misspelled templates and run variables before calling external tools", async () => {
+    const nodes: WorkflowRunRequest["nodes"] = [
+      { id: "start", kind: "start", config: { runVariables: [{ name: "query", type: "string" }] } },
+      {
+        id: "tool",
+        kind: "mcp",
+        config: {
+          serviceSlug: "docs",
+          toolName: "search",
+          inputs: [{ name: "query", source: { type: "run", variable: "query" } }],
+          arguments: '{"query":"{{qurey}}"}',
+        },
+      },
+    ];
+    let calls = 0;
+    await assert.rejects(
+      executeWorkflow(
+        { nodes, edges: [{ source: "start", target: "tool" }], input: { query: "hello" } },
+        () => {},
+        {
+          callMcpTool: async () => {
+            calls++;
+            return {};
+          },
+        },
+      ),
+      /未绑定变量 qurey/,
+    );
+    assert.equal(calls, 0);
+    nodes[1]!.config = { inputs: [{ name: "query", source: { type: "run", variable: "qurey" } }] };
+    assert.throws(
+      () => validateWorkflow({ nodes, edges: [{ source: "start", target: "tool" }], input: {} }),
+      /qurey 未声明/,
+    );
+  });
+  it("uses typed defaults during execution and rejects mismatched values", async () => {
+    const request: WorkflowRunRequest = {
+      nodes: [
+        {
+          id: "start",
+          kind: "start",
+          config: { runVariables: [{ name: "count", type: "number", defaultValue: 3 }] },
+        },
+        {
+          id: "end",
+          kind: "end",
+          config: {
+            inputs: [{ name: "count", source: { type: "run", variable: "count" } }],
+            outputs: [{ name: "count", selector: "$inputs.count" }],
+          },
+        },
+      ],
+      edges: [{ source: "start", target: "end" }],
+      input: {},
+    };
+    assert.equal((await executeWorkflow(request, () => {})).end?.count, 3);
+    await assert.rejects(
+      executeWorkflow({ ...request, input: { count: "3" } }, () => {}),
+      /应为 number/,
+    );
+  });
+  it("allows declared optional inputs to be absent in a template", async () => {
+    const request: WorkflowRunRequest = {
+      nodes: [
+        {
+          id: "start",
+          kind: "start",
+          config: { runVariables: [{ name: "suffix", type: "string", required: false }] },
+        },
+        {
+          id: "tool",
+          kind: "mcp",
+          config: {
+            serviceSlug: "docs",
+            toolName: "search",
+            inputs: [
+              { name: "suffix", source: { type: "run", variable: "suffix" }, required: false },
+            ],
+            arguments: '{"query":"hello{{suffix}}"}',
+            outputs: [{ name: "result", selector: "$result" }],
+          },
+        },
+      ],
+      edges: [{ source: "start", target: "tool" }],
+      input: {},
+    };
+    const outputs = await executeWorkflow(request, () => {}, {
+      callMcpTool: async (_binding, args) => args,
+    });
+    assert.deepEqual(outputs.tool?.result, { query: "hello" });
+  });
+});
+
+it("reports missing dynamic output paths instead of silently dropping the output", async () => {
+  const result = await executeWorkflowNodeTest(
+    {
+      node: {
+        id: "tool",
+        kind: "mcp",
+        config: {
+          serviceSlug: "docs",
+          toolName: "search",
+          arguments: "{}",
+          outputs: [{ name: "title", selector: "$result.titel" }],
+        },
+      },
+      inputs: {},
+    },
+    { callMcpTool: async () => ({ title: "document" }) },
+  );
+  assert.equal(result.status, "error");
+  assert.match(result.error!, /输出路径.*titel.*不存在/);
 });

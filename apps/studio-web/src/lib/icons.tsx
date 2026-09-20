@@ -10,6 +10,7 @@ import type { CSSProperties, FC } from "react";
 import type { LucideProps } from "lucide-react";
 import {
   ArrowDown,
+  BarChart3,
   Webhook,
   Boxes,
   Building2,
@@ -49,6 +50,10 @@ import {
   ShieldCheck,
   SquarePen,
   Star,
+  Table2,
+  Tag,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   Undo2,
   Upload,
@@ -113,6 +118,8 @@ export const StarOutlined = adapt(Star);
 export const ArrowDownOutlined = adapt(ArrowDown);
 export const PanelLeftCloseOutlined = adapt(PanelLeftClose);
 export const PanelLeftOpenOutlined = adapt(PanelLeftOpen);
+export const LikeOutlined = adapt(ThumbsUp);
+export const DislikeOutlined = adapt(ThumbsDown);
 
 // ── 领域 / 业务 ──
 export const ApiOutlined = adapt(Webhook);
@@ -120,6 +127,7 @@ export const ApartmentOutlined = adapt(Boxes);
 export const BranchesOutlined = adapt(GitBranch);
 export const MessageOutlined = adapt(MessageSquare);
 export const DatabaseOutlined = adapt(Database);
+export const TableOutlined = adapt(Table2);
 export const NodeIndexOutlined = adapt(Network);
 export const ExperimentOutlined = adapt(FlaskConical);
 export const FlagOutlined = adapt(Flag);
@@ -136,6 +144,8 @@ export const AuditOutlined = adapt(FileSearch);
 export const CodeOutlined = adapt(Code);
 export const BuildOutlined = adapt(Hammer);
 export const Building2Outlined = adapt(Building2);
+export const BarChartOutlined = adapt(BarChart3);
+export const TagOutlined = adapt(Tag);
 export const PauseCircleOutlined = adapt(CirclePause);
 export const PlayCircleOutlined = adapt(CirclePlay);
 export const PlayCircleFilled = adapt(CirclePlay, true);

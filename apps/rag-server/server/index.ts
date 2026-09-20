@@ -1,4 +1,5 @@
 import { config as loadEnv } from "dotenv";
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
@@ -7,10 +8,12 @@ import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { CallbackHandler } from "@langfuse/langchain";
 import { DEFAULT_SEPARATORS, Rag } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
-import { parseSeparators } from "./chunk-settings.js";
+import { parseChunkStrategy, parseSemanticThreshold, parseSeparators } from "./chunk-settings.js";
 import { querySources } from "./query-settings.js";
 import { buildCragController, graphRouter } from "./graph.js";
 import { GraphLifecycle } from "./lifecycle.js";
+import { RagAnalyticsStore, type QueryEventInput } from "./analytics.js";
+import { documentMetadataPatch, queryFeedback } from "./request-validation.js";
 // Langfuse 必须在创建 LangChain 模型（llm/embeddings）之前初始化并附加 CallbackHandler。
 import { initLangfuse, runTraced, withTraceAttributes } from "@open-agent-tools/observability";
 initLangfuse({ serviceName: "open-agent-rag-server", envRoot: "../" });
@@ -23,12 +26,16 @@ const apiKey = process.env.OPENAI_API_KEY;
 const baseURL = process.env.OPENAI_API_BASE_URL;
 const dbPath = resolve(import.meta.dirname, process.env.RAG_DB_PATH ?? "../rag.db");
 // 图谱库与知识库同生命周期，两者路径必须一起切换：只改一个会让新库对着旧图谱做对账。
-const graphDbPath = resolve(import.meta.dirname, process.env.RAG_GRAPH_DB_PATH ?? "../rag-graph.db");
+const graphDbPath = resolve(
+  import.meta.dirname,
+  process.env.RAG_GRAPH_DB_PATH ?? "../rag-graph.db",
+);
 const defaultChunkSize = Number(process.env.RAG_CHUNK_SIZE) || 500;
 const defaultChunkOverlap = Number(process.env.RAG_CHUNK_OVERLAP) || 50;
 const defaultSeparators = parseSeparators(process.env.RAG_SEPARATORS, DEFAULT_SEPARATORS);
-// 语义切分相似度阈值（0-1）：有 embedding Key 时按话题断块，越低切得越碎。仅对未自定义 separators 的文档生效。
-const defaultSemanticThreshold = Number(process.env.RAG_SEMANTIC_THRESHOLD) || undefined;
+const defaultChunkStrategy = parseChunkStrategy(process.env.RAG_CHUNK_STRATEGY, "fixed");
+// 相邻单元相似度低于阈值时断块；阈值越高，分块越细。
+const defaultSemanticThreshold = parseSemanticThreshold(process.env.RAG_SEMANTIC_THRESHOLD, 0.75);
 
 // LangChain CallbackHandler：把 llm 的调用自动写入 Langfuse。
 // 未配置 LANGFUSE_* 时 instrumentation 内部禁用，handler 为 no-op。
@@ -57,9 +64,11 @@ const rag = new Rag({
   dbPath,
   chunkSize: defaultChunkSize,
   chunkOverlap: defaultChunkOverlap,
+  chunkStrategy: defaultChunkStrategy,
   separators: defaultSeparators,
   semanticThreshold: defaultSemanticThreshold,
 });
+const analytics = new RagAnalyticsStore(dbPath, Number(process.env.RAG_QUERY_RETENTION_DAYS) || 90);
 
 // 知识图谱：独立 SQLite 邻接表存储（与 rag 共用文档源，抽取输入为 rag 分块）。
 // 有 Key 时接入 LLM 抽取器（语义三元组）+ 实体名向量兜底；无 Key 自动回退规则抽取（句内共现）。
@@ -113,7 +122,9 @@ function clampTopK(value: unknown): number {
 function uploadChunkSettings(body: Record<string, unknown>): {
   chunkSize: number;
   chunkOverlap: number;
+  chunkStrategy: "fixed" | "semantic";
   separators: string[];
+  semanticThreshold: number;
 } {
   const requestedSize = Number(body.chunkSize);
   const requestedOverlap = Number(body.chunkOverlap);
@@ -131,7 +142,9 @@ function uploadChunkSettings(body: Record<string, unknown>): {
   return {
     chunkSize,
     chunkOverlap,
+    chunkStrategy: parseChunkStrategy(body.chunkStrategy, defaultChunkStrategy),
     separators: parseSeparators(body.separators, defaultSeparators),
+    semanticThreshold: parseSemanticThreshold(body.semanticThreshold, defaultSemanticThreshold),
   };
 }
 
@@ -151,6 +164,10 @@ app.post("/api/documents", upload.array("files"), async (req: Request, res: Resp
     chunkSettings = uploadChunkSettings(req.body as Record<string, unknown>);
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+  if (chunkSettings.chunkStrategy === "semantic" && !embeddings) {
+    res.status(400).json({ error: "semantic chunking requires embeddings" });
     return;
   }
   try {
@@ -183,18 +200,16 @@ app.post("/api/documents", upload.array("files"), async (req: Request, res: Resp
 
 /** 知识库概览：来源列表（含每个来源的分块数）+ 总分块数 + 能力状态。 */
 app.get("/api/documents", (_req: Request, res: Response) => {
-  const sources = rag.listSources();
   res.json({
-    sources: sources.map((source) => ({
-      source,
-      chunks: rag.listChunks(source).length,
-    })),
+    sources: rag.listDocuments(),
     chunks: rag.getStats().chunks,
     embeddingsEnabled: Boolean(embeddings),
     llmAvailable: Boolean(llm),
     chunkSize: defaultChunkSize,
     chunkOverlap: defaultChunkOverlap,
+    chunkStrategy: defaultChunkStrategy,
     separators: defaultSeparators,
+    semanticThreshold: defaultSemanticThreshold,
   });
 });
 
@@ -209,6 +224,26 @@ app.get("/api/documents/:source/chunks", (req: Request, res: Response) => {
   res.json({ source, chunks: rag.listChunks(source) });
 });
 
+/** 编辑展示标题与标签。source 是稳定检索标识，不允许原地重命名。 */
+app.patch("/api/documents/:source", (req: Request, res: Response) => {
+  const raw = req.params.source;
+  const source = decodeURIComponent(Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? ""));
+  if (!source) {
+    res.status(400).json({ error: "source is required" });
+    return;
+  }
+  try {
+    const updated = rag.updateDocument(source, documentMetadataPatch(req.body));
+    if (!updated) {
+      res.status(404).json({ error: "document not found" });
+      return;
+    }
+    res.json({ document: updated });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 /** 删除某个来源的全部数据（分块 + 派生的图谱实体关系一并清理）。 */
 app.delete("/api/documents/:source", (req: Request, res: Response) => {
   const raw = req.params.source;
@@ -220,6 +255,27 @@ app.delete("/api/documents/:source", (req: Request, res: Response) => {
   rag.clearSource(source);
   const removed = lifecycle.onDocumentRemoved(source);
   res.json({ ok: true, source, graph: removed });
+});
+
+/** 产品运营指标：查询量、空召回、延迟、反馈、热门来源与最近查询。 */
+app.get("/api/analytics/overview", (req: Request, res: Response) => {
+  res.json(analytics.overview(Number(req.query.days) || 14));
+});
+
+app.put("/api/query/:queryId/feedback", (req: Request, res: Response) => {
+  const raw = req.params.queryId;
+  const queryId = Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? "");
+  try {
+    const feedback = queryFeedback(req.body);
+    const saved = analytics.saveFeedback(queryId, feedback.rating, feedback.comment);
+    if (!saved) {
+      res.status(404).json({ error: "query not found" });
+      return;
+    }
+    res.json({ feedback: saved });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 /** 混合检索（+ 可选 LLM 生成回答 / CRAG 纠正评估）。 */
@@ -239,6 +295,9 @@ app.post("/api/query", async (req: Request, res: Response) => {
   const topK = clampTopK(body.topK);
   const generate = Boolean(body.generate);
   const useCrag = Boolean(body.crag);
+  const queryId = randomUUID();
+  const queryStartedAt = Date.now();
+  let analyticsRecorded = false;
   let sources: string[] | undefined;
   try {
     sources = querySources(body.sources);
@@ -273,7 +332,8 @@ app.post("/api/query", async (req: Request, res: Response) => {
                   },
                   { role: "user", content: query },
                 ]);
-                answer = typeof resp.content === "string" ? resp.content : JSON.stringify(resp.content);
+                answer =
+                  typeof resp.content === "string" ? resp.content : JSON.stringify(resp.content);
               }
               span.update({
                 output: {
@@ -284,7 +344,20 @@ app.post("/api/query", async (req: Request, res: Response) => {
                   answer: summarize(answer),
                 },
               });
+              recordAnalytics({
+                id: queryId,
+                query,
+                sources,
+                topK,
+                generate,
+                crag: true,
+                hits: result.citations,
+                answerGenerated: Boolean(answer),
+                latencyMs: Date.now() - queryStartedAt,
+              });
+              analyticsRecorded = true;
               res.json({
+                queryId,
                 query,
                 crag: {
                   assessment: result.assessment,
@@ -312,7 +385,8 @@ app.post("/api/query", async (req: Request, res: Response) => {
                 },
                 { role: "user", content: query },
               ]);
-              answer = typeof resp.content === "string" ? resp.content : JSON.stringify(resp.content);
+              answer =
+                typeof resp.content === "string" ? resp.content : JSON.stringify(resp.content);
             }
             span.update({
               output: {
@@ -320,7 +394,20 @@ app.post("/api/query", async (req: Request, res: Response) => {
                 answer: summarize(answer),
               },
             });
+            recordAnalytics({
+              id: queryId,
+              query,
+              sources,
+              topK,
+              generate,
+              crag: false,
+              hits: result.chunks,
+              answerGenerated: Boolean(answer),
+              latencyMs: Date.now() - queryStartedAt,
+            });
+            analyticsRecorded = true;
             res.json({
+              queryId,
               query,
               chunks: result.chunks,
               answer,
@@ -338,9 +425,32 @@ app.post("/api/query", async (req: Request, res: Response) => {
       );
     });
   } catch (e) {
-    res.status(500).json({ error: String(e) });
+    if (!analyticsRecorded) {
+      recordAnalytics({
+        id: queryId,
+        query,
+        sources,
+        topK,
+        generate,
+        crag: useCrag,
+        hits: [],
+        answerGenerated: false,
+        latencyMs: Date.now() - queryStartedAt,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    res.status(500).json({ error: String(e), queryId });
   }
 });
+
+/** 统计写入失败不应拖垮在线问答，错误保留在服务日志中。 */
+function recordAnalytics(input: QueryEventInput): void {
+  try {
+    analytics.recordQuery(input);
+  } catch (error) {
+    console.error(`[rag-analytics] failed to record query ${input.id}: ${String(error)}`);
+  }
+}
 
 /** 截断长回答，仅用于 trace output，不影响响应内容。 */
 function summarize(value: string | null): string | null {

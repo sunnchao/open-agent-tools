@@ -146,31 +146,31 @@ pnpm start
 
 ## 可用命令
 
-| 命令 | 说明 |
-|------|------|
-| `/new` | 创建新会话 |
-| `/list` | 列出所有历史会话 |
-| `/load <id>` | 加载指定会话（支持部分 ID） |
-| `/delete <id>` | 删除指定会话 |
-| `/tools` | 列出当前可用工具（含来源 `mcp:server`） |
-| `/init` | 扫描仓库结构，生成项目上下文（`AGENTS.md`） |
-| `/context` | 查看当前已加载的项目上下文 |
-| `/memory` | 长期记忆子命令（`search` / `list` / `read` / `review` / `accept` / `daily` / `organize` / `quota` / `wipe`） |
-| `/help` | 显示帮助信息 |
-| `exit` | 退出程序 |
+| 命令           | 说明                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `/new`         | 创建新会话                                                                                                   |
+| `/list`        | 列出所有历史会话                                                                                             |
+| `/load <id>`   | 加载指定会话（支持部分 ID）                                                                                  |
+| `/delete <id>` | 删除指定会话                                                                                                 |
+| `/tools`       | 列出当前可用工具（含来源 `mcp:server`）                                                                      |
+| `/init`        | 扫描仓库结构，生成项目上下文（`AGENTS.md`）                                                                  |
+| `/context`     | 查看当前已加载的项目上下文                                                                                   |
+| `/memory`      | 长期记忆子命令（`search` / `list` / `read` / `review` / `accept` / `daily` / `organize` / `quota` / `wipe`） |
+| `/help`        | 显示帮助信息                                                                                                 |
+| `exit`         | 退出程序                                                                                                     |
 
 ## 工具
 
 Agent 由 Pi Agent（`pi-coding-agent`）驱动，内置以下工具：
 
-| 工具 | 说明 | 授权 |
-|------|------|------|
-| `ls` / `grep` / `find` / `read` | 文件系统读取与检索 | 自动 |
-| `write` / `edit` | 写入与编辑文件 | 逐次确认 |
-| `bash` | 执行 shell 命令 | 逐次确认 |
-| `task` | 在隔离上下文中委派复杂的只读检索与分析 | 自动（子会话仅有 read / grep / find / ls） |
-| `todo` | 管理项目根目录 `TODO.md` | 自动 |
-| `get_current_time` / `memory_*` / MCP 工具 | 时间、长期记忆、MCP 服务 | 按配置 |
+| 工具                                       | 说明                                   | 授权                                       |
+| ------------------------------------------ | -------------------------------------- | ------------------------------------------ |
+| `ls` / `grep` / `find` / `read`            | 文件系统读取与检索                     | 自动                                       |
+| `write` / `edit`                           | 写入与编辑文件                         | 逐次确认                                   |
+| `bash`                                     | 执行 shell 命令                        | 逐次确认                                   |
+| `task`                                     | 在隔离上下文中委派复杂的只读检索与分析 | 自动（子会话仅有 read / grep / find / ls） |
+| `todo`                                     | 管理项目根目录 `TODO.md`               | 自动                                       |
+| `get_current_time` / `memory_*` / MCP 工具 | 时间、长期记忆、MCP 服务               | 按配置                                     |
 
 危险工具（`write`、`edit`、`bash`）运行前会请求授权：`a=允许 / n=拒绝 / A=本次会话始终允许`。
 
@@ -346,31 +346,31 @@ pnpm start
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/new` | Create a new session |
-| `/list` | List all historical sessions |
-| `/load <id>` | Load a session (partial ID supported) |
-| `/delete <id>` | Delete a session |
-| `/tools` | List currently available tools (including `mcp:server` sources) |
-| `/init` | Scan the repository and generate project context (`AGENTS.md`) |
-| `/context` | Show the currently loaded project context |
-| `/memory` | Long-term memory subcommands (`search` / `list` / `read` / `review` / `accept` / `daily` / `organize` / `quota` / `wipe`) |
-| `/help` | Show help |
-| `exit` | Exit the program |
+| Command        | Description                                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `/new`         | Create a new session                                                                                                      |
+| `/list`        | List all historical sessions                                                                                              |
+| `/load <id>`   | Load a session (partial ID supported)                                                                                     |
+| `/delete <id>` | Delete a session                                                                                                          |
+| `/tools`       | List currently available tools (including `mcp:server` sources)                                                           |
+| `/init`        | Scan the repository and generate project context (`AGENTS.md`)                                                            |
+| `/context`     | Show the currently loaded project context                                                                                 |
+| `/memory`      | Long-term memory subcommands (`search` / `list` / `read` / `review` / `accept` / `daily` / `organize` / `quota` / `wipe`) |
+| `/help`        | Show help                                                                                                                 |
+| `exit`         | Exit the program                                                                                                          |
 
 ## Tools
 
 The agent is driven by Pi Agent (`pi-coding-agent`) with these tools:
 
-| Tool | Description | Authorization |
-|------|-------------|---------------|
-| `ls` / `grep` / `find` / `read` | Filesystem reading and search | Automatic |
-| `write` / `edit` | Write and edit files | Per-request confirmation |
-| `bash` | Run shell commands | Per-request confirmation |
-| `task` | Delegate complex read-only research and analysis in an isolated context | Automatic (child session only has read / grep / find / ls) |
-| `todo` | Manage `TODO.md` in the project root | Automatic |
-| `get_current_time` / `memory_*` / MCP tools | Time, long-term memory, MCP services | Per configuration |
+| Tool                                        | Description                                                             | Authorization                                              |
+| ------------------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `ls` / `grep` / `find` / `read`             | Filesystem reading and search                                           | Automatic                                                  |
+| `write` / `edit`                            | Write and edit files                                                    | Per-request confirmation                                   |
+| `bash`                                      | Run shell commands                                                      | Per-request confirmation                                   |
+| `task`                                      | Delegate complex read-only research and analysis in an isolated context | Automatic (child session only has read / grep / find / ls) |
+| `todo`                                      | Manage `TODO.md` in the project root                                    | Automatic                                                  |
+| `get_current_time` / `memory_*` / MCP tools | Time, long-term memory, MCP services                                    | Per configuration                                          |
 
 Dangerous tools (`write`, `edit`, `bash`) request authorization before running: `a=allow / n=deny / A=always allow this session`.
 
@@ -423,58 +423,8 @@ Loaded in this order: `.env` → `.env.local` → `.env.development` → `.env.d
 OPENAI_API_KEY=your_api_key
 OPENAI_API_BASE_URL=https://api.openai.com/v1
 OPENAI_API_MODEL=gpt-4
-OPENAI_API_REASONING_EFFORT=off  # optional: off/minimal/low/medium/high/xhigh/max
-SQLITE_PATH=./data/chat.sqlite  # optional; defaults to apps/cli/data/chat.sqlite
-```
-
-## Data storage
-
-All session data is stored in SQLite, by default at:
-
-```
-apps/cli/data/chat.sqlite
-```
-
-Customize the path with the `SQLITE_PATH` environment variable. Long-term memory files live in project-level `.agent-demo/memory/` and user-level `~/.config/agent-demo/memory/`.
-
-## Development
-
-### Typecheck
-
-```bash
-pnpm --filter @open-agent-tools/cli typecheck
-```
-
-### Format
-
-```bash
-pnpm --filter @open-agent-tools/cli format
-```
-
-### Lint
-
-```bash
-pnpm --filter @open-agent-tools/cli lint
-```
-
-### Test
-
-```bash
-pnpm --filter @open-agent-tools/cli test
-```
-
-## Tech stack
-
-- **Pi Agent (`pi-ai` / `pi-coding-agent`)**: agent runtime and unified LLM abstraction
-- **OpenAI-compatible LLM**: via `OPENAI_API_BASE_URL` / `OPENAI_API_KEY`
-- **MCP SDK (`@modelcontextprotocol/sdk`)**: dynamic MCP service integration
-- **SQLite (`node:sqlite`)**: session and memory persistence
-- **Chalk**: terminal colors
-- **Ora**: loading animation
-- **Marked / Marked Terminal**: Markdown rendering
-- **TypeBox (`@sinclair/typebox`)**: tool parameter schemas
-- **Zod**: command-layer input validation
-
+OPENAI_API_REASONING_EFFORT=off  # 
+…(内容截断，原文共 7232 字符)
 ````
 
 ### mcp.example.json
@@ -534,13 +484,13 @@ pnpm --filter @open-agent-tools/cli test
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.1",
     "@earendil-works/pi-coding-agent": "0.84.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "chalk": "^6.0.0",
-    "dotenv": "^16.6.1",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "chalk": "catalog:",
+    "dotenv": "catalog:",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
     "ora": "^9.4.1",
-    "zod": "^4.4.3"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/marked-terminal": "^6.1.1"
@@ -561,12 +511,12 @@ pnpm --filter @open-agent-tools/cli test
     "outDir": "dist",
     "rootDir": "src"
   },
-  "include": ["src/**/*.ts"],
-  "references": []
+  "include": [
+    "src/**/*.ts"
+  ]
 }
 
 ```
 
 ---
-
-_生成时间: 2026-08-11T02:56:31.148Z_
+*生成时间: 2026-09-17T03:48:50.475Z*

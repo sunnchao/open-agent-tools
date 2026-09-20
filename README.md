@@ -19,6 +19,8 @@
 - 通过 Streamable HTTP 提供 `tools/list`、`tools/call`、`prompts/list` 和 `prompts/get`。
 - 提供 React 管理界面，用于服务、Tool、Prompt、构建和版本操作。
 - IM 协同入口：Studio Web「设置 → IM 渠道」可视化配置飞书/钉钉机器人（多渠道、密钥加密存储、知识库绑定），群聊 @机器人即可走 Agent Chat + RAG 知识库问答。
+- 多源问数：Studio Web「设置 → Schema 数据源」管理多个 MySQL / PostgreSQL 只读连接、采集范围和默认路由；问数页按源隔离 catalog、关系图和 SQL 执行。
+- RAG 资产运营：支持固定切分与基于 Embedding 相似度的语义切分；文档标题/标签、内容指纹、切分参数、版本与更新时间可治理；同名重传原子替换，内置查询量、空召回率、延迟、热门来源和用户反馈看板。
 
 当前托管运行时只支持 Node.js 20、ESM 和 npm。Python、Java、托管 MCP Resources，以及远程 MCP 代理尚未包含在当前可运行范围内。
 

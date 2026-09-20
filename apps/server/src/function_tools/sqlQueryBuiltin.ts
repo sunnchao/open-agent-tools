@@ -7,6 +7,7 @@
  * 安全：护栏（黑名单/单语句/SELECT 限定）+ SELECT 外层包 LIMIT + 只读账号建议。
  */
 import { createMysqlPool, type MysqlPool } from "@open-agent-tools/database/mysql";
+import { createPostgresPool } from "@open-agent-tools/database/postgres";
 
 export const QUERY_SQL_TOOL = {
   type: "function" as const,
@@ -59,17 +60,93 @@ export function validateQuerySql(sql: string): void {
   }
 }
 
-/** 执行只读 SQL，返回行数组或错误。 */
-export async function executeQuerySql(sql: string): Promise<{ ok: boolean; rows?: unknown[]; error?: string; durationMs: number }> {
+/** 执行只读 SQL，返回行数组或错误。params 用于权限 IN 列表绑定，禁止把授权值拼进 SQL。 */
+export async function executeQuerySql(
+  sql: string,
+  params: unknown[] = [],
+): Promise<{ ok: boolean; rows?: unknown[]; error?: string; durationMs: number }> {
   const started = Date.now();
   try {
     validateQuerySql(sql);
     const wrapped = `SELECT * FROM (${sql.replace(/;\s*$/, "")}) _q LIMIT 100`;
-    const [rows] = await getPool().pool.query({ sql: wrapped, timeout: 10_000 });
+    const [rows] = await getPool().pool.query({ sql: wrapped, timeout: 10_000, values: params });
     return { ok: true, rows: (rows as unknown[]).slice(0, 100), durationMs: Date.now() - started };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err), durationMs: Date.now() - started };
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      durationMs: Date.now() - started,
+    };
   }
+}
+
+/** 按已配置 Schema 源执行查询；连接只在本次请求内存活，避免多源凭据交叉复用。 */
+export async function executeQuerySqlWithConnection(
+  sql: string,
+  connectionString: string,
+  params: unknown[] = [],
+  options?: {
+    connector?: "mysql" | "postgresql";
+    database?: string;
+    schema?: string;
+  },
+): Promise<{ ok: boolean; rows?: unknown[]; error?: string; durationMs: number }> {
+  const started = Date.now();
+  if (options?.connector === "postgresql") {
+    let sourcePool: ReturnType<typeof createPostgresPool> | null = null;
+    try {
+      validateQuerySql(sql);
+      sourcePool = createPostgresPool(connectionString, {
+        max: 1,
+        ...(options.database ? { database: options.database } : {}),
+      });
+      const client = await sourcePool.pool.connect();
+      try {
+        await client.query("BEGIN TRANSACTION READ ONLY");
+        await client.query("SET LOCAL statement_timeout = '10s'");
+        if (options.schema) {
+          await client.query(`SET LOCAL search_path TO ${quotePostgresIdentifier(options.schema)}`);
+        }
+        const wrapped = `SELECT * FROM (${sql.replace(/;\s*$/, "")}) AS _q LIMIT 100`;
+        const result = await client.query(wrapped, params);
+        return { ok: true, rows: result.rows.slice(0, 100), durationMs: Date.now() - started };
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+        client.release();
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - started,
+      };
+    } finally {
+      await sourcePool?.close();
+    }
+  }
+  let sourcePool: MysqlPool | null = null;
+  try {
+    validateQuerySql(sql);
+    sourcePool = createMysqlPool(connectionString, {
+      connectionLimit: 1,
+      ...(options?.database ? { database: options.database } : {}),
+    });
+    const wrapped = `SELECT * FROM (${sql.replace(/;\s*$/, "")}) _q LIMIT 100`;
+    const [rows] = await sourcePool.pool.query({ sql: wrapped, timeout: 10_000, values: params });
+    return { ok: true, rows: (rows as unknown[]).slice(0, 100), durationMs: Date.now() - started };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      durationMs: Date.now() - started,
+    };
+  } finally {
+    await sourcePool?.close();
+  }
+}
+
+function quotePostgresIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
 }
 
 /** 测试辅助：重置连接池。 */

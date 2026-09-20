@@ -1,3 +1,9 @@
+import {
+  hasRunDeclarations,
+  runVariables,
+  prepareRunInputs,
+  variableIssues,
+} from "@open-agent-tools/workflow-contracts";
 import { callMcpTool, retrieveRag, retrieveRagGraph, type McpToolBinding } from "../resources.js";
 import { getDefaultProvider, getProvider, type ProviderWithKey } from "../providers/store.js";
 import { createLlmClient, type LlmMessage } from "../providers/clients/index.js";
@@ -9,6 +15,7 @@ import {
   type ObservationKind,
 } from "@open-agent-tools/observability";
 import { logTrace } from "../trace.js";
+import { evaluateConditionExpression } from "./expression.js";
 
 export type WorkflowNodeKind =
   "start" | "input" | "rag" | "graph" | "llm" | "mcp" | "condition" | "end";
@@ -176,6 +183,9 @@ function validateBindings(
   edges: Array<WorkflowEdgeInput & { id: string }>,
   outgoing: Map<string, Array<WorkflowEdgeInput & { id: string }>>,
 ): void {
+  const issues = variableIssues(nodes);
+  if (issues.length)
+    throw new WorkflowValidationError(`node ${issues[0]!.nodeId}: ${issues[0]!.message}`);
   const byId = new Map(nodes.map((node) => [node.id, node]));
   for (const node of nodes) {
     const inputs = inputsOf(node);
@@ -293,6 +303,7 @@ function interpolate(
 ): string {
   const text = String(value ?? "");
   return text.replace(/\{\{\s*([A-Za-z_$][\w$.-]*)\s*\}\}/g, (_match, name: string) => {
+    if (!Object.hasOwn(inputs, name)) throw new Error(`未绑定变量 ${name}`);
     const resolved = inputs[name];
     if (resolved === undefined) return mode === "expression" ? "undefined" : "";
     if (mode === "expression") return JSON.stringify(resolved);
@@ -321,7 +332,10 @@ function interpolateJsonValue(value: unknown, inputs: Record<string, unknown>): 
   }
   if (typeof value !== "string") return value;
   const exact = value.match(/^\{\{\s*([A-Za-z_$][\w$.-]*)\s*\}\}$/);
-  if (exact) return inputs[exact[1]!];
+  if (exact) {
+    if (!Object.hasOwn(inputs, exact[1]!)) throw new Error(`未绑定变量 ${exact[1]}`);
+    return inputs[exact[1]!];
+  }
   return interpolate(value, inputs, "text");
 }
 
@@ -329,7 +343,10 @@ function selectValue(selector: string, result: unknown, inputs: Record<string, u
   const [root, ...path] = selector.split(".");
   let value: unknown = root === "$result" ? result : inputs;
   for (const key of path) {
-    if (!value || typeof value !== "object") return undefined;
+    // An explicitly bound optional input can be absent. Unknown result paths are errors.
+    if (value === undefined && root === "$inputs") return undefined;
+    if (!value || typeof value !== "object" || !Object.hasOwn(value, key))
+      throw new Error(`输出路径 ${selector} 不存在（字段 ${key}）`);
     value = (value as Record<string, unknown>)[key];
   }
   return value;
@@ -574,16 +591,13 @@ async function runNode(
     }
     case "condition": {
       const expression = interpolate(config.expression ?? "false", inputs, "expression");
-      let result: unknown;
       try {
-        result = Function(`"use strict"; return (${expression});`)();
+        return { result: evaluateConditionExpression(expression) };
       } catch (error) {
         throw new Error(
           `condition expression failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      if (typeof result !== "boolean") throw new Error("condition expression must return boolean");
-      return { result };
     }
     case "end":
       return { result: inputs };
@@ -653,6 +667,11 @@ export async function executeWorkflow(
   dependencies: WorkflowDependencies = {},
 ): Promise<Record<string, Record<string, unknown>>> {
   const validation = validateWorkflow(request);
+  if (hasRunDeclarations(request.nodes)) {
+    const prepared = prepareRunInputs(runVariables(request.nodes), request.input);
+    if (prepared.errors.length) throw new WorkflowValidationError(prepared.errors.join("; "));
+    request = { ...request, input: prepared.input };
+  }
   const deps = resolvedDependencies(dependencies);
   const activeNodes = new Set(
     validation.nodes

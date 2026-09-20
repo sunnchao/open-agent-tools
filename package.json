@@ -14,7 +14,7 @@
     "test": "pnpm -r --if-present run test",
     "clean": "pnpm -r --if-present run clean",
     "typecheck": "pnpm -r --if-present run typecheck",
-    "build:deps": "pnpm --filter @open-agent-tools/mcp-auth --filter @open-agent-tools/mcp-contracts --filter @open-agent-tools/database run build"
+    "build:deps": "pnpm --filter @open-agent-tools/mcp-auth --filter @open-agent-tools/mcp-contracts --filter @open-agent-tools/database --filter @open-agent-tools/workflow-contracts run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

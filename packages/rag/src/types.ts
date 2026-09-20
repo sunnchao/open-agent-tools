@@ -1,5 +1,7 @@
 import type { Document } from "@langchain/core/documents";
 
+export type ChunkStrategy = "fixed" | "semantic";
+
 /** 知识库分块。id 为稳定唯一键（sha1(source:chunkIndex)）。 */
 export interface Chunk {
   id: string;
@@ -24,6 +26,41 @@ export interface ChunkInfo extends Chunk {
   hasEmbedding: boolean;
 }
 
+/** 可运营的知识文档目录信息。source 仍是稳定检索标识，title/tags 供管理端维护。 */
+export interface DocumentInfo {
+  source: string;
+  title: string;
+  tags: string[];
+  mimeType: string;
+  byteSize: number;
+  contentHash: string;
+  chunks: number;
+  version: number;
+  chunkStrategy: ChunkStrategy;
+  chunkSize: number;
+  chunkOverlap: number;
+  separators: string[];
+  semanticThreshold: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentWriteMetadata {
+  mimeType: string;
+  byteSize: number;
+  contentHash: string;
+  chunkStrategy: ChunkStrategy;
+  chunkSize: number;
+  chunkOverlap: number;
+  separators: string[];
+  semanticThreshold: number | null;
+}
+
+export interface DocumentMetadataPatch {
+  title?: string;
+  tags?: string[];
+}
+
 export interface RetrievalResult {
   query: string;
   chunks: ScoredChunk[];
@@ -43,10 +80,17 @@ export interface IngestResult {
 /** 存储后端接口：换 Elasticsearch / seekdb 时新增实现即可，调用方 API 不变。 */
 export interface VectorStore {
   insert(chunk: Chunk, embedding: Float32Array): void;
+  replaceSource(
+    source: string,
+    rows: Array<{ chunk: Chunk; embedding: Float32Array }>,
+    metadata: DocumentWriteMetadata,
+  ): void;
   vectorSearch(embedding: number[], k: number, sources?: readonly string[]): ScoredChunk[];
   keywordSearch(query: string, k: number, sources?: readonly string[]): ScoredChunk[];
   removeBySource(source: string): void;
   listSources(): string[];
+  listDocuments(): DocumentInfo[];
+  updateDocument(source: string, patch: DocumentMetadataPatch): DocumentInfo | null;
   countChunks(): number;
 }
 

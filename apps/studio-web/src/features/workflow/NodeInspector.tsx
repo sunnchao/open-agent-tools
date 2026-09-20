@@ -1,8 +1,10 @@
+import { variableIssues } from "@open-agent-tools/workflow-contracts";
+import { variableNodes } from "./variables.js";
+import { RunVariablesEditor } from "./RunVariablesEditor.js";
+import { TemplateField } from "./TemplateField.js";
+import { nodeInputs } from "./model.js";
 import { useEffect, useState } from "react";
-import {
-  PlayCircleOutlined,
-  ReloadOutlined,
-} from "../../lib/icons.js";
+import { PlayCircleOutlined, ReloadOutlined } from "../../lib/icons.js";
 import type { ProviderMetadata } from "../../features/providers/api.js";
 import type { ResourceCatalog } from "../../features/resources/api.js";
 import type { WorkflowNodeTestResult } from "../../lib/api.js";
@@ -22,6 +24,8 @@ export function NodeInspector({
   updateEdgeLabel,
   updateNode,
   updateConfig,
+  renameVariable,
+  onManageVariables,
   catalog,
   loading,
   resourceError,
@@ -39,6 +43,12 @@ export function NodeInspector({
   updateEdgeLabel: (edgeId: string, label: string) => void;
   updateNode: (patch: Partial<WorkflowNode["data"]>) => void;
   updateConfig: (key: string, value: WorkflowConfigValue) => void;
+  renameVariable: (
+    kind: "inputs" | "outputs" | "runVariables",
+    index: number,
+    name: string,
+  ) => void;
+  onManageVariables: () => void;
   catalog: ResourceCatalog | null;
   loading: boolean;
   resourceError: string | null;
@@ -128,12 +138,31 @@ export function NodeInspector({
             />
           </label>
           <div className="inspector-section-title">参数</div>
-          <VariableBindingsEditor
-            node={node}
-            nodes={nodes}
-            edges={edges}
-            updateConfig={updateConfig}
-          />
+          {data.kind === "start" ? (
+            <RunVariablesEditor
+              node={node}
+              nodes={nodes}
+              updateConfig={updateConfig}
+              rename={renameVariable}
+            />
+          ) : (
+            <VariableBindingsEditor
+              node={node}
+              nodes={nodes}
+              edges={edges}
+              updateConfig={updateConfig}
+              rename={renameVariable}
+              onManageVariables={onManageVariables}
+              sample={testResult?.status === "success" ? testResult.result : undefined}
+            />
+          )}
+          {variableIssues(variableNodes(nodes))
+            .filter((issue) => issue.nodeId === node.id)
+            .map((issue, index) => (
+              <div className="node-resource-state is-error" key={`${issue.code}-${index}`}>
+                {issue.message}
+              </div>
+            ))}
           {providerError && data.kind === "llm" ? (
             <div className="node-resource-state is-error">{providerError}</div>
           ) : null}
@@ -210,17 +239,14 @@ export function NodeInspector({
               </label>
             </>
           ) : null}
-          {data.kind === "graph" ? (
-            <label className="studio-field">
-              <span>
-                查询（支持 {"{{变量}}"} 插值）
-                <small>示例: {"{{query}}"}</small>
-              </span>
-              <input
-                value={String(data.config.query ?? "{{query}}")}
-                onChange={(event) => updateConfig("query", event.target.value)}
-              />
-            </label>
+          {data.kind === "graph" || data.kind === "rag" ? (
+            <TemplateField
+              label="查询"
+              value={String(data.config.query ?? "{{query}}")}
+              onChange={(value) => updateConfig("query", value)}
+              inputs={nodeInputs(data)}
+              rows={2}
+            />
           ) : null}
           {data.kind === "llm" ? (
             <>
@@ -282,28 +308,22 @@ export function NodeInspector({
                   onChange={(event) => updateConfig("temperature", Number(event.target.value))}
                 />
               </label>
-              <label className="studio-field">
-                <span>系统提示词</span>
-                <textarea
-                  rows={5}
-                  value={String(data.config.systemPrompt ?? "")}
-                  onChange={(event) => updateConfig("systemPrompt", event.target.value)}
-                />
-                <small className="studio-field-hint">
-                  作为 system 消息发送，设定模型角色与规则。
-                </small>
-              </label>
-              {/*<label className="studio-field">*/}
-              {/*  <span>用户提示词</span>*/}
-              {/*  <textarea*/}
-              {/*    rows={5}*/}
-              {/*    value={String(data.config.prompt ?? "")}*/}
-              {/*    onChange={(event) => updateConfig("prompt", event.target.value)}*/}
-              {/*  />*/}
-              {/*  <small className="studio-field-hint">*/}
-              {/*    留空时自动将输入变量拼接为 user 消息，不会丢失上游数据。*/}
-              {/*  </small>*/}
-              {/*</label>*/}
+              <TemplateField
+                label="系统提示词"
+                value={String(data.config.systemPrompt ?? "")}
+                onChange={(value) => updateConfig("systemPrompt", value)}
+                inputs={nodeInputs(data)}
+                rows={5}
+                hint="设定模型角色与规则。输入 {{ 或通过下方选择器插入已绑定变量。"
+              />
+              <TemplateField
+                label="用户提示词"
+                value={String(data.config.prompt ?? "")}
+                onChange={(value) => updateConfig("prompt", value)}
+                inputs={nodeInputs(data)}
+                rows={4}
+                hint="留空时自动将输入变量拼接为用户消息。"
+              />
             </>
           ) : null}
           {data.kind === "mcp" ? (
@@ -355,15 +375,15 @@ export function NodeInspector({
                   </details>
                 </div>
               ) : null}
-              <label className="studio-field">
-                <span>参数映射</span>
-                <textarea
-                  className="mono-input"
-                  rows={7}
-                  value={String(data.config.arguments)}
-                  onChange={(event) => updateConfig("arguments", event.target.value)}
-                />
-              </label>
+              <TemplateField
+                label="参数映射"
+                json
+                value={String(data.config.arguments ?? "{}")}
+                onChange={(value) => updateConfig("arguments", value)}
+                inputs={nodeInputs(data)}
+                rows={7}
+                hint={'JSON 对象；完整变量占位符保留值类型，例如 {"query": "{{query}}"}。'}
+              />
             </>
           ) : null}
           {(data.kind === "rag" || data.kind === "mcp") && !loading ? (
@@ -373,15 +393,13 @@ export function NodeInspector({
           ) : null}
           {data.kind === "condition" ? (
             <>
-              <label className="studio-field">
-                <span>条件表达式</span>
-                <textarea
-                  className="mono-input"
-                  rows={5}
-                  value={String(data.config.expression)}
-                  onChange={(event) => updateConfig("expression", event.target.value)}
-                />
-              </label>
+              <TemplateField
+                label="条件表达式"
+                value={String(data.config.expression ?? "true")}
+                onChange={(value) => updateConfig("expression", value)}
+                inputs={nodeInputs(data)}
+                rows={4}
+              />
               <div className="condition-routes">
                 <span>分支出口</span>
                 {edges
@@ -407,7 +425,6 @@ export function NodeInspector({
               </div>
             </>
           ) : null}
-          {data.kind === "start" ? <p className="muted-copy">开始节点不需要额外参数。</p> : null}
         </>
       )}
     </div>
