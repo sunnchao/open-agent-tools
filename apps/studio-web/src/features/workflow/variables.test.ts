@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createNode, hydrateWorkflowSnapshot, snapshotGraph } from "./graph.js";
 import { nodeInputs, nodeOutputs, validateWorkflowGraph } from "./model.js";
-import { inputOptions, outputOptions, renameVariable, nextVariableName } from "./variables.js";
+import {
+  inputOptions,
+  nextVariableName,
+  outputOptions,
+  renameVariable,
+  repairVariableReference,
+  replaceTemplateReference,
+} from "./variables.js";
 
 const start = () =>
   createNode("s", "start", { x: 0, y: 0 }, { runVariables: [{ name: "query", type: "string" }] });
@@ -103,5 +110,96 @@ it("renames MCP argument values without rewriting literal object keys", () => {
   const changed = renameVariable([node], "m", "inputs", "query", "question");
   expect(JSON.parse(String(changed[0]!.data.config.arguments))).toEqual({
     "{{query}}": { nested: ["{{question}}", "query"] },
+  });
+});
+
+describe("定向修复失效引用", () => {
+  it("仅替换精确模板 token", () => {
+    expect(replaceTemplateReference("{{qurey}} {{qurey2}} text", "qurey", "query")).toBe(
+      "{{query}} {{qurey2}} text",
+    );
+  });
+
+  it("JSON 只替换值中的模板，不替换 key 或普通字符串", () => {
+    expect(
+      JSON.parse(
+        replaceTemplateReference(
+          '{"{{qurey}}":"{{qurey}}", "literal":"qurey", "nested":["x {{qurey}}"]}',
+          "qurey",
+          "query",
+          true,
+        ),
+      ),
+    ).toEqual({
+      "{{qurey}}": "{{query}}",
+      literal: "qurey",
+      nested: ["x {{query}}"],
+    });
+  });
+
+  it("JSON 非法时保持原值", () => {
+    expect(replaceTemplateReference('{"x":', "qurey", "query", true)).toBe('{"x":');
+  });
+
+  it("模板修复限定在白名单字段和本节点输入", () => {
+    const node = createNode(
+      "l",
+      "llm",
+      { x: 0, y: 0 },
+      {
+        inputs: [
+          { name: "query", source: { type: "literal", value: "hello" } },
+          { name: "other", source: { type: "literal", value: "world" } },
+        ],
+        prompt: "{{qurey}}",
+        systemPrompt: "{{qurey}}",
+        outputs: [{ name: "answer", selector: "$inputs.query" }],
+      },
+    );
+    const issue = {
+      code: "template-reference",
+      message: "",
+      nodeId: "l",
+      reference: "qurey",
+      field: "prompt",
+    } as const;
+    const graph = [node];
+    const changed = repairVariableReference(graph, issue, "query");
+    expect(changed[0]!.data.config.prompt).toBe("{{query}}");
+    expect(changed[0]!.data.config.systemPrompt).toBe("{{qurey}}");
+    expect(changed[0]!.data.config.outputs).toEqual(node.data.config.outputs);
+    expect(repairVariableReference(graph, { ...issue, field: "outputs" }, "query")).toBe(graph);
+    expect(repairVariableReference(graph, issue, "missing")).toBe(graph);
+  });
+
+  it("run 修复只改目标节点精确 source.variable，保留 alias 和模板", () => {
+    const startNode = start();
+    const node = createNode(
+      "i",
+      "input",
+      { x: 0, y: 0 },
+      {
+        inputs: [
+          { name: "alias", source: { type: "run", variable: "qurey" } },
+          { name: "same", source: { type: "run", variable: "qurey" } },
+        ],
+        prompt: "{{qurey}}",
+        outputs: [{ name: "out", selector: "$inputs.alias" }],
+      },
+    );
+    const issue = {
+      code: "run-reference",
+      message: "",
+      nodeId: "i",
+      reference: "qurey",
+    } as const;
+    const changed = repairVariableReference([startNode, node], issue, "query");
+    expect(changed[1]!.data.config.inputs).toEqual([
+      { name: "alias", source: { type: "run", variable: "query" } },
+      { name: "same", source: { type: "run", variable: "query" } },
+    ]);
+    expect(changed[1]!.data.config.prompt).toBe("{{qurey}}");
+    expect(changed[1]!.data.config.outputs).toEqual(node.data.config.outputs);
+    expect(startNode.data.config.runVariables).toEqual([{ name: "query", type: "string" }]);
   });
 });

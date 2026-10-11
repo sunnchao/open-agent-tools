@@ -99,7 +99,7 @@ export class PostgresGatewayRepository implements GatewayRepository {
               version.limits
        FROM mcp_services AS service
        JOIN mcp_service_versions AS version ON version.id = service.current_version_id
-       WHERE service.slug = $1`,
+       WHERE service.slug = $1 AND service.status <> 'DELETED'`,
       [serviceSlug],
     );
     const service = serviceResult.rows[0];
@@ -225,7 +225,7 @@ export class PostgresGatewayRepository implements GatewayRepository {
               version.id AS version_id
        FROM mcp_services AS service
        JOIN mcp_service_versions AS version ON version.id = service.current_version_id
-       WHERE service.id = $1`,
+       WHERE service.id = $1 AND service.status <> 'DELETED'`,
       [serviceId],
     );
     const row = result.rows[0];

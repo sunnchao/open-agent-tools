@@ -12,6 +12,11 @@ export interface McpService {
   revision: number;
 }
 
+export interface McpServiceEnvironment {
+  environment: Record<string, null>;
+  revision: number;
+}
+
 export interface McpTool {
   id: string;
   name: string;
@@ -32,6 +37,13 @@ export interface McpPrompt {
   }>;
 }
 
+export interface McpExecutionLimits {
+  timeoutMs: number;
+  memoryMb: number;
+  cpuMillis: number;
+  network: "none" | "bridge";
+}
+
 export interface McpVersion {
   id: string;
   serviceId: string;
@@ -40,12 +52,7 @@ export interface McpVersion {
   runtime: { name: "nodejs"; version: "20" } | null;
   entry: string | null;
   buildCommand: "npm run build" | null;
-  limits: {
-    timeoutMs: number;
-    memoryMb: number;
-    cpuMillis: number;
-    network: "none";
-  } | null;
+  limits: McpExecutionLimits | null;
   artifactDigest: string | null;
   artifactObjectKey: string | null;
   artifactSize: number | null;
@@ -107,10 +114,11 @@ export interface ClientGrantRecord {
   updatedAt: string;
 }
 
-export interface AuditEventRecord {
+export interface AuditEventSummary {
   id: string;
   actorId: string;
-  actorRole: "admin" | "operator" | "auditor";
+  actorRole: "admin" | "operator" | "auditor" | "client";
+  source: "control-plane" | "gateway";
   action: string;
   target: string;
   requestId: string;
@@ -118,6 +126,12 @@ export interface AuditEventRecord {
   statusCode: number;
   durationMs: number;
   createdAt: string;
+}
+
+export interface AuditEventRecord extends AuditEventSummary {
+  input: unknown;
+  output: unknown;
+  context: unknown;
 }
 
 interface ApiErrorBody {
@@ -174,8 +188,37 @@ export async function getService(serviceId: string): Promise<McpService> {
   return (await request<{ service: McpService }>(`/services/${serviceId}`)).service;
 }
 
+export function getServiceEnvironment(serviceId: string): Promise<McpServiceEnvironment> {
+  return request(`/services/${serviceId}/environment`);
+}
+
+export function updateServiceEnvironment(
+  serviceId: string,
+  expectedRevision: number,
+  environment: Record<string, string | null>,
+): Promise<McpServiceEnvironment> {
+  return request(`/services/${serviceId}/environment`, {
+    method: "PUT",
+    body: JSON.stringify({ expectedRevision, environment }),
+  });
+}
+
 export async function listVersions(serviceId: string): Promise<McpVersion[]> {
   return (await request<{ versions: McpVersion[] }>(`/services/${serviceId}/versions`)).versions;
+}
+
+export async function updateVersionLimits(
+  serviceId: string,
+  versionId: string,
+  expectedRevision: number,
+  limits: McpExecutionLimits,
+): Promise<McpVersion> {
+  return (
+    await request<{ version: McpVersion }>(`/services/${serviceId}/versions/${versionId}/limits`, {
+      method: "PUT",
+      body: JSON.stringify({ expectedRevision, limits }),
+    })
+  ).version;
 }
 
 export async function createService(input: {
@@ -490,10 +533,15 @@ export async function deleteGrant(clientId: string, serviceId: string): Promise<
 }
 
 export async function listAuditEvents(
-  filters: { outcome?: AuditEventRecord["outcome"]; action?: string } = {},
-): Promise<AuditEventRecord[]> {
+  filters: { outcome?: AuditEventSummary["outcome"]; action?: string } = {},
+): Promise<AuditEventSummary[]> {
   const query = new URLSearchParams({ limit: "100" });
   if (filters.outcome) query.set("outcome", filters.outcome);
   if (filters.action) query.set("action", filters.action);
-  return (await request<{ events: AuditEventRecord[] }>(`/audit?${query}`)).events;
+  return (await request<{ events: AuditEventSummary[] }>(`/audit?${query}`)).events;
+}
+
+export async function getAuditEvent(eventId: string): Promise<AuditEventRecord> {
+  return (await request<{ event: AuditEventRecord }>(`/audit/${encodeURIComponent(eventId)}`))
+    .event;
 }

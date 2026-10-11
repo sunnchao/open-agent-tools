@@ -46,7 +46,7 @@ export interface WorkflowRunRecord {
   id: string;
   taskId: string;
   workflowId: string;
-  versionId: string;
+  versionId: string | null;
   user: string;
   source: "service-api" | "studio";
   status: "running" | "succeeded" | "failed" | "stopped";
@@ -164,7 +164,36 @@ export async function revokeWorkflowKey(workflowId: string, keyId: string): Prom
   if (!response.ok && response.status !== 404) await parseResponse(response);
 }
 
-export async function fetchWorkflowRuns(workflowId: string): Promise<WorkflowRunRecord[]> {
-  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/runs`);
+export interface WorkflowRunEventRecord {
+  runId: string;
+  sequence: number;
+  type: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface WorkflowRunHistory {
+  run: WorkflowRunRecord;
+  events: WorkflowRunEventRecord[];
+  graph: WorkflowSnapshot;
+}
+
+export async function fetchWorkflowRuns(
+  workflowId: string,
+  signal?: AbortSignal,
+): Promise<WorkflowRunRecord[]> {
+  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/runs`, { signal });
   return (await parseResponse<{ runs: WorkflowRunRecord[] }>(response)).runs;
+}
+
+export async function fetchWorkflowRunEvents(
+  workflowId: string,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<WorkflowRunHistory> {
+  const response = await fetch(
+    `/api/workflows/${encodeURIComponent(workflowId)}/runs/${encodeURIComponent(runId)}/events`,
+    { signal },
+  );
+  return parseResponse(response);
 }

@@ -221,6 +221,8 @@ export interface WorkflowRunEdge {
 }
 
 export interface WorkflowRunRequest {
+  workflowId?: string;
+  resume?: { runId: string; fromNodeId: string };
   nodes: WorkflowRunNode[];
   edges: WorkflowRunEdge[];
   input: Record<string, unknown>;
@@ -245,6 +247,9 @@ export interface WorkflowNodeRunMeta {
   metadata?: {
     durationMs: number;
     tokenUsage: WorkflowTokenUsage;
+    attempts?: number;
+    cached?: boolean;
+    incomingEdgeIds?: string[];
   };
 }
 
@@ -261,6 +266,7 @@ export interface WorkflowNodeTestResult {
     finishedAt: string;
     durationMs: number;
     tokenUsage: WorkflowTokenUsage;
+    attempts?: number;
   };
 }
 
@@ -280,7 +286,7 @@ export async function testWorkflowNode(
 }
 
 export interface WorkflowStreamCallbacks {
-  onNodeStart: (nodeId: string, label?: string, kind?: string) => void;
+  onNodeStart: (nodeId: string, label?: string, kind?: string, incomingEdgeIds?: string[]) => void;
   onNodeResult: (nodeId: string, status: "success" | "error", meta: WorkflowNodeRunMeta) => void;
   onDone: (outputs: Record<string, Record<string, unknown>>) => void;
   onError: (error: string, nodeId?: string) => void;
@@ -322,9 +328,12 @@ export function streamWorkflow(
               event.nodeId,
               typeof event.label === "string" ? event.label : undefined,
               typeof event.kind === "string" ? event.kind : undefined,
+              Array.isArray(event.incomingEdgeIds)
+                ? event.incomingEdgeIds.filter((id): id is string => typeof id === "string")
+                : undefined,
             );
           if (
-            event.type === "node_result" &&
+            (event.type === "node_result" || event.type === "node_cached") &&
             typeof event.nodeId === "string" &&
             (event.status === "success" || event.status === "error")
           )
@@ -333,10 +342,30 @@ export function streamWorkflow(
               outputs: event.outputs as Record<string, unknown> | undefined,
               result: event.result,
               prompt: typeof event.prompt === "string" ? event.prompt : undefined,
-              systemPrompt:
-                typeof event.systemPrompt === "string" ? event.systemPrompt : undefined,
+              systemPrompt: typeof event.systemPrompt === "string" ? event.systemPrompt : undefined,
               error: typeof event.error === "string" ? event.error : undefined,
-              metadata: event.metadata as WorkflowNodeRunMeta["metadata"],
+              metadata: (() => {
+                const metadata =
+                  event.metadata && typeof event.metadata === "object"
+                    ? (event.metadata as NonNullable<WorkflowNodeRunMeta["metadata"]>)
+                    : ({
+                        durationMs: 0,
+                        tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                      } satisfies NonNullable<WorkflowNodeRunMeta["metadata"]>);
+                return {
+                  durationMs: metadata.durationMs ?? 0,
+                  tokenUsage: metadata.tokenUsage,
+                  ...(metadata.attempts === undefined ? {} : { attempts: metadata.attempts }),
+                  ...(metadata.cached === undefined ? {} : { cached: metadata.cached }),
+                  ...(Array.isArray(event.incomingEdgeIds)
+                    ? {
+                        incomingEdgeIds: event.incomingEdgeIds.filter(
+                          (id): id is string => typeof id === "string",
+                        ),
+                      }
+                    : {}),
+                };
+              })(),
             });
           if (event.type === "run_done")
             callbacks.onDone((event.outputs ?? {}) as Record<string, Record<string, unknown>>);

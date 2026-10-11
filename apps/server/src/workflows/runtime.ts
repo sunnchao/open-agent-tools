@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { WorkflowResumeCheckpoint } from "@open-agent-tools/workflow-contracts";
 import { executeWorkflow, type WorkflowEvent } from "../workflow/executor.js";
 import {
   appendWorkflowEvent,
@@ -62,48 +63,65 @@ function publicEvent(
 
 export function startPublishedWorkflow(input: {
   app: WorkflowApp;
-  version: WorkflowVersion;
+  version?: WorkflowVersion;
+  graph?: WorkflowVersion["graph"];
   inputs: Record<string, unknown>;
   user: string;
   source?: WorkflowRunRecord["source"];
   runId?: string;
   taskId?: string;
+  signal?: AbortSignal;
   onEvent?: (event: PublicWorkflowEvent) => void;
+  onWorkflowEvent?: (event: WorkflowEvent) => void;
+  resume?: WorkflowResumeCheckpoint;
+  resumeRunId?: string;
 }): { taskId: string; runId: string; completion: Promise<PublishedRunResult> } {
   const runId = input.runId ?? randomUUID();
   const taskId = input.taskId ?? randomUUID();
   const createdAt = new Date().toISOString();
   const startedAt = Date.now();
   const controller = new AbortController();
+  const sourceGraph = input.graph ?? input.version?.graph;
+  if (!sourceGraph) throw new Error("workflow graph is required");
+  const graph = structuredClone(sourceGraph);
+  const abort = () => controller.abort();
+  if (input.signal?.aborted) abort();
   let totalSteps = 0;
   let totalTokens = 0;
 
-  createWorkflowRun({
-    id: runId,
-    taskId,
-    workflowId: input.app.id,
-    versionId: input.version.id,
-    user: input.user,
-    source: input.source ?? "service-api",
-    status: "running",
-    inputs: input.inputs,
-    outputs: null,
-    error: null,
-    totalSteps: 0,
-    totalTokens: 0,
-    createdAt,
-    finishedAt: null,
-    elapsedTime: null,
-  });
+  createWorkflowRun(
+    {
+      id: runId,
+      taskId,
+      workflowId: input.app.id,
+      versionId: input.version?.id ?? null,
+      user: input.user,
+      source: input.source ?? "service-api",
+      status: "running",
+      inputs: input.inputs,
+      outputs: null,
+      error: null,
+      totalSteps: 0,
+      totalTokens: 0,
+      createdAt,
+      finishedAt: null,
+      elapsedTime: null,
+    },
+    graph,
+  );
+  input.signal?.addEventListener("abort", abort, { once: true });
   activeRuns.set(taskId, { workflowId: input.app.id, runId, controller });
 
   const emitPublic = (event: PublicWorkflowEvent) => input.onEvent?.(event);
   emitPublic(
     publicEvent(runId, taskId, "workflow_started", {
       id: runId,
-      workflow_id: input.version.id,
+      workflow_id: input.version?.id ?? null,
       inputs: input.inputs,
       created_at: createdAt,
+      ...(input.resume
+        ? { resume_from_node_id: input.resume.fromNodeId, resume_run_id: input.resumeRunId }
+        : {}),
     }),
   );
 
@@ -112,11 +130,12 @@ export function startPublishedWorkflow(input: {
     try {
       finalNodeOutputs = await executeWorkflow(
         {
-          nodes: graphToRunNodes(input.version.graph),
-          edges: input.version.graph.edges,
+          nodes: graphToRunNodes(graph),
+          edges: graph.edges,
           input: input.inputs,
         },
         (event: WorkflowEvent) => {
+          if (event.type !== "run_done") input.onWorkflowEvent?.(event);
           if (event.type === "node_start" && event.nodeId) {
             upsertWorkflowNodeRun({ runId, nodeId: event.nodeId, status: "running" });
             emitPublic(
@@ -124,11 +143,12 @@ export function startPublishedWorkflow(input: {
                 node_id: event.nodeId,
                 title: event.label ?? event.nodeId,
                 node_type: event.kind ?? "unknown",
+                incoming_edge_ids: event.incomingEdgeIds ?? [],
               }),
             );
           }
-          if (event.type === "node_result" && event.nodeId) {
-            totalSteps += 1;
+          if ((event.type === "node_result" || event.type === "node_cached") && event.nodeId) {
+            if (event.type === "node_result") totalSteps += 1;
             totalTokens += event.metadata?.tokenUsage.totalTokens ?? 0;
             upsertWorkflowNodeRun({
               runId,
@@ -146,16 +166,20 @@ export function startPublishedWorkflow(input: {
                 status: event.status,
                 inputs: event.inputs,
                 outputs: event.outputs,
+                result: event.result,
+                incoming_edge_ids: event.incomingEdgeIds ?? [],
+                prompt: event.prompt,
+                systemPrompt: event.systemPrompt,
                 error: event.error,
                 metadata: event.metadata,
               }),
             );
           }
         },
-        { signal: controller.signal },
+        { signal: controller.signal, resume: input.resume },
       );
 
-      const outputs = collectWorkflowOutputs(input.version.graph, finalNodeOutputs);
+      const outputs = collectWorkflowOutputs(graph, finalNodeOutputs);
       const elapsedTime = (Date.now() - startedAt) / 1_000;
       const finishedAt = new Date().toISOString();
       finishWorkflowRun({
@@ -169,7 +193,7 @@ export function startPublishedWorkflow(input: {
       emitPublic(
         publicEvent(runId, taskId, "workflow_finished", {
           id: runId,
-          workflow_id: input.version.id,
+          workflow_id: input.version?.id ?? null,
           status: "succeeded",
           outputs,
           elapsed_time: elapsedTime,
@@ -179,6 +203,7 @@ export function startPublishedWorkflow(input: {
           finished_at: finishedAt,
         }),
       );
+      input.onWorkflowEvent?.({ type: "run_done", outputs: finalNodeOutputs });
       return {
         taskId,
         runId,
@@ -212,7 +237,7 @@ export function startPublishedWorkflow(input: {
       emitPublic(
         publicEvent(runId, taskId, stopped ? "workflow_finished" : "error", {
           id: runId,
-          workflow_id: input.version.id,
+          workflow_id: input.version?.id ?? null,
           status,
           error: message,
           elapsed_time: elapsedTime,
@@ -235,6 +260,7 @@ export function startPublishedWorkflow(input: {
         finishedAt,
       };
     } finally {
+      input.signal?.removeEventListener("abort", abort);
       activeRuns.delete(taskId);
     }
   })();

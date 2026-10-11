@@ -2,6 +2,26 @@
 
 `@open-agent-tools/studio-web` 是统一可视化工作台，包含 Agent 对话、MCP 管理与真实 Tool 调用、RAG 知识库、知识图谱、多源问数和可拖拽工作流编排。
 
+## MCP 服务环境变量
+
+在「MCP → 服务」选择服务，点击「环境变量」配置 `TAVILY_API_KEY` 等运行变量。所有版本的 Tool 共享服务配置，保存后下一次调用生效，无需重新构建或发布。
+
+- 支持新增、替换和删除变量；已保存的值不会回显，未编辑的值会保留。
+- 变量名使用字母、数字和下划线，首字符不能是数字；最多 64 个变量、每个值最多 8192 字符，总计最多 64 KiB UTF-8。
+- Runner 控制变量（`MCP_*`）、Node.js 加载配置（`NODE_OPTIONS` / `NODE_PATH`）和系统加载路径不能覆盖。
+- 环境变量保存在管理数据库，Worker 在执行前按服务读取，并通过 Docker `Env` 注入；队列任务、Tool 参数和镜像中不包含这些值。
+
+部署时先应用 `apps/mcp-worker/drizzle/0004_mcp_service_environment.sql` 所在的迁移历史并重启后台 Worker。联网 Tool 还需要在版本的运行限制中选择 `bridge`。
+
+## MCP 运行限制
+
+代码包检查完成后，右侧「配置与预览 → 运行限制」显示从 `mcp.json` 导入的 `timeoutMs`、`memoryMb`、`cpuMillis` 和 `network`。点击「编辑限制」可调整并保存，保存使用版本 revision 检查并发冲突。
+
+- DRAFT、FAILED 和未发布的 READY 版本可修改，构建过程保留修改后的值。
+- PUBLISHED 和 SUPERSEDED 版本只读，需创建新草稿再修改。
+- `none` 禁止联网，`bridge` 允许联网；限制应用于当前版本的所有 Tool，发布后由 Worker 执行。
+- 新上传的包若声明 `bridge`，构建时应使用包含最新 contracts 的 Runner 基础镜像。
+
 ## 多源问数
 
 - 在「设置 → Schema 数据源」配置多个 MySQL / PostgreSQL 只读连接；连接串使用服务端 AES-256-GCM 加密存储。
@@ -43,6 +63,14 @@ Idempotency-Key: optional-request-id
 - `GET /v1/workflow-runs/{runId}`
 - `GET /v1/workflow-runs/{runId}/events?after={sequence}`
 - `GET /v1/workflows/{slug}/schema`
+
+## 工作流运行历史与变量修复
+
+- 编辑器右侧「运行历史」展示最近 50 次编辑器调试与公开 API 调用，可按状态筛选、刷新和查看只读节点轨迹（输入、输出、最终提示词、耗时及 Token）。回放使用当次运行快照，后续草稿修改不会改变历史。
+- `POST /api/workflow/run` 可携带 `workflowId`，保存 Studio 运行历史；不携带时仍兼容原有临时调试请求。
+- Studio 使用 `GET /api/workflows/:workflowId/runs/:runId/events?after=0` 返回 `{ run, events, graph }`；检查运行与工作流的归属，公开 `/v1` 回放接口继续要求 API Key。管理接口沿用现有受信网络边界。
+- 入口来源与模板失效引用提供候选修复按钮；模板只替换当前字段的占位符，MCP JSON 只替换值、不修改键或普通文本；修复支持撤销/重做。
+- 首次访问工作流存储时自动兼容旧 SQLite 的 `workflow_runs.version_id NOT NULL`，保留历史事件并增加运行快照表；正式部署升级前请备份数据库。
 
 ## 启动
 

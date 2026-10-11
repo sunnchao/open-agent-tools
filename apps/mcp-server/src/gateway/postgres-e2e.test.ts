@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
@@ -30,9 +31,13 @@ describe("PostgreSQL Prompt-only MCP Gateway E2E", { skip: !databaseUrl }, () =>
   before(async () => {
     pool = new Pool({ connectionString: databaseUrl });
     await pool.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
-    for (const migrationName of ["0000_mcp_management.sql", "0001_mcp_client_access.sql"]) {
+    for (const migrationName of [
+      "0000_mcp_management.sql",
+      "0001_mcp_client_access.sql",
+      "0005_mcp_service_slug_reuse.sql",
+    ]) {
       const migration = await readFile(
-        resolve(import.meta.dirname, `../../../mcp-control-plane/drizzle/${migrationName}`),
+        resolve(import.meta.dirname, `../../../mcp-worker/drizzle/${migrationName}`),
         "utf8",
       );
       await pool.query(migration);
@@ -151,6 +156,78 @@ describe("PostgreSQL Prompt-only MCP Gateway E2E", { skip: !databaseUrl }, () =>
     await assert.rejects(client.connect(transport()), /UNAUTHORIZED|Unauthorized|401/);
   });
 
+  it("routes a reused slug to the replacement and requires a grant for its new service ID", async () => {
+    const replacementServiceId = randomUUID();
+    const replacementVersionId = randomUUID();
+    await pool.query("UPDATE mcp_services SET status = 'DELETED', deleted_at = $2 WHERE id = $1", [
+      serviceId,
+      now,
+    ]);
+    await pool.query(
+      `INSERT INTO mcp_services
+         (id, name, slug, type, status, revision, created_at, updated_at)
+       VALUES ($1, 'New Reports', 'reports', 'MANAGED_MCP', 'ACTIVE', 2, $2, $2)`,
+      [replacementServiceId, now],
+    );
+    await pool.query(
+      `INSERT INTO mcp_service_versions
+         (id, service_id, version_number, status, revision, created_at, updated_at)
+       VALUES ($1, $2, 1, 'PUBLISHED', 4, $3, $3)`,
+      [replacementVersionId, replacementServiceId, now],
+    );
+    await pool.query("UPDATE mcp_services SET current_version_id = $1 WHERE id = $2", [
+      replacementVersionId,
+      replacementServiceId,
+    ]);
+    await pool.query(
+      `INSERT INTO mcp_prompts
+         (id, version_id, name, title, description, arguments, messages, position)
+       SELECT $1, $2, name, title, description, arguments, $3::jsonb, position
+       FROM mcp_prompts WHERE id = $4`,
+      [
+        randomUUID(),
+        replacementVersionId,
+        JSON.stringify([
+          {
+            role: "user",
+            content: { type: "text", text: "Replacement {{reportId}}." },
+          },
+        ]),
+        promptId,
+      ],
+    );
+
+    const listed = await fetch(`${baseUrl}/mcp/services`, {
+      headers: { authorization: `Bearer ${rawKey}` },
+    });
+    assert.deepEqual(await listed.json(), { services: [] });
+    const denied = new Client({ name: "old-grant", version: "1.0.0" });
+    try {
+      await assert.rejects(denied.connect(transport()), /FORBIDDEN|not granted/);
+    } finally {
+      await denied.close();
+    }
+
+    await pool.query("UPDATE client_grants SET service_id = $1 WHERE id = $2", [
+      replacementServiceId,
+      grantId,
+    ]);
+    const client = new Client({ name: "replacement-e2e", version: "1.0.0" });
+    try {
+      await client.connect(transport());
+      const rendered = await client.getPrompt({
+        name: "summarize",
+        arguments: { reportId: "report-2" },
+      });
+      assert.equal(
+        rendered.messages[0]?.content.type === "text" ? rendered.messages[0].content.text : null,
+        "Replacement report-2.",
+      );
+    } finally {
+      await client.close();
+    }
+  });
+
   it("E2E-003 lists granted services for a key via GET /mcp/services", async () => {
     const response = await fetch(`${baseUrl}/mcp/services`, {
       headers: { authorization: `Bearer ${rawKey}` },
@@ -170,7 +247,10 @@ describe("PostgreSQL Prompt-only MCP Gateway E2E", { skip: !databaseUrl }, () =>
         }>;
       }>;
     };
-    assert.deepEqual(body.services.map((service) => service.serviceSlug), ["reports"]);
+    assert.deepEqual(
+      body.services.map((service) => service.serviceSlug),
+      ["reports"],
+    );
     assert.equal(body.services[0]?.serviceStatus, "ACTIVE");
     assert.equal(body.services[0]?.versionStatus, "PUBLISHED");
     assert.ok(body.services[0]?.scopes.includes("mcp:connect"));

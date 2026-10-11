@@ -1,7 +1,8 @@
-import { variableIssues } from "@open-agent-tools/workflow-contracts";
+import { variableIssues, workflowGraphSchema } from "@open-agent-tools/workflow-contracts";
 import type { ResourceCatalog } from "../resources/api.js";
 
-export type NodeKind = "start" | "input" | "rag" | "graph" | "llm" | "mcp" | "condition" | "end";
+export type { NodeKind } from "@open-agent-tools/workflow-contracts";
+import type { NodeKind } from "@open-agent-tools/workflow-contracts";
 export type NodeRunStatus = "idle" | "running" | "success" | "error";
 export type WorkflowConfigValue = unknown;
 
@@ -46,6 +47,9 @@ export interface WorkflowValidationIssue {
   code: string;
   message: string;
   nodeId?: string;
+  suggestions?: string[];
+  reference?: string;
+  field?: string;
 }
 
 export function defaultConfig(kind: NodeKind): Record<string, WorkflowConfigValue> {
@@ -224,6 +228,16 @@ export function validateWorkflowGraph(
   catalog: ResourceCatalog | null,
 ): WorkflowValidationIssue[] {
   const issues: WorkflowValidationIssue[] = [];
+  const structural = workflowGraphSchema.safeParse({ name: "validation", nodes, edges });
+  if (!structural.success) {
+    return structural.error.issues.map((issue) => ({
+      code: "schema",
+      message: `${issue.path.join(".")}: ${issue.message}`,
+      ...(typeof issue.path[1] === "number" && issue.path[0] === "nodes"
+        ? { nodeId: nodes[issue.path[1]]?.id }
+        : {}),
+    }));
+  }
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const incoming = new Map(nodes.map((node) => [node.id, [] as WorkflowGraphEdge[]]));
   const outgoing = new Map(nodes.map((node) => [node.id, [] as WorkflowGraphEdge[]]));
@@ -398,8 +412,10 @@ export function validateWorkflowGraph(
   }
   if (visited !== nodes.length) issues.push({ code: "cycle", message: "工作流中存在循环连接" });
 
-  issues.push(...variableIssues(
-    nodes.map((node) => ({ id: node.id, kind: node.data.kind, config: node.data.config })),
-  ));
+  issues.push(
+    ...variableIssues(
+      nodes.map((node) => ({ id: node.id, kind: node.data.kind, config: node.data.config })),
+    ),
+  );
   return issues;
 }

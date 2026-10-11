@@ -26,7 +26,7 @@ import {
   upsertGrant,
   type ApiClientRecord,
   type ApiKeyRecord,
-  type AuditEventRecord,
+  type AuditEventSummary,
   type BuildJobSummary,
   type ClientGrantRecord,
   type McpScope,
@@ -38,6 +38,7 @@ import {
   supportsGrantScope,
   type GrantCapabilities,
 } from "./grantCapabilities.js";
+import { AuditEventDetails } from "./AuditEventDetails.js";
 
 export type McpManagementView = "services" | "builds" | "clients" | "audit";
 
@@ -226,8 +227,8 @@ function GrantForm({
   const [selectedScopes, setSelectedScopes] = useState<Set<McpScope>>(
     () => new Set(initial?.scopes ?? ["mcp:connect"]),
   );
-  const [allTools, setAllTools] = useState(initial?.toolNames === null);
-  const [allPrompts, setAllPrompts] = useState(initial?.promptNames === null);
+  const [allTools, setAllTools] = useState(initial ? initial.toolNames === null : true);
+  const [allPrompts, setAllPrompts] = useState(initial ? initial.promptNames === null : true);
   const [toolNames, setToolNames] = useState(initial?.toolNames?.join(", ") ?? "");
   const [promptNames, setPromptNames] = useState(initial?.promptNames?.join(", ") ?? "");
   const [capabilities, setCapabilities] = useState<GrantCapabilities | null>(null);
@@ -825,8 +826,9 @@ function KeyDialog({
 }
 
 export function AuditView() {
-  const [events, setEvents] = useState<AuditEventRecord[]>([]);
-  const [outcome, setOutcome] = useState<"ALL" | AuditEventRecord["outcome"]>("ALL");
+  const [events, setEvents] = useState<AuditEventSummary[]>([]);
+  const [outcome, setOutcome] = useState<"ALL" | AuditEventSummary["outcome"]>("ALL");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [action, setAction] = useState("");
   const [appliedAction, setAppliedAction] = useState("");
   const [loading, setLoading] = useState(true);
@@ -907,6 +909,7 @@ export function AuditView() {
             <span>动作</span>
             <span>目标</span>
             <span>结果</span>
+            <span>内容</span>
           </div>
           {events.map((item) => (
             <div className="operations-table-row" key={item.id}>
@@ -926,9 +929,21 @@ export function AuditView() {
                 {item.outcome}
                 <small>HTTP {item.statusCode}</small>
               </span>
+              <button
+                className="studio-button secondary compact"
+                type="button"
+                onClick={() => setSelectedId(item.id)}
+              >
+                查看详情
+              </button>
             </div>
           ))}
         </div>
+      ) : null}
+      {selectedId ? (
+        <OperationDialog title="审计事件详情" onClose={() => setSelectedId(null)}>
+          <AuditEventDetails key={selectedId} eventId={selectedId} />
+        </OperationDialog>
       ) : null}
     </div>
   );

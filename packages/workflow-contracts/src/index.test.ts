@@ -27,10 +27,16 @@ describe("workflow variable contracts", () => {
     assert.equal(hasRunDeclarations([input]), false);
     assert.deepEqual(runVariables([input]), [{ name: "query", type: "any", required: true }]);
     assert.deepEqual(runVariables([{ ...start, config: { runVariables: [] } }, input]), []);
-    assert.ok(
-      variableIssues([{ ...start, config: { runVariables: [] } }, input]).some(
+    assert.deepEqual(
+      variableIssues([{ ...start, config: { runVariables: [] } }, input]).find(
         (issue) => issue.code === "run-reference",
       ),
+      {
+        code: "run-reference",
+        message: "入口变量 query 未声明，请在开始节点创建后选择",
+        nodeId: "input",
+        reference: "query",
+      },
     );
   });
   it("rejects misspelled entry references without declaring new parameters", () => {
@@ -42,7 +48,16 @@ describe("workflow variable contracts", () => {
       runVariables([start, typo]).map((variable) => variable.name),
       ["query"],
     );
-    assert.ok(variableIssues([start, typo]).some((issue) => issue.code === "run-reference"));
+    assert.deepEqual(
+      variableIssues([start, typo]).find((issue) => issue.code === "run-reference"),
+      {
+        code: "run-reference",
+        message: "入口变量 qurey 未声明，请在开始节点创建后选择",
+        nodeId: "input",
+        suggestions: ["query"],
+        reference: "qurey",
+      },
+    );
   });
   it("validates references in every template context, including nested MCP values", () => {
     for (const [kind, field, text] of [
@@ -62,12 +77,19 @@ describe("workflow variable contracts", () => {
         `${kind}.${field}`,
       );
     }
-    assert.match(
+    assert.deepEqual(
       variableIssues([
         start,
         { ...input, kind: "llm", config: { ...input.config, prompt: "{{qurey}}" } },
-      ])[0]!.message,
-      /是否选择 query/,
+      ]).find((issue) => issue.code === "template-reference"),
+      {
+        code: "template-reference",
+        message: "prompt 引用了未绑定变量 qurey；可修复为 query",
+        nodeId: "input",
+        suggestions: ["query"],
+        reference: "qurey",
+        field: "prompt",
+      },
     );
   });
   it("validates names, duplicates and typed defaults, including malformed declarations", () => {

@@ -56,7 +56,7 @@ Manifest 规则：
 - Prompt-only Manifest 不能包含 `runtime`、`entry`、`build` 或 `limits`。
 - 唯一允许的构建命令是 `npm run build`，且配置 `build` 时必须同时配置 `entry`。
 - Tool `inputSchema` 顶层必须为 JSON Schema Object。
-- `network` 当前只能为 `none`；`timeoutMs` 最大 120 秒，内存最大 4096 MiB，CPU 最大 8000 millicores。
+- `network` 支持 `none`（禁网）和 `bridge`（允许联网），由已发布版本决定执行容器的网络模式；`timeoutMs` 最大 120 秒，内存最大 4096 MiB，CPU 最大 8000 millicores。
 
 ## Prompt 定义与渲染
 

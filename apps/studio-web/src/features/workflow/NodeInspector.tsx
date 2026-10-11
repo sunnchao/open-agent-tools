@@ -1,7 +1,8 @@
-import { variableIssues } from "@open-agent-tools/workflow-contracts";
+import { variableIssues, type VariableIssue } from "@open-agent-tools/workflow-contracts";
 import { variableNodes } from "./variables.js";
 import { RunVariablesEditor } from "./RunVariablesEditor.js";
 import { TemplateField } from "./TemplateField.js";
+import { ExecutionPolicyEditor } from "./ExecutionPolicyEditor.js";
 import { nodeInputs } from "./model.js";
 import { useEffect, useState } from "react";
 import { PlayCircleOutlined, ReloadOutlined } from "../../lib/icons.js";
@@ -34,6 +35,7 @@ export function NodeInspector({
   testPending,
   testDisabled,
   onTest,
+  onRepairReference,
 }: {
   node: WorkflowNode;
   nodes: WorkflowNode[];
@@ -57,6 +59,7 @@ export function NodeInspector({
   testPending: boolean;
   testDisabled: boolean;
   onTest: () => void;
+  onRepairReference?: (issue: VariableIssue, replacement: string) => void;
 }) {
   const { data } = node;
   const [activeView, setActiveView] = useState<"config" | "run">("config");
@@ -138,6 +141,7 @@ export function NodeInspector({
             />
           </label>
           <div className="inspector-section-title">参数</div>
+          <ExecutionPolicyEditor data={data} updateConfig={updateConfig} />
           {data.kind === "start" ? (
             <RunVariablesEditor
               node={node}
@@ -160,7 +164,19 @@ export function NodeInspector({
             .filter((issue) => issue.nodeId === node.id)
             .map((issue, index) => (
               <div className="node-resource-state is-error" key={`${issue.code}-${index}`}>
-                {issue.message}
+                <span>{issue.message}</span>
+                {onRepairReference && issue.reference && issue.suggestions?.length
+                  ? issue.suggestions.map((suggestion) => (
+                      <button
+                        key={`${issue.reference}-${suggestion}`}
+                        type="button"
+                        className="variable-text-button"
+                        onClick={() => onRepairReference(issue, suggestion)}
+                      >
+                        改为 {suggestion}
+                      </button>
+                    ))
+                  : null}
               </div>
             ))}
           {providerError && data.kind === "llm" ? (

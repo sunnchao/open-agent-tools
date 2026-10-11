@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   CloseOutlined,
@@ -56,6 +56,7 @@ const emptyDraft = (): Draft => ({
 });
 
 export function SettingsWorkspace() {
+  const sectionNavRef = useRef<HTMLElement>(null);
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(true);
@@ -63,6 +64,13 @@ export function SettingsWorkspace() {
   const [defaultingId, setDefaultingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
+
+  useEffect(() => {
+    if (!window.matchMedia("(max-width: 760px)").matches) return;
+    sectionNavRef.current
+      ?.querySelector<HTMLElement>(".settings-section.is-active")
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeSection]);
 
   const selectSection = (section: SettingsSection) => {
     sessionStorage.setItem("open-agent-tools.settings-section", section);
@@ -155,46 +163,37 @@ export function SettingsWorkspace() {
         ) : null}
       </header>
       <div className="settings-body">
-        <aside className="settings-sections">
-          <div
+        <aside className="settings-sections" ref={sectionNavRef}>
+          <button
+            type="button"
             className={`settings-section${activeSection === "providers" ? " is-active" : ""}`}
-            role="button"
-            tabIndex={0}
+            aria-current={activeSection === "providers" ? "page" : undefined}
             onClick={() => selectSection("providers")}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") selectSection("providers");
-            }}
           >
             <span>01</span>
             <b>模型 Provider</b>
             <small>路由与模型目录</small>
-          </div>
-          <div
+          </button>
+          <button
+            type="button"
             className={`settings-section${activeSection === "schema-sources" ? " is-active" : ""}`}
-            role="button"
-            tabIndex={0}
+            aria-current={activeSection === "schema-sources" ? "page" : undefined}
             onClick={() => selectSection("schema-sources")}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") selectSection("schema-sources");
-            }}
           >
             <span>02</span>
             <b>Schema 数据源</b>
             <small>问数连接与目录</small>
-          </div>
-          <div
+          </button>
+          <button
+            type="button"
             className={`settings-section${activeSection === "im" ? " is-active" : ""}`}
-            role="button"
-            tabIndex={0}
+            aria-current={activeSection === "im" ? "page" : undefined}
             onClick={() => selectSection("im")}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") selectSection("im");
-            }}
           >
             <span>03</span>
             <b>IM 渠道</b>
             <small>飞书 / 钉钉机器人</small>
-          </div>
+          </button>
         </aside>
         {activeSection === "providers" ? (
           <main className="settings-content">

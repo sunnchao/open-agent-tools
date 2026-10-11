@@ -4,6 +4,7 @@ import { createGatewayApp } from "./gateway/app.js";
 import { createBullMqToolExecutor } from "./gateway/bullmq-tool-executor.js";
 import { createPostgresGatewayRepository } from "./gateway/postgres-repository.js";
 import type { ToolExecutor } from "./gateway/tool-executor.js";
+import { createPostgresGatewayAudit } from "./gateway/audit.js";
 
 loadEnv();
 
@@ -11,6 +12,7 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
 
 const { repository, close } = createPostgresGatewayRepository(databaseUrl);
+const audit = createPostgresGatewayAudit(databaseUrl);
 
 let execution: { executor: ToolExecutor; close: () => Promise<void> } | null = null;
 if (process.env.REDIS_URL) {
@@ -26,6 +28,7 @@ if (process.env.REDIS_URL) {
 
 const app = createGatewayApp({
   access: new GatewayAccessService(repository),
+  audit: audit.audit,
   ...(execution === null ? {} : { executor: execution.executor }),
 });
 const port = Number(process.env.MCP_HTTP_PORT) || 4100;
@@ -37,7 +40,7 @@ async function shutdown(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-  await Promise.all([close(), execution?.close()]);
+  await Promise.all([close(), execution?.close(), audit.close()]);
 }
 
 process.once("SIGINT", () => void shutdown().then(() => process.exit(0)));

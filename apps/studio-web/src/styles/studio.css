@@ -1699,13 +1699,15 @@ select:focus-visible {
   color: var(--studio-faint);
 }
 
-.studio-search input {
+.studio-search input,
+.studio-search .ant-input {
   width: 100%;
   min-height: 30px;
   padding: 5px 8px;
   color: var(--studio-text);
   background: transparent;
   border: 0;
+  box-shadow: none;
 }
 
 .icon-command {
@@ -1795,13 +1797,17 @@ select:focus-visible {
   text-transform: uppercase;
 }
 
-.version-picker select {
+.version-picker select,
+.version-picker .ant-select {
   min-height: 28px;
-  max-width: 150px;
-  padding: 3px 24px 3px 7px;
+  max-width: 180px;
   color: var(--studio-text);
   font-family: var(--studio-mono);
   font-size: 10px;
+}
+
+.version-picker select {
+  padding: 3px 24px 3px 7px;
   background: var(--studio-surface);
   border: 1px solid var(--studio-line-strong);
   border-radius: 5px;
@@ -1975,6 +1981,77 @@ select:focus-visible {
   padding: 16px;
 }
 
+.mcp-limits-panel {
+  padding: 16px;
+  background: var(--studio-surface-subtle);
+  border-bottom: 1px solid var(--studio-line);
+}
+
+.mcp-limits-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mcp-limits-heading h2 {
+  margin: 0;
+  font-size: 12px;
+}
+
+.mcp-limits-heading p,
+.mcp-limits-help {
+  margin: 5px 0 0;
+  color: var(--studio-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.mcp-limits-summary,
+.mcp-limits-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 0;
+}
+
+.mcp-limits-summary dt {
+  margin-bottom: 4px;
+  color: var(--studio-muted);
+  font-size: 10px;
+}
+
+.mcp-limits-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--studio-mono);
+  font-size: 12px;
+}
+
+.mcp-limits-summary dd span {
+  color: var(--studio-muted);
+  font-family: var(--studio-font);
+  font-size: 9px;
+}
+
+.mcp-limits-fields {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.mcp-limits-fields .studio-field {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.mcp-limits-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+}
+
 .inspector-title-row {
   display: flex;
   align-items: flex-start;
@@ -2028,12 +2105,20 @@ select:focus-visible {
 
 .studio-field input,
 .studio-field textarea,
-.studio-field select {
+.studio-field select,
+.studio-field .ant-input,
+.studio-field .ant-input-affix-wrapper,
+.studio-field .ant-select {
   width: 100%;
   min-height: 34px;
-  padding: 7px 9px;
   color: var(--studio-text);
   font-size: 12px;
+}
+
+.studio-field input,
+.studio-field textarea,
+.studio-field select {
+  padding: 7px 9px;
   background: var(--studio-surface);
   border: 1px solid var(--studio-line-strong);
   border-radius: 5px;
@@ -2203,6 +2288,68 @@ select:focus-visible {
 
 .dialog-form {
   padding: 18px;
+}
+
+.mcp-env-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mcp-env-note {
+  margin: 10px 0 16px;
+  color: var(--studio-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.mcp-env-rows {
+  display: grid;
+  gap: 12px;
+  max-height: 45vh;
+  margin-bottom: 12px;
+  overflow-y: auto;
+}
+
+.mcp-env-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.mcp-env-row .studio-field {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.mcp-env-row .ant-input {
+  font-family: var(--studio-mono);
+}
+
+.mcp-env-row .ant-input-affix-wrapper {
+  padding: 7px 9px;
+}
+
+.mcp-env-row .ant-input-affix-wrapper > .ant-input {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+@media (max-width: 480px) {
+  .mcp-env-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--studio-line);
+  }
+
+  .mcp-env-row .studio-field:first-child {
+    grid-column: 1 / -1;
+  }
 }
 
 .field-grid {
@@ -4215,7 +4362,52 @@ select:focus-visible {
 
 .audit-table .operations-table-head,
 .audit-table .operations-table-row {
-  grid-template-columns: 170px 150px 180px minmax(220px, 1fr) 110px;
+  grid-template-columns: 170px 150px 180px minmax(220px, 1fr) 110px 80px;
+}
+
+.audit-event-details {
+  padding: 16px;
+}
+
+.audit-event-metadata {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.audit-event-metadata dt {
+  color: var(--studio-muted);
+  font-size: 10px;
+}
+
+.audit-event-metadata dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--studio-text);
+  font-family: var(--studio-mono);
+  font-size: 11px;
+}
+
+.audit-payload {
+  max-height: 48vh;
+  margin: 12px 0 0;
+  padding: 12px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  color: var(--studio-text);
+  font-family: var(--studio-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  background: var(--studio-surface-subtle);
+  border: 1px solid var(--studio-line);
+  border-radius: 5px;
+}
+
+.audit-payload-empty {
+  margin-top: 16px;
+  color: var(--studio-muted);
+  font-size: 11px;
 }
 
 /* ===== 知识图谱面板 ===== */
@@ -4519,10 +4711,24 @@ select:focus-visible {
 @media (max-width: 760px) {
   .graph-layout {
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    min-height: 0;
+    flex: 0 0 auto;
+    align-content: start;
   }
   .graph-side-panel,
   .graph-inspector {
     grid-column: auto;
+    min-height: 120px;
+  }
+  .graph-side-panel {
+    max-height: 260px;
+  }
+  .graph-inspector {
+    min-height: 200px;
+  }
+  .graph-canvas-panel {
+    min-height: 480px;
   }
   .graph-search-bar {
     flex-direction: column;
@@ -6400,17 +6606,15 @@ select:focus-visible {
 
 @media (max-width: 440px) {
   .composer-toolbar {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .composer-toolbar__right {
-    position: absolute;
-    right: 8px;
-    bottom: 8px;
+    position: static;
   }
 
   .composer-toolbar__left {
-    padding-right: 74px;
+    padding-right: 0;
   }
 }
 
@@ -7892,12 +8096,22 @@ select:focus-visible {
 
 .settings-section {
   display: grid;
+  width: 100%;
   min-width: 0;
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 2px 8px;
   padding: 12px 11px;
+  color: var(--studio-text);
+  font: inherit;
+  text-align: left;
+  background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
+  cursor: pointer;
+}
+
+.settings-section:hover:not(.is-active) {
+  background: rgba(255, 255, 255, 0.52);
 }
 
 .settings-section + .settings-section {
@@ -8463,6 +8677,21 @@ select:focus-visible {
   .table-empty::before {
     display: none;
   }
+
+  .provider-table tbody tr:has(> .table-empty) {
+    display: block;
+    min-height: 120px;
+    padding: 0;
+  }
+
+  .provider-table tbody tr:has(> .table-empty) > .table-empty {
+    position: static;
+    display: grid !important;
+    width: 100%;
+    min-height: 120px;
+    place-items: center;
+    padding: 24px !important;
+  }
 }
 
 @media (max-width: 760px) {
@@ -8523,6 +8752,7 @@ select:focus-visible {
     min-width: 154px;
     flex: 1 0 154px;
     padding: 9px 10px;
+    scroll-margin-inline: 8px;
   }
 
   .settings-section + .settings-section {
@@ -8538,10 +8768,50 @@ select:focus-visible {
   .settings-intro {
     align-items: center;
     margin-bottom: 13px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
   }
 
   .settings-intro h2 {
     font-size: 20px;
+  }
+
+  .settings-intro > div:first-child {
+    min-width: 0;
+  }
+
+  .settings-intro > .domain-header-actions {
+    grid-column: 1 / -1;
+    width: 100%;
+    overflow: visible;
+  }
+
+  .settings-intro > .domain-header-actions .studio-button {
+    min-height: 40px;
+    white-space: nowrap;
+  }
+
+  .schema-source-settings .settings-intro {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+  }
+
+  .schema-source-settings .settings-intro-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .schema-source-settings .settings-intro-actions > span {
+    grid-column: 1 / -1;
+  }
+
+  .schema-source-settings .settings-intro-actions .studio-button {
+    min-height: 40px;
+    white-space: nowrap;
   }
 
   .provider-table tbody tr {
@@ -8704,6 +8974,16 @@ select:focus-visible {
 .schema-source-table th:first-child {
   z-index: 3;
   background: var(--studio-surface-subtle);
+}
+
+@media (max-width: 1100px) {
+  .schema-source-table {
+    min-width: 0;
+  }
+
+  .schema-source-table td:first-child {
+    position: static;
+  }
 }
 
 .schema-source-status-cell {
@@ -9035,16 +9315,78 @@ select:focus-visible {
   .obs-layout {
     grid-template-columns: 1fr;
   }
+
+  .obs-layout .graph-side-panel {
+    min-height: 300px;
+    max-height: 360px;
+  }
 }
 
 @media (max-width: 680px) {
-  .rag-workspace .workspace-notice {
+  .rag-workspace .workspace-notice,
+  .graph-workspace > .workspace-notice,
+  .observatory-workspace > .workspace-notice,
+  .mcp-workspace .mcp-operations-view .workspace-notice {
     position: static;
     width: auto;
     max-width: none;
     flex: 0 0 auto;
     margin: 8px 12px;
     transform: none;
+  }
+
+  .mcp-workspace .mcp-operations-view .workspace-notice {
+    margin: 0 0 12px;
+  }
+
+  .mcp-operations-view .operations-toolbar {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .mcp-operations-view .operations-toolbar > div:first-child {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
+  .mcp-operations-view .audit-search {
+    min-width: 0;
+  }
+
+  .mcp-operations-view .audit-search input {
+    width: clamp(110px, 38vw, 160px);
+  }
+
+  .observatory-workspace .domain-header-actions {
+    display: flex;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 7px;
+    overflow: visible;
+  }
+
+  .observatory-workspace .obs-source-selector {
+    width: 100%;
+    min-width: 0;
+    flex: 0 0 100%;
+  }
+
+  .observatory-workspace .domain-header-actions .studio-button {
+    flex: 1 0 auto;
+    min-width: 0;
+    min-height: 40px;
+    padding-inline: 10px;
+    white-space: nowrap;
+  }
+
+  .rag-query-bar {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .rag-query-bar .studio-button {
+    grid-column: 2;
+    width: 100%;
   }
 }
 
@@ -10133,3 +10475,45 @@ select:focus-visible {
   .variable-card input:not([type="checkbox"]), .variable-card select { min-height: 40px; }
   .variable-delete, .variable-text-button { min-height: 36px; }
 }
+
+.workflow-run-history { padding: 16px; min-width: 0; color: var(--studio-text); }
+.workflow-run-history-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.workflow-run-history-tools label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.workflow-run-history-tools select { padding: 6px; color: var(--studio-text); background: var(--studio-surface); border: 1px solid var(--studio-line-strong); border-radius: 4px; }
+.workflow-run-history-list { display: grid; gap: 8px; max-height: 300px; overflow: auto; }
+.workflow-run-history-list > button { display: grid; gap: 6px; width: 100%; padding: 12px; border: 1px solid var(--studio-line-strong); border-radius: 6px; text-align: left; color: var(--studio-text); background: var(--studio-surface); cursor: pointer; }
+.workflow-run-history-list > button.is-active { border-color: var(--studio-blue); }
+.workflow-run-history-list > button > span { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.workflow-run-history-list time, .workflow-run-history-list small { color: var(--studio-muted); font-size: 11px; }
+.workflow-run-history-list code { font-size: 10px; overflow-wrap: anywhere; }
+.workflow-run-history-detail { border-top: 1px solid var(--studio-line-strong); margin-top: 16px; padding-top: 12px; }
+.workflow-run-history-detail h3 { font-size: 13px; }
+.workflow-run-history-detail .run-preview { padding: 12px 0; }
+.workflow-run-history-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font-size: 11px; }
+.workflow-run-history-list button:focus-visible { outline: 2px solid var(--studio-blue); outline-offset: 2px; }
+.workflow-validation-menu li .variable-text-button { padding: 6px 14px; font-size: 11px; color: var(--studio-blue); }
+
+.workflow-edge-path.is-active,
+.workflow-edge-path.is-done { stroke: var(--studio-blue); stroke-width: 2.5; }
+.workflow-edge-path.is-error { stroke: var(--studio-danger); stroke-width: 2.5; }
+.workflow-action-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; padding: 24px; border: 1px solid var(--studio-line-strong); border-radius: 10px; color: var(--studio-text); background: var(--studio-surface); box-shadow: 0 24px 70px rgba(0, 0, 0, .2); }
+.workflow-action-dialog::backdrop { background: rgba(18, 24, 32, .42); }
+.workflow-action-dialog h2 { font-size: 20px; margin: 8px 0 12px; }
+.workflow-action-dialog textarea { width: 100%; resize: vertical; }
+.workflow-execution-policy { padding: 12px 0; border-bottom: 1px solid var(--studio-line); }
+.workflow-execution-policy summary { cursor: pointer; color: var(--studio-blue); font-size: 12px; margin-bottom: 12px; }
+.workflow-resume-cache { max-height: 320px; overflow: auto; }
+.workflow-resume-cache section { margin: 12px 0; font-size: 12px; }
+.workflow-resume-cache pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; background: var(--studio-surface-subtle); border-radius: 4px; }
+.workflow-clipboard-menu { position: relative; font-size: 12px; }
+.workflow-clipboard-menu summary { padding: 8px; cursor: pointer; white-space: nowrap; }
+.workflow-clipboard-menu > div { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 220px; padding: 6px; border: 1px solid var(--studio-line-strong); border-radius: 6px; background: var(--studio-surface); box-shadow: var(--studio-shadow); }
+.workflow-clipboard-menu button { display: block; width: 100%; padding: 10px; border: 0; text-align: left; background: transparent; color: var(--studio-text); cursor: pointer; }
+.workflow-clipboard-menu button:hover { background: var(--studio-blue-soft); }
+.workflow-clipboard-menu button:disabled { opacity: .5; cursor: default; }
+.workflow-import-errors { white-space: pre-wrap; overflow-wrap: anywhere; }
+.workflow-selection-toolbar { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 12px; max-width: calc(100% - 24px); padding: 10px 14px; border: 1px solid var(--studio-line-strong); border-radius: 8px; background: var(--studio-surface); box-shadow: 0 4px 18px rgba(0, 0, 0, .08); font-size: 12px; white-space: nowrap; }
+.workflow-selection-toolbar button { border: 0; background: transparent; color: var(--studio-blue); cursor: pointer; padding: 4px; }
+.workflow-selection-toolbar button:focus-visible { outline: 2px solid var(--studio-blue); }
+@media (prefers-reduced-motion: reduce) { .workflow-edge.is-active path { animation: none !important; } }
+@media (max-width: 640px) { .workflow-selection-toolbar { gap: 6px; padding: 8px; } .workflow-selection-toolbar button { min-height: 36px; } }

@@ -228,6 +228,7 @@ describe("workflow executor", () => {
 
   it("runs only the selected condition branch and supports joins", async () => {
     let completeCalls = 0;
+    const starts: Array<{ nodeId?: string; incomingEdgeIds?: string[] }> = [];
     const result = await executeWorkflow(
       base({
         input: {},
@@ -262,7 +263,9 @@ describe("workflow executor", () => {
           { source: "no", target: "end" },
         ],
       }),
-      () => undefined,
+      (event) => {
+        if (event.type === "node_start") starts.push(event);
+      },
       {
         completeLlm: async () => {
           completeCalls += 1;
@@ -286,6 +289,36 @@ describe("workflow executor", () => {
     assert.equal(completeCalls, 1);
     assert.deepEqual(result.yes, { answer: "yes" });
     assert.equal(result.no, undefined);
+    assert.deepEqual(starts.find((event) => event.nodeId === "end")?.incomingEdgeIds, [
+      "yes-end-3",
+    ]);
+    assert.equal(
+      starts.some((event) => event.nodeId === "no"),
+      false,
+    );
+  });
+
+  it("rejects unknown node kinds and out-of-range execution policy at validation time", () => {
+    assert.throws(
+      () =>
+        validateWorkflow(
+          base({
+            nodes: [{ id: "x", kind: "unknown" as never }],
+            edges: [],
+          }),
+        ),
+      /invalid node kind/,
+    );
+    assert.throws(
+      () =>
+        validateWorkflow(
+          base({
+            nodes: [{ id: "x", kind: "mcp", config: { retry: { maxRetries: 4 } } }],
+            edges: [],
+          }),
+        ),
+      /maxRetries/,
+    );
   });
 
   it("emits the interpolated prompt on llm node result events", async () => {

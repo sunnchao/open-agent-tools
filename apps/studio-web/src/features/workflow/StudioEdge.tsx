@@ -1,10 +1,5 @@
 import { createContext, useContext } from "react";
-import {
-  BaseEdge,
-  EdgeLabelRenderer,
-  getSmoothStepPath,
-  type EdgeProps,
-} from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type EdgeProps } from "@xyflow/react";
 import { PlusOutlined } from "../../lib/icons.js";
 
 export const WorkflowEdgeActionsContext = createContext<
@@ -23,6 +18,7 @@ export function StudioEdge({
   style,
   label,
   selected,
+  data,
 }: EdgeProps) {
   const openNodePicker = useContext(WorkflowEdgeActionsContext);
   const [edgePath, labelX, labelY] = getSmoothStepPath({
@@ -36,7 +32,13 @@ export function StudioEdge({
   });
   return (
     <>
-      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={style}
+        className={data?.runStatus ? `workflow-edge-path is-${String(data.runStatus)}` : undefined}
+      />
       <EdgeLabelRenderer>
         {label ? (
           <span

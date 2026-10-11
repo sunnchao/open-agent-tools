@@ -68,7 +68,7 @@ describe("PostgreSQL artifact inspection repository", { skip: !databaseUrl }, ()
       "0002_mcp_build_jobs.sql",
     ]) {
       const migration = await readFile(
-        resolve(import.meta.dirname, `../../mcp-control-plane/drizzle/${migrationName}`),
+        resolve(import.meta.dirname, `../../../drizzle/${migrationName}`),
         "utf8",
       );
       await pool.query(migration);

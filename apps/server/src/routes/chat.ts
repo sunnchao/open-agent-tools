@@ -18,7 +18,7 @@ import {
 } from "../resources.js";
 import { LlmRetrievalEvaluator } from "@open-agent-tools/rag/crag";
 import { createChatCragController } from "../crag.js";
-import { logDuration, logTrace, truncate } from "../trace.js";
+import { logDebugDuration, logDuration, logTrace, truncate } from "../trace.js";
 import {
   runTraced,
   startObservation,
@@ -492,7 +492,12 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
     const lastUserQuery = [...messages]
       .reverse()
       .find((message) => message.role === "user")?.content;
+    const schemaInjectStartedAt = Date.now();
     const schemaInjection = buildSchemaInjection(lastUserQuery);
+    logDebugDuration("chat.stage.schema_inject", schemaInjectStartedAt, {
+      sessionId: resolvedSessionId ?? null,
+      enabled: schemaInjection.enabled,
+    });
     if (schemaInjection.enabled) {
       logTrace("chat.schema", {
         sessionId: resolvedSessionId ?? null,
@@ -587,6 +592,11 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
         status: "complete",
       });
     }
+    logDebugDuration("chat.done", chatStartedAt, {
+      sessionId: resolvedSessionId ?? null,
+      toolRounds,
+      contentLength: fullContent.length,
+    });
     send({ done: true });
     res.end();
   }

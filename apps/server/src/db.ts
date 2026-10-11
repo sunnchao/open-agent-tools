@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { logDebugDuration } from "./trace.js";
 
 export type Role = "user" | "assistant" | "system" | "tool";
 export type MessageStatus = "streaming" | "complete" | "error";
@@ -39,6 +40,7 @@ export function getDbPath(): string {
 
 export function openDb(path = getDbPath()): DatabaseSync {
   if (db) return db;
+  const startedAt = Date.now();
 
   mkdirSync(dirname(path), { recursive: true });
   db = new DatabaseSync(path);
@@ -121,6 +123,7 @@ export function openDb(path = getDbPath()): DatabaseSync {
   migrateProvidersTable(db);
   migrateSchemaSourcesTable(db);
 
+  logDebugDuration("db.open", startedAt, { path });
   return db;
 }
 
@@ -248,9 +251,12 @@ export function getSession(id: string): Session | null {
 }
 
 export function listSessionsWithMessages(): Session[] {
-  return listSessions()
-    .map((s) => getSession(s.id))
-    .filter((s): s is Session => s !== null);
+  const startedAt = Date.now();
+  const summaries = listSessions();
+  const sessions = summaries.map((s) => getSession(s.id)).filter((s): s is Session => s !== null);
+  // N+1 查询(每个会话单独取消息);会话数变大时耗时会明显上升,debug 下单独计时便于发现。
+  logDebugDuration("db.list_sessions_with_messages", startedAt, { sessions: sessions.length });
+  return sessions;
 }
 
 export function createSession(input?: { id?: string; title?: string }): Session {

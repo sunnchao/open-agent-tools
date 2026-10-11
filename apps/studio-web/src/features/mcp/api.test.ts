@@ -11,6 +11,8 @@ import {
   disableService,
   enableService,
   forkDraftVersion,
+  getServiceEnvironment,
+  getAuditEvent,
   listApiKeys,
   listAuditEvents,
   listBuilds,
@@ -22,7 +24,9 @@ import {
   rollbackVersion,
   updatePrompt,
   updateService,
+  updateServiceEnvironment,
   updateTool,
+  updateVersionLimits,
   upsertGrant,
   uploadArtifact,
   validateVersion,
@@ -30,6 +34,43 @@ import {
 
 describe("MCP Studio API", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("loads complete audit event input and output on demand", async () => {
+    const event = {
+      id: "event-1",
+      input: { query: "MCP" },
+      output: { content: [{ type: "text", text: "完整输出" }] },
+      context: { limits: { network: "bridge" } },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ event }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getAuditEvent("event-1")).resolves.toEqual(event);
+    expect(fetchMock).toHaveBeenCalledWith("/mcp-api/audit/event-1", expect.any(Object));
+  });
+
+  it("saves execution limits with the expected version revision", async () => {
+    const limits = { timeoutMs: 15_000, memoryMb: 512, cpuMillis: 500, network: "bridge" as const };
+    const version = { id: "version-1", revision: 5, limits };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ version }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(updateVersionLimits("service-1", "version-1", 4, limits)).resolves.toEqual(
+      version,
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/mcp-api/services/service-1/versions/version-1/limits",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ expectedRevision: 4, limits }),
+      }),
+    );
+  });
 
   it("uploads a ZIP through the presigned URL before completing artifact inspection", async () => {
     const fetchMock = vi
@@ -116,6 +157,30 @@ describe("MCP Studio API", () => {
       { expectedRevision: 5 },
       { expectedRevision: 6 },
     ]);
+  });
+
+  it("reads masked environment variables and saves values with a service revision", async () => {
+    const payload = { environment: { TAVILY_API_KEY: null }, revision: 3 };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await getServiceEnvironment("service-1")).toEqual(payload);
+    expect(
+      await updateServiceEnvironment("service-1", 2, {
+        TAVILY_API_KEY: null,
+        SEARCH_URL: "https://search.example",
+      }),
+    ).toEqual(payload);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/mcp-api/services/service-1/environment");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/mcp-api/services/service-1/environment");
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("PUT");
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      expectedRevision: 2,
+      environment: { TAVILY_API_KEY: null, SEARCH_URL: "https://search.example" },
+    });
   });
 
   it("covers service, Tool, and Prompt management mutations", async () => {

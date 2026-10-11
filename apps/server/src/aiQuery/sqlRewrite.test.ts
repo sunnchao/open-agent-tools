@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rewriteSqlWithAuth } from "./sqlRewrite.js";
+import { rewriteAndValidateSqlWithAuth, rewriteSqlWithAuth } from "./sqlRewrite.js";
 import { PermissionError } from "./permission.js";
 import { SqlGuardError } from "./sqlGuard.js";
 
@@ -72,5 +72,23 @@ test("rewriteSqlWithAuth：空行业或空组织 → PERMISSION_DENIED", () => {
   assert.throws(
     () => rewriteSqlWithAuth("SELECT 1 FROM dtms_contract", industries, []),
     PermissionError,
+  );
+});
+
+test("rewriteAndValidateSqlWithAuth：生成 SQL 和最终 SQL 都通过 DTMS 护栏", () => {
+  const rewritten = rewriteAndValidateSqlWithAuth(
+    "SELECT SUM(total_amount) AS `合同金额合计` FROM dtms_contract",
+    industries,
+    orgNos,
+    ["合同"],
+  );
+  assert.match(rewritten.sql, /industry IN \(\?\) AND org_no IN \(\?\)/);
+  assert.deepEqual(rewritten.params, ["煤炭", "ORG001"]);
+});
+
+test("rewriteAndValidateSqlWithAuth：危险生成 SQL 在权限改写前即被拦截", () => {
+  assert.throws(
+    () => rewriteAndValidateSqlWithAuth("SELECT * FROM users", industries, orgNos),
+    SqlGuardError,
   );
 });

@@ -1,5 +1,11 @@
-import { runVariables, validVariableName } from "@open-agent-tools/workflow-contracts";
-import { variableNodes, renameVariable } from "./variables.js";
+import {
+  runVariables,
+  validVariableName,
+  cachedNodesFromEvents,
+  prepareResumeCheckpoint,
+  type WorkflowResumeCheckpoint,
+} from "@open-agent-tools/workflow-contracts";
+import { variableNodes, renameVariable, repairVariableReference } from "./variables.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -65,7 +71,16 @@ import { StudioEdge, WorkflowEdgeActionsContext } from "./StudioEdge.js";
 import { NodePicker } from "./NodePicker.js";
 import { NodeInspector } from "./NodeInspector.js";
 import { RunPreview } from "./RunPreview.js";
+import { RunHistoryPanel } from "./RunHistoryPanel.js";
+import { decorateRunEdges, updateRunEdges, type EdgeRunStates } from "./runEdges.js";
 import { RunInputDialog } from "./RunInputDialog.js";
+import { PublishDialog } from "./PublishDialog.js";
+import { ResumeDialog } from "./ResumeDialog.js";
+import { ConfirmDialog } from "./ConfirmDialog.js";
+import { downloadWorkflow } from "./io.js";
+import { cloneSubgraph } from "./subgraph.js";
+import { layoutWorkflow } from "./layout.js";
+import { assertSelectionSources, parseSelection, serializeSelection } from "./clipboard.js";
 import { NodeTestInputDialog } from "./NodeTestInputDialog.js";
 import type { NodePickerState, RunLogEntry, WorkflowNode, WorkflowSnapshot } from "./types.js";
 import {
@@ -73,6 +88,7 @@ import {
   publishWorkflow,
   saveWorkflowDraft,
   type WorkflowDetailRecord,
+  type WorkflowRunHistory,
 } from "./api.js";
 
 interface NodeTestDialogState {
@@ -117,6 +133,16 @@ function WorkflowCanvas({
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [publishState, setPublishState] = useState<"idle" | "publishing" | "error">("idle");
+  const [showPublish, setShowPublish] = useState(false);
+  const [publishNotice, setPublishNotice] = useState("");
+  const [confirmExport, setConfirmExport] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ nodes: string[]; edges: string[] } | null>(
+    null,
+  );
+  const [pendingResume, setPendingResume] = useState<{
+    history: WorkflowRunHistory;
+    checkpoint: WorkflowResumeCheckpoint;
+  } | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [name, setName] = useState("知识库问答工作流");
@@ -133,7 +159,11 @@ function WorkflowCanvas({
   const [editRevision, setEditRevision] = useState(0);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [running, setRunning] = useState(false);
+  const [inspectorView, setInspectorView] = useState<"current" | "history">("current");
+  const [runHistoryRevision, setRunHistoryRevision] = useState(0);
   const [runLog, setRunLog] = useState<RunLogEntry[]>([]);
+  const [edgeRunStates, setEdgeRunStates] = useState<EdgeRunStates>({});
+  const runIncomingEdges = useRef<Record<string, string[]>>({});
   const [runOutputs, setRunOutputs] = useState<Record<string, Record<string, unknown>> | null>(
     null,
   );
@@ -372,6 +402,26 @@ function WorkflowCanvas({
   }, [dirty, editRevision, historyRevision, persistDraft]);
 
   const selectedNode = nodes.find((node) => node.id === selectedId) ?? null;
+  const selectedNodes = nodes.filter((node) => node.selected);
+  const selectedIds = selectedNodes.length
+    ? selectedNodes.map((node) => node.id)
+    : selectedId
+      ? [selectedId]
+      : [];
+
+  const applyGraphEdit = useCallback(
+    (nextNodes: WorkflowNode[], nextEdges: Edge[]) => {
+      if (historyTimer.current !== null) window.clearTimeout(historyTimer.current);
+      commitHistory();
+      nodesRef.current = nextNodes;
+      edgesRef.current = nextEdges;
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      commitHistory();
+      markEdited();
+    },
+    [commitHistory, markEdited, setEdges, setNodes],
+  );
 
   const focusRunNode = useCallback(
     (nodeId: string) => {
@@ -596,7 +646,7 @@ function WorkflowCanvas({
                 ...node.data,
                 config: {
                   ...node.data.config,
-                  [kind]: items.map((item, i) => i === index ? { ...item, name } : item),
+                  [kind]: items.map((item, i) => (i === index ? { ...item, name } : item)),
                 },
               },
             }
@@ -604,6 +654,21 @@ function WorkflowCanvas({
       );
       return previous ? renameVariable(updated, selectedNode.id, kind, previous, name) : updated;
     });
+    markEdited();
+  };
+
+  const repairReference = (issue: WorkflowValidationIssue, replacement: string) => {
+    if (!issue.nodeId || !issue.reference || !issue.suggestions?.includes(replacement)) return;
+    const next = repairVariableReference(
+      nodesRef.current,
+      { ...issue, nodeId: issue.nodeId },
+      replacement,
+    );
+    if (next === nodesRef.current) return;
+    commitHistory();
+    nodesRef.current = next;
+    setNodes(next);
+    commitHistory();
     markEdited();
   };
 
@@ -615,48 +680,50 @@ function WorkflowCanvas({
   };
 
   const duplicateSelected = useCallback(() => {
-    if (!selectedNode) return;
-    const id = `${selectedNode.data.kind}-${Date.now()}`;
-    const duplicate: WorkflowNode = {
-      ...selectedNode,
-      id,
-      selected: false,
-      position: { x: selectedNode.position.x + 36, y: selectedNode.position.y + 36 },
-      data: {
-        ...selectedNode.data,
-        id,
-        label: `${selectedNode.data.label} 副本`,
-        status: "idle",
-        config: JSON.parse(JSON.stringify(selectedNode.data.config)) as Record<
-          string,
-          WorkflowConfigValue
-        >,
-      },
-    };
-    setNodes((current) => [...current, duplicate]);
-    setSelectedId(id);
-    markEdited();
-  }, [markEdited, selectedNode, setNodes]);
+    if (running) return;
+    const selected = nodesRef.current.filter((node) => node.selected).map((node) => node.id);
+    const ids = new Set(selected.length ? selected : selectedId ? [selectedId] : []);
+    if (!ids.size) return;
+    try {
+      const copied = cloneSubgraph(nodesRef.current, edgesRef.current, ids, true);
+      applyGraphEdit(
+        [...nodesRef.current.map((node) => ({ ...node, selected: false })), ...copied.nodes],
+        [...edgesRef.current, ...copied.edges],
+      );
+      setSelectedId(copied.nodes.length === 1 ? copied.nodes[0]!.id : null);
+    } catch (reason) {
+      setWorkspaceError(reason instanceof Error ? reason.message : "复制失败");
+    }
+  }, [applyGraphEdit, running, selectedId]);
 
   const removeSelected = () => {
-    if (!selectedId) return;
-    if (nodeTestPendingId === selectedId) {
+    if (running || !selectedIds.length) return;
+    setPendingDelete({ nodes: selectedIds, edges: [] });
+  };
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    const ids = new Set(pendingDelete.nodes);
+    const edgeIds = new Set(pendingDelete.edges);
+    if (nodeTestPendingId && ids.has(nodeTestPendingId)) {
       nodeTestToken.current += 1;
       nodeTestController.current?.abort();
       setNodeTestPendingId(null);
     }
-    setNodes((current) => current.filter((node) => node.id !== selectedId));
-    setEdges((current) =>
-      current.filter((edge) => edge.source !== selectedId && edge.target !== selectedId),
+    applyGraphEdit(
+      nodesRef.current.filter((node) => !ids.has(node.id)),
+      edgesRef.current.filter(
+        (edge) => !ids.has(edge.source) && !ids.has(edge.target) && !edgeIds.has(edge.id),
+      ),
     );
     setNodeTestResults((current) => {
       const next = { ...current };
-      delete next[selectedId];
+      for (const id of ids) delete next[id];
       return next;
     });
     setSelectedId(null);
     setMobileView("canvas");
-    markEdited();
+    setPendingDelete(null);
   };
 
   const save = useCallback(() => {
@@ -664,27 +731,105 @@ function WorkflowCanvas({
     void persistDraft();
   }, [commitHistory, persistDraft]);
 
-  const publish = useCallback(async () => {
-    if (validationIssues.length > 0) {
-      setShowIssues(true);
-      return;
-    }
-    setPublishState("publishing");
-    setWorkspaceError(null);
-    const revision = await persistDraft();
-    if (revision === null) {
-      setPublishState("error");
-      return;
-    }
+  const copySelection = useCallback(async () => {
+    const selected = nodesRef.current.filter((node) => node.selected).map((node) => node.id);
     try {
-      const published = await publishWorkflow(workflowId, revision);
-      setWorkflow(published);
-      setPublishState("idle");
+      if (!navigator.clipboard) throw new Error("当前浏览器无法访问剪贴板");
+      await navigator.clipboard.writeText(
+        serializeSelection(
+          nodesRef.current,
+          edgesRef.current,
+          new Set(selected.length ? selected : selectedId ? [selectedId] : []),
+        ),
+      );
+      setPublishNotice(`已复制 ${selected.length || 1} 个节点`);
     } catch (reason) {
-      setPublishState("error");
-      setWorkspaceError(reason instanceof Error ? reason.message : "工作流发布失败");
+      setWorkspaceError(reason instanceof Error ? reason.message : "复制失败");
     }
-  }, [persistDraft, validationIssues.length, workflowId]);
+  }, [selectedId]);
+
+  const pasteSelection = useCallback(async () => {
+    if (running) return;
+    try {
+      if (!navigator.clipboard) throw new Error("当前浏览器无法访问剪贴板");
+      const copied = parseSelection(await navigator.clipboard.readText());
+      assertSelectionSources(copied.nodes, nodesRef.current);
+      const nextNodes = [
+        ...nodesRef.current.map((node) => ({ ...node, selected: false })),
+        ...copied.nodes,
+      ];
+      const nextEdges = [...edgesRef.current, ...copied.edges];
+      const issues = validateWorkflowGraph(nextNodes, nextEdges, resources.catalog);
+      applyGraphEdit(nextNodes, nextEdges);
+      setSelectedId(copied.nodes.length === 1 ? copied.nodes[0]!.id : null);
+      setWorkspaceError(
+        issues.length
+          ? `已粘贴 ${copied.nodes.length} 个节点，但仍有问题：${issues
+              .slice(0, 3)
+              .map((issue) => issue.message)
+              .join("；")}`
+          : null,
+      );
+      setShowIssues(true);
+    } catch (reason) {
+      setWorkspaceError(reason instanceof Error ? reason.message : "粘贴失败");
+    }
+  }, [applyGraphEdit, resources.catalog, running]);
+
+  const arrangeGraph = () => {
+    if (running) return;
+    try {
+      applyGraphEdit(layoutWorkflow(nodesRef.current, edgesRef.current), edgesRef.current);
+      window.requestAnimationFrame(() => {
+        void fitView({ padding: 0.2, duration: 240 });
+      });
+    } catch (reason) {
+      setWorkspaceError(reason instanceof Error ? reason.message : "布局失败");
+    }
+  };
+
+  const exportGraph = () => {
+    try {
+      downloadWorkflow(
+        snapshotGraph(nameRef.current, nodesRef.current, edgesRef.current),
+        workflow?.app.slug ?? "workflow",
+      );
+      setConfirmExport(false);
+    } catch (reason) {
+      setConfirmExport(false);
+      setWorkspaceError(reason instanceof Error ? reason.message : "导出失败");
+    }
+  };
+
+  const publish = useCallback(
+    async (releaseNotes: string) => {
+      if (validationIssues.length > 0) {
+        setShowIssues(true);
+        return;
+      }
+      setPublishState("publishing");
+      setWorkspaceError(null);
+      const revision = await persistDraft();
+      if (revision === null) {
+        setPublishState("error");
+        return;
+      }
+      try {
+        const published = await publishWorkflow(workflowId, revision, releaseNotes.trim());
+        setWorkflow(published);
+        setPublishState("idle");
+        setShowPublish(false);
+        const version = published.versions.find(
+          (item) => item.id === published.app.currentVersionId,
+        );
+        setPublishNotice(`已发布 v${version?.versionNumber ?? ""}`);
+      } catch (reason) {
+        setPublishState("error");
+        setWorkspaceError(reason instanceof Error ? reason.message : "工作流发布失败");
+      }
+    },
+    [persistDraft, validationIssues.length, workflowId],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -695,25 +840,38 @@ function WorkflowCanvas({
         target?.tagName === "TEXTAREA" ||
         target?.tagName === "SELECT";
       const command = event.metaKey || event.ctrlKey;
+      if (document.querySelector("dialog[open]")) return;
       if (command && event.key.toLowerCase() === "s") {
         event.preventDefault();
         save();
         return;
       }
       if (isEditing) return;
+      if (command && event.key.toLowerCase() === "c" && !window.getSelection()?.toString()) {
+        event.preventDefault();
+        void copySelection();
+      }
+      if (command && event.key.toLowerCase() === "v") {
+        event.preventDefault();
+        void pasteSelection();
+      }
       if (command && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
         else undo();
       }
-      if (command && event.key.toLowerCase() === "d" && selectedId) {
+      if (
+        command &&
+        event.key.toLowerCase() === "d" &&
+        (selectedId || nodesRef.current.some((node) => node.selected))
+      ) {
         event.preventDefault();
         duplicateSelected();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [duplicateSelected, redo, save, selectedId, undo]);
+  }, [copySelection, pasteSelection, duplicateSelected, redo, save, selectedId, undo]);
 
   const run = () => {
     if (running || nodeTestPendingId) return;
@@ -735,6 +893,9 @@ function WorkflowCanvas({
     runToken.current += 1;
     runController.current?.abort();
     setRunning(false);
+    setEdgeRunStates((current) =>
+      Object.fromEntries(Object.entries(current).filter(([, status]) => status !== "active")),
+    );
     setRunOutputs(null);
     setNodes((current) =>
       current.map((node) =>
@@ -831,7 +992,37 @@ function WorkflowCanvas({
     ? nodes.find((node) => node.id === nodeTestDialog.nodeId)
     : null;
 
-  const startRun = async (input: Record<string, unknown>) => {
+  const beginResume = (history: WorkflowRunHistory, nodeId: string) => {
+    if (running || nodeTestPendingId) return;
+    try {
+      const checkpoint = prepareResumeCheckpoint(
+        {
+          nodes: variableNodes(nodesRef.current),
+          edges: edgesRef.current.map((edge) => ({
+            ...edge,
+            label: typeof edge.label === "string" ? edge.label : undefined,
+          })),
+        },
+        {
+          nodes: variableNodes(history.graph.nodes),
+          edges: history.graph.edges.map((edge) => ({
+            ...edge,
+            label: typeof edge.label === "string" ? edge.label : undefined,
+          })),
+        },
+        nodeId,
+        cachedNodesFromEvents(history.events),
+      );
+      setPendingResume({ history, checkpoint });
+    } catch (reason) {
+      setWorkspaceError(reason instanceof Error ? reason.message : "无法续跑");
+    }
+  };
+
+  const startRun = async (
+    input: Record<string, unknown>,
+    resume?: { runId: string; fromNodeId: string },
+  ) => {
     if (running) return;
     if (validationIssues.length > 0) {
       setShowRunInputs(false);
@@ -840,7 +1031,10 @@ function WorkflowCanvas({
     }
     const token = ++runToken.current;
     setShowRunInputs(false);
+    setInspectorView("current");
     setRunning(true);
+    setEdgeRunStates({});
+    runIncomingEdges.current = {};
     setRunLog([]);
     setRunOutputs(null);
     setNodes((current) =>
@@ -848,6 +1042,8 @@ function WorkflowCanvas({
     );
     runController.current = streamWorkflow(
       {
+        workflowId,
+        resume,
         nodes: nodes.map((node) => ({
           id: node.id,
           kind: node.data.kind,
@@ -863,8 +1059,10 @@ function WorkflowCanvas({
         input,
       },
       {
-        onNodeStart: (nodeId) => {
+        onNodeStart: (nodeId, _label, _kind, incomingEdgeIds) => {
           if (runToken.current !== token) return;
+          runIncomingEdges.current[nodeId] = incomingEdgeIds ?? [];
+          setEdgeRunStates((current) => updateRunEdges(current, incomingEdgeIds ?? [], "active"));
           focusRunNode(nodeId);
           setNodes((current) =>
             current.map((node) =>
@@ -874,6 +1072,13 @@ function WorkflowCanvas({
         },
         onNodeResult: (nodeId, status, meta) => {
           if (runToken.current !== token) return;
+          setEdgeRunStates((current) =>
+            updateRunEdges(
+              current,
+              runIncomingEdges.current[nodeId] ?? meta.metadata?.incomingEdgeIds ?? [],
+              meta.metadata?.cached ? "done" : status === "success" ? "done" : "error",
+            ),
+          );
           const node = nodes.find((item) => item.id === nodeId);
           setNodes((current) =>
             current.map((item) =>
@@ -894,6 +1099,8 @@ function WorkflowCanvas({
               prompt: meta.prompt,
               systemPrompt: meta.systemPrompt,
               durationMs: meta.metadata?.durationMs,
+              attempts: meta.metadata?.attempts,
+              cached: meta.metadata?.cached,
               tokenUsage: meta.metadata?.tokenUsage,
             },
           ]);
@@ -902,6 +1109,7 @@ function WorkflowCanvas({
           if (runToken.current !== token) return;
           setRunOutputs(outputs);
           setRunning(false);
+          setRunHistoryRevision((revision) => revision + 1);
         },
         onError: (error, nodeId) => {
           if (runToken.current !== token) return;
@@ -912,6 +1120,15 @@ function WorkflowCanvas({
             { id: nodeId ?? "run", label: nodeId ?? "Workflow", status: "error", detail: error },
           ]);
           setRunning(false);
+          setEdgeRunStates((current) =>
+            Object.fromEntries(
+              Object.entries(current).map(([id, state]) => [
+                id,
+                state === "active" ? "error" : state,
+              ]),
+            ),
+          );
+          setRunHistoryRevision((revision) => revision + 1);
         },
       },
     );
@@ -976,6 +1193,11 @@ function WorkflowCanvas({
               {workspaceError}
             </span>
           ) : null}
+          {publishNotice ? (
+            <span className="save-state" role="status">
+              {publishNotice}
+            </span>
+          ) : null}
           <div className="workflow-history-actions" aria-label="编辑历史">
             <button type="button" title="撤销" aria-label="撤销" disabled={!canUndo} onClick={undo}>
               <UndoOutlined />
@@ -1033,6 +1255,17 @@ function WorkflowCanvas({
                             <small>{issue.nodeId ?? "WORKFLOW"}</small>
                           </span>
                         </button>
+                        {issue.reference &&
+                          issue.suggestions?.map((suggestion) => (
+                            <button
+                              key={suggestion}
+                              type="button"
+                              className="variable-text-button"
+                              onClick={() => repairReference(issue, suggestion)}
+                            >
+                              改为 {suggestion}
+                            </button>
+                          ))}
                       </li>
                     ))}
                   </ol>
@@ -1047,6 +1280,36 @@ function WorkflowCanvas({
                 ? "自动保存中"
                 : "已自动保存"}
           </span>
+          <button
+            className="studio-button secondary"
+            type="button"
+            onClick={() => (validationIssues.length ? setConfirmExport(true) : exportGraph())}
+          >
+            导出 JSON
+          </button>
+          <button
+            className="studio-button secondary"
+            type="button"
+            disabled={running}
+            onClick={arrangeGraph}
+          >
+            整理布局
+          </button>
+          <details className="workflow-clipboard-menu">
+            <summary>剪贴板</summary>
+            <div>
+              <button
+                type="button"
+                disabled={!selectedIds.length}
+                onClick={() => void copySelection()}
+              >
+                复制节点 ⌘C / Ctrl+C
+              </button>
+              <button type="button" disabled={running} onClick={() => void pasteSelection()}>
+                粘贴节点 ⌘V / Ctrl+V
+              </button>
+            </div>
+          </details>
           <button className="studio-button secondary save-button" type="button" onClick={save}>
             <SaveOutlined /> <span>保存</span>
           </button>
@@ -1064,7 +1327,10 @@ function WorkflowCanvas({
             className="studio-button primary workflow-publish"
             type="button"
             disabled={publishState === "publishing" || running || validationIssues.length > 0}
-            onClick={() => void publish()}
+            onClick={() => {
+              setWorkspaceError(null);
+              setShowPublish(true);
+            }}
           >
             <RocketOutlined />
             <span>{publishState === "publishing" ? "发布中" : "发布"}</span>
@@ -1114,6 +1380,15 @@ function WorkflowCanvas({
           <span>{selectedNode ? "配置" : "运行"}</span>
         </button>
       </div>
+      {confirmExport ? (
+        <ConfirmDialog
+          title="导出存在问题的工作流？"
+          detail={`当前有 ${validationIssues.length} 个问题，文件可能无法运行。修复后才可重新导入。`}
+          confirmLabel="仍然导出"
+          onConfirm={exportGraph}
+          onCancel={() => setConfirmExport(false)}
+        />
+      ) : null}
 
       <div className={`workflow-layout mobile-view-${mobileView}`}>
         <aside className="node-palette">
@@ -1179,7 +1454,7 @@ function WorkflowCanvas({
           <WorkflowEdgeActionsContext.Provider value={openEdgeNodePicker}>
             <ReactFlow<WorkflowNode, Edge>
               nodes={nodes}
-              edges={edges}
+              edges={decorateRunEdges(edges, edgeRunStates)}
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
               onNodesChange={(changes) => {
@@ -1205,6 +1480,7 @@ function WorkflowCanvas({
                 event.dataTransfer.dropEffect = "move";
               }}
               onNodeClick={(_, node) => {
+                setInspectorView("current");
                 setSelectedId(node.id);
                 setMobileView("inspector");
               }}
@@ -1221,7 +1497,24 @@ function WorkflowCanvas({
               minZoom={compactLayout ? 0.25 : 0.35}
               maxZoom={2}
               onlyRenderVisibleElements
-              deleteKeyCode={["Backspace", "Delete"]}
+              selectionOnDrag
+              selectionKeyCode={null}
+              multiSelectionKeyCode={["Shift", "Meta", "Control"]}
+              panOnDrag={[1, 2]}
+              nodesDraggable={!running}
+              nodesConnectable={!running}
+              onSelectionChange={({ nodes: selected }) => {
+                setSelectedId(selected.length === 1 ? selected[0]!.id : null);
+              }}
+              onBeforeDelete={async ({ nodes: removedNodes, edges: removedEdges }) => {
+                if (!running)
+                  setPendingDelete({
+                    nodes: removedNodes.map((node) => node.id),
+                    edges: removedEdges.map((edge) => edge.id),
+                  });
+                return false;
+              }}
+              deleteKeyCode={running ? null : ["Backspace", "Delete"]}
               defaultEdgeOptions={{ type: "studio" }}
             >
               <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color="#c9cdd3" />
@@ -1234,6 +1527,26 @@ function WorkflowCanvas({
               />
             </ReactFlow>
           </WorkflowEdgeActionsContext.Provider>
+          {selectedNodes.length > 1 ? (
+            <div className="workflow-selection-toolbar" role="toolbar" aria-label="批量操作">
+              <span>已选 {selectedNodes.length} 个节点</span>
+              <button type="button" disabled={running} onClick={duplicateSelected}>
+                复制
+              </button>
+              <button type="button" disabled={running} onClick={removeSelected}>
+                删除
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setNodes((current) => current.map((node) => ({ ...node, selected: false })));
+                  setSelectedId(null);
+                }}
+              >
+                取消选择
+              </button>
+            </div>
+          ) : null}
           <div className="workflow-canvas-status">
             <span>
               <ThunderboltOutlined /> 编排画布
@@ -1246,8 +1559,10 @@ function WorkflowCanvas({
 
         <aside className="workflow-inspector inspector-panel">
           <div className="panel-heading">
-            <span>{selectedNode ? "节点配置" : "运行预览"}</span>
-            {selectedNode ? (
+            <span>
+              {inspectorView === "history" ? "运行历史" : selectedNode ? "节点配置" : "运行预览"}
+            </span>
+            {selectedNode && inspectorView === "current" ? (
               <span className="inspector-heading-actions">
                 <button
                   type="button"
@@ -1268,7 +1583,36 @@ function WorkflowCanvas({
               </span>
             ) : null}
           </div>
-          {selectedNode ? (
+          <div className="node-inspector-tabs" role="tablist" aria-label="编辑器检查面板">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={inspectorView === "current"}
+              className={inspectorView === "current" ? "is-active" : undefined}
+              onClick={() => setInspectorView("current")}
+            >
+              {selectedNode ? "节点配置" : "本次运行"}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={inspectorView === "history"}
+              className={inspectorView === "history" ? "is-active" : undefined}
+              onClick={() => setInspectorView("history")}
+            >
+              运行历史
+            </button>
+          </div>
+          {inspectorView === "history" ? (
+            <RunHistoryPanel
+              key={workflowId}
+              workflowId={workflowId}
+              refreshKey={runHistoryRevision}
+              currentGraph={snapshotGraph(name, nodes, edges)}
+              resumeDisabled={running || nodeTestPendingId !== null || validationIssues.length > 0}
+              onResume={beginResume}
+            />
+          ) : selectedNode ? (
             <NodeInspector
               key={selectedNode.id}
               node={selectedNode}
@@ -1280,6 +1624,7 @@ function WorkflowCanvas({
               updateNode={updateSelected}
               updateConfig={updateConfig}
               renameVariable={renameBinding}
+              onRepairReference={repairReference}
               onManageVariables={() => {
                 const start = nodes.find((node) => node.data.kind === "start");
                 if (start) setSelectedId(start.id);
@@ -1307,6 +1652,39 @@ function WorkflowCanvas({
           )}
         </aside>
       </div>
+      {pendingDelete ? (
+        <ConfirmDialog
+          title="删除选中内容？"
+          detail={`将删除 ${pendingDelete.nodes.length} 个节点及关联连接。这次操作可整体撤销。`}
+          confirmLabel="确认删除"
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      ) : null}
+      {pendingResume ? (
+        <ResumeDialog
+          checkpoint={pendingResume.checkpoint}
+          onCancel={() => setPendingResume(null)}
+          onRun={() => {
+            const { history, checkpoint } = pendingResume;
+            setPendingResume(null);
+            setSelectedId(null);
+            setNodes((current) => current.map((node) => ({ ...node, selected: false })));
+            void startRun(history.run.inputs, {
+              runId: history.run.id,
+              fromNodeId: checkpoint.fromNodeId,
+            });
+          }}
+        />
+      ) : null}
+      {showPublish ? (
+        <PublishDialog
+          pending={publishState === "publishing"}
+          error={workspaceError}
+          onCancel={() => setShowPublish(false)}
+          onPublish={(notes) => void publish(notes)}
+        />
+      ) : null}
       {nodePicker
         ? createPortal(
             <NodePicker

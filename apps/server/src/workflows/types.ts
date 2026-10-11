@@ -71,7 +71,7 @@ export interface WorkflowRunRecord {
   id: string;
   taskId: string;
   workflowId: string;
-  versionId: string;
+  versionId: string | null;
   user: string;
   source: "service-api" | "studio";
   status: WorkflowRunStatus;
@@ -91,6 +91,11 @@ export interface WorkflowRunEventRecord {
   type: string;
   payload: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface WorkflowRunSnapshot {
+  runId: string;
+  graph: WorkflowGraph;
 }
 
 export function graphToRunNodes(graph: WorkflowGraph): WorkflowNodeInput[] {

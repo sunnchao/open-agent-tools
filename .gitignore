@@ -6,6 +6,8 @@
 .planning
 .open-agent-tools
 .codegraph
+.kilo
+.trae
 
 node_modules
 dist

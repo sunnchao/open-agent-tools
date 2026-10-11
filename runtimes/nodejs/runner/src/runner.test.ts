@@ -122,6 +122,24 @@ test("RUN-005 returns safe errors for a missing Tool or handler", async () => {
   assert.equal(missingHandler.isError, true);
 });
 
+test("accepts a package that declares bridge networking", async () => {
+  const fixture = await createFixture(
+    'export const handlers = { echoHandler: async () => ({ content: [{ type: "text", text: "ok" }] }) };',
+  );
+  try {
+    await writeFile(
+      join(fixture.packageRoot, "mcp.json"),
+      JSON.stringify({ ...baseManifest, limits: { ...baseManifest.limits, network: "bridge" } }),
+    );
+    await runToolInvocation(fixture);
+    const result = JSON.parse(await readFile(fixture.outputPath, "utf8"));
+    assert.equal(result.isError, false);
+    assert.deepEqual(result.content, [{ type: "text", text: "ok" }]);
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
 test("RUN-005 does not leak handler exception details", async () => {
   const result = await invoke(`
     export const handlers = {

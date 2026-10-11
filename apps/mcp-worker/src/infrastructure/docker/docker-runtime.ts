@@ -3,7 +3,12 @@ import { chmod, lstat, mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ToolExecutionJob } from "@open-agent-tools/mcp-contracts";
+import {
+  ExecutionLimitsSchema,
+  ToolEnvironmentSchema,
+  type ExecutionLimits,
+  type ToolExecutionJob,
+} from "@open-agent-tools/mcp-contracts";
 import { CallToolResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -14,9 +19,10 @@ export interface ContainerCreateOptions {
   User: string;
   WorkingDir: string;
   Labels: Record<string, string>;
+  Env?: string[];
   HostConfig: {
     AutoRemove: boolean;
-    NetworkMode: "none";
+    NetworkMode: ExecutionLimits["network"];
     ReadonlyRootfs: boolean;
     CapDrop: ["ALL"];
     SecurityOpt: ["no-new-privileges:true"];
@@ -132,7 +138,12 @@ export class DockerToolContainerRuntime {
     this.#onError = dependencies.onError ?? (() => undefined);
   }
 
-  async execute(job: ToolExecutionJob): Promise<CallToolResult> {
+  async execute(
+    job: ToolExecutionJob,
+    environment: Record<string, string> = {},
+  ): Promise<CallToolResult> {
+    const variables = ToolEnvironmentSchema.parse(environment);
+    const limits = ExecutionLimitsSchema.parse(job.limits);
     const temporaryRoot = await mkdtemp(join(tmpdir(), "mcp-tool-execution-"));
     const outputDirectory = join(temporaryRoot, "output");
     const inputPath = join(temporaryRoot, "input.json");
@@ -165,6 +176,7 @@ export class DockerToolContainerRuntime {
         Name: `mcp-tool-${job.toolName}-${job.requestId}`,
         User: "node",
         WorkingDir: "/app",
+        Env: Object.entries(variables).map(([name, value]) => `${name}=${value}`),
         Labels: {
           "io.open-agent-tools.mcp.request-id": job.requestId,
           "io.open-agent-tools.mcp.service-id": job.serviceId,
@@ -172,13 +184,13 @@ export class DockerToolContainerRuntime {
         },
         HostConfig: {
           AutoRemove: false,
-          NetworkMode: "none",
+          NetworkMode: limits.network,
           ReadonlyRootfs: true,
           CapDrop: ["ALL"],
           SecurityOpt: ["no-new-privileges:true"],
           PidsLimit: 64,
-          Memory: job.limits.memoryMb * 1024 * 1024,
-          NanoCpus: job.limits.cpuMillis * 1_000_000,
+          Memory: limits.memoryMb * 1024 * 1024,
+          NanoCpus: limits.cpuMillis * 1_000_000,
           Binds: [`${outputDirectory}:/run/tool:rw`, `${inputPath}:/run/tool/input.json:ro`],
           Tmpfs: {
             "/tmp": "rw,noexec,nosuid,nodev,size=16777216",
@@ -188,7 +200,7 @@ export class DockerToolContainerRuntime {
       await container.start();
 
       const deadlineRemaining = Date.parse(job.context.deadlineAt) - this.#now();
-      const timeoutMs = Math.max(1, Math.min(job.limits.timeoutMs, deadlineRemaining));
+      const timeoutMs = Math.max(1, Math.min(limits.timeoutMs, deadlineRemaining));
       const outcome = await waitWithTimeout(container, timeoutMs);
       if (outcome.timedOut) return errorResult("TIMEOUT", job.requestId);
       if (outcome.statusCode !== 0) return errorResult("CONTAINER_EXIT", job.requestId);

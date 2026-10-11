@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ApiOutlined,
@@ -14,11 +14,17 @@ import {
   deleteWorkflow,
   duplicateWorkflow,
   fetchWorkflows,
+  fetchWorkflow,
   type WorkflowAppRecord,
 } from "./api.js";
 import { loadSavedGraph } from "./graph.js";
 import { WorkflowAccess } from "./WorkflowAccess.js";
 import { WorkflowEditor } from "./WorkflowWorkspaceMain.js";
+import { useResourceCatalog } from "../resources/useResourceCatalog.js";
+import { downloadWorkflow, parseWorkflowFile, workflowFileSizeLimit } from "./io.js";
+import { validateWorkflowGraph } from "./model.js";
+import { ConfirmDialog } from "./ConfirmDialog.js";
+import type { WorkflowSnapshot } from "./types.js";
 
 type WorkflowScreen = "library" | "editor" | "access";
 
@@ -33,6 +39,38 @@ export function WorkflowWorkspace() {
   const [createName, setCreateName] = useState("新工作流");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const resources = useResourceCatalog();
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [pendingExport, setPendingExport] = useState<{
+    graph: WorkflowSnapshot;
+    slug: string;
+  } | null>(null);
+
+  const importFile = async (file: File) => {
+    setImporting(true);
+    setError(null);
+    try {
+      if (file.size > workflowFileSizeLimit) throw new Error("工作流文件超过 2 MB");
+      const graph = parseWorkflowFile(await file.text(), resources.catalog);
+      const created = await createWorkflow({ name: `${graph.name} 导入`.slice(0, 200), graph });
+      open(created.app.id, "editor");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "导入失败");
+    } finally {
+      setImporting(false);
+    }
+  };
+  const exportFile = async (workflow: WorkflowAppRecord) => {
+    try {
+      const { workflow: detail } = await fetchWorkflow(workflow.id);
+      if (validateWorkflowGraph(detail.draft.nodes, detail.draft.edges, resources.catalog).length) {
+        setPendingExport({ graph: detail.draft, slug: workflow.slug });
+      } else downloadWorkflow(detail.draft, workflow.slug);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "导出失败");
+    }
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -142,6 +180,25 @@ export function WorkflowWorkspace() {
       </header>
 
       <div className="workflow-library-tools">
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void importFile(file);
+          }}
+        />
+        <button
+          className="studio-button secondary"
+          type="button"
+          disabled={importing || resources.loading}
+          onClick={() => fileInput.current?.click()}
+        >
+          {importing ? "导入中…" : "导入 JSON"}
+        </button>
         <label>
           <SearchOutlined />
           <input
@@ -153,7 +210,27 @@ export function WorkflowWorkspace() {
         <span>{workflows.length} WORKFLOWS</span>
       </div>
 
-      {error ? <div className="workflow-access-alert is-error">{error}</div> : null}
+      {error ? (
+        <div className="workflow-access-alert is-error workflow-import-errors" role="alert">
+          {error}
+        </div>
+      ) : null}
+      {pendingExport ? (
+        <ConfirmDialog
+          title="导出存在问题的工作流？"
+          detail="当前草稿存在校验问题，修复后才可运行或重新导入。"
+          confirmLabel="仍然导出"
+          onCancel={() => setPendingExport(null)}
+          onConfirm={() => {
+            try {
+              downloadWorkflow(pendingExport.graph, pendingExport.slug);
+            } catch (reason) {
+              setError(reason instanceof Error ? reason.message : "导出失败");
+            }
+            setPendingExport(null);
+          }}
+        />
+      ) : null}
       {loading ? <div className="workflow-screen-state">正在加载工作流...</div> : null}
       {!loading && filtered.length === 0 ? (
         <div className="workflow-library-empty">
@@ -221,6 +298,14 @@ export function WorkflowWorkspace() {
                 {new Date(workflow.updatedAt).toLocaleString()}
               </time>
               <div className="workflow-library-actions">
+                <button
+                  type="button"
+                  title="导出 JSON"
+                  aria-label="导出 JSON"
+                  onClick={() => void exportFile(workflow)}
+                >
+                  JSON
+                </button>
                 <button
                   type="button"
                   title="访问点"

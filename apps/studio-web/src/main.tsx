@@ -30,7 +30,7 @@ createRoot(rootEl).render(
           borderRadius: 8,
           fontFamily:
             '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif',
-          fontSize: 13,
+          fontSize: 14,
         },
         components: {
           Button: {

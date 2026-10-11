@@ -127,6 +127,15 @@ describe("Gateway access decisions", () => {
     );
   });
 
+  it("excludes deleted services from endpoint lookup and granted service discovery", async () => {
+    repository.services.set("reports", { ...snapshot, serviceStatus: "DELETED" });
+    await assert.rejects(
+      access.authorize(rawKey, "reports"),
+      (error: unknown) => error instanceof GatewayAccessError && error.code === "NOT_FOUND",
+    );
+    assert.deepEqual(await access.listAuthorizedServices(rawKey), []);
+  });
+
   it("GW-010 observes a rolled-back snapshot and then rejects the disabled service", async () => {
     assert.equal((await access.authorize(rawKey, "reports")).snapshot.versionId, "version-1");
 
@@ -197,9 +206,7 @@ describe("Gateway access decisions", () => {
 
   it("GW-013 rejects invalid keys on listAuthorizedServices", async () => {
     await assert.rejects(
-      access.listAuthorizedServices(
-        `mcp.${keyId}.${Buffer.alloc(32, 9).toString("base64url")}`,
-      ),
+      access.listAuthorizedServices(`mcp.${keyId}.${Buffer.alloc(32, 9).toString("base64url")}`),
       unauthorized,
     );
 

@@ -2,6 +2,7 @@ import {
   resultFields,
   runVariables,
   templateFields,
+  type VariableIssue,
   type VariableNode,
 } from "@open-agent-tools/workflow-contracts";
 import { nodeInputs, nodeOutputs, type NodeInputBinding } from "./model.js";
@@ -97,7 +98,99 @@ export function outputOptions(node: WorkflowNode, sample?: unknown): VariableOpt
   return options;
 }
 
-/** Rename known bindings only; never replace arbitrary literal text. */
+const templateToken = /\{\{\s*([^{}]*?)\s*\}\}/g;
+
+/** 只替换模板占位符；JSON 模式递归处理值，不处理对象 key 或普通字符串。 */
+export function replaceTemplateReference(
+  value: string,
+  before: string,
+  after: string,
+  json = false,
+): string {
+  if (!before || !after || before === after) return value;
+  if (!json) {
+    return value.replace(templateToken, (match, name: string) =>
+      name.trim() === before ? `{{${after}}}` : match,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return value;
+  }
+  let changed = false;
+  const replace = (item: unknown): unknown => {
+    if (typeof item === "string")
+      return item.replace(templateToken, (match, name: string) => {
+        if (name.trim() !== before) return match;
+        changed = true;
+        return `{{${after}}}`;
+      });
+    if (Array.isArray(item)) return item.map(replace);
+    if (item && typeof item === "object")
+      return Object.fromEntries(Object.entries(item).map(([key, child]) => [key, replace(child)]));
+    return item;
+  };
+  const replaced = replace(parsed);
+  return changed ? JSON.stringify(replaced, null, 2) : value;
+}
+
+export function repairVariableReference(
+  nodes: WorkflowNode[],
+  issue: VariableIssue,
+  replacement: string,
+): WorkflowNode[] {
+  if (!replacement || replacement === issue.reference) return nodes;
+  const target = nodes.find((node) => node.id === issue.nodeId);
+  if (!target || typeof issue.reference !== "string") return nodes;
+
+  if (issue.code === "run-reference") {
+    const declared = new Set(
+      runVariables(variableNodes(nodes))
+        .map((variable) => variable?.name)
+        .filter((name): name is string => typeof name === "string"),
+    );
+    if (!declared.has(replacement)) return nodes;
+    const rawInputs = target.data.config.inputs;
+    if (!Array.isArray(rawInputs)) return nodes;
+    let changed = false;
+    const nextInputs = rawInputs.map((binding) => {
+      if (!binding || typeof binding !== "object") return binding;
+      const source = (binding as { source?: unknown }).source;
+      if (!source || typeof source !== "object") return binding;
+      const typedSource = source as { type?: unknown; variable?: unknown };
+      if (typedSource.type !== "run" || typedSource.variable !== issue.reference) return binding;
+      changed = true;
+      return {
+        ...binding,
+        source: { ...source, variable: replacement },
+      };
+    });
+    if (!changed) return nodes;
+    return nodes.map((node) =>
+      node.id === target.id
+        ? { ...node, data: { ...node.data, config: { ...node.data.config, inputs: nextInputs } } }
+        : node,
+    );
+  }
+
+  if (issue.code !== "template-reference" || !issue.field) return nodes;
+  if (!templateFields(target.data.kind).includes(issue.field)) return nodes;
+  const names = new Set(nodeInputs(target.data).map((input) => input.name));
+  if (!names.has(replacement)) return nodes;
+  const current = target.data.config[issue.field];
+  if (typeof current !== "string") return nodes;
+  const json = issue.field === "arguments";
+  const next = replaceTemplateReference(current, issue.reference, replacement, json);
+  if (next === current) return nodes;
+  return nodes.map((node) =>
+    node.id === target.id
+      ? { ...node, data: { ...node.data, config: { ...node.data.config, [issue.field!]: next } } }
+      : node,
+  );
+}
+
 export function renameVariable(
   nodes: WorkflowNode[],
   nodeId: string,

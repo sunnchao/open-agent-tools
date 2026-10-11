@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1785456000000,
+      "tag": "0000_mcp_management",
+      "breakpoints": false
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785456001000,
+      "tag": "0001_mcp_client_access",
+      "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785456002000,
+      "tag": "0002_mcp_build_jobs",
+      "breakpoints": false
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785542400000,
+      "tag": "0003_mcp_audit_events",
+      "breakpoints": false
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791648000000,
+      "tag": "0004_mcp_service_environment",
+      "breakpoints": false
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791676800000,
+      "tag": "0005_mcp_service_slug_reuse",
+      "breakpoints": false
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791676801000,
+      "tag": "0006_mcp_audit_payloads",
+      "breakpoints": false
+    }
+  ]
+}

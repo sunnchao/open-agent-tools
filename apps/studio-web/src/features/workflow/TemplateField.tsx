@@ -1,5 +1,10 @@
 import { useId, useRef, useState } from "react";
-import { templateReferences, templateStrings } from "@open-agent-tools/workflow-contracts";
+import {
+  similarVariableNames,
+  templateReferences,
+  templateStrings,
+} from "@open-agent-tools/workflow-contracts";
+import { replaceTemplateReference } from "./variables.js";
 import type { NodeInputBinding } from "./model.js";
 import { VariableSelect } from "./VariableSelect.js";
 
@@ -130,9 +135,21 @@ export function TemplateField({
         onChange={insert}
       />
       {missing.length > 0 && (
-        <small className="field-error" id={`${id}-error`}>
-          未绑定变量：{missing.join("、")}。请从“插入变量”中选择。
-        </small>
+        <div className="field-error" id={`${id}-error`}>
+          <small>未绑定变量：{missing.join("、")}。请从“插入变量”中选择。</small>
+          {missing.flatMap((name) =>
+            similarVariableNames(name, names).map((suggestion) => (
+              <button
+                key={`${name}-${suggestion}`}
+                type="button"
+                className="variable-text-button"
+                onClick={() => onChange(replaceTemplateReference(value, name, suggestion, json))}
+              >
+                改为 {suggestion}
+              </button>
+            )),
+          )}
+        </div>
       )}
       {hint && <small className="field-help">{hint}</small>}
     </div>

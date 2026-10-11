@@ -74,7 +74,7 @@ function runFromRow(row: Row): WorkflowRunRecord {
     id: String(row.id),
     taskId: String(row.task_id),
     workflowId: String(row.workflow_id),
-    versionId: String(row.version_id),
+    versionId: row.version_id ? String(row.version_id) : null,
     user: String(row.user_id),
     source: row.source as WorkflowRunRecord["source"],
     status: row.status as WorkflowRunStatus,
@@ -140,7 +140,7 @@ function database(): DatabaseSync {
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL UNIQUE,
       workflow_id TEXT NOT NULL REFERENCES workflow_apps(id) ON DELETE RESTRICT,
-      version_id TEXT NOT NULL REFERENCES workflow_versions(id) ON DELETE RESTRICT,
+      version_id TEXT REFERENCES workflow_versions(id) ON DELETE RESTRICT,
       user_id TEXT NOT NULL,
       source TEXT NOT NULL CHECK (source IN ('service-api', 'studio')),
       status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'stopped')),
@@ -203,6 +203,39 @@ function database(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS workflow_events_run_idx
       ON workflow_events(run_id, sequence);
   `);
+  const columns = db.prepare("PRAGMA table_info(workflow_runs)").all() as Row[];
+  if (columns.some((column) => column.name === "version_id" && column.notnull === 1)) {
+    // SQLite 不能直接移除 NOT NULL，重建父表时保留所有子表引用及历史数据。
+    const schema = db
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'workflow_runs'")
+      .get() as Row;
+    db.exec("PRAGMA foreign_keys = OFF");
+    try {
+      transaction(db, () => {
+        db.exec(
+          String(schema.sql)
+            .replace(
+              /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?["`]?workflow_runs["`]?/i,
+              "CREATE TABLE workflow_runs_nullable",
+            )
+            .replace(/version_id\s+TEXT\s+NOT NULL/i, "version_id TEXT"),
+        );
+        db.exec(`INSERT INTO workflow_runs_nullable SELECT * FROM workflow_runs;
+          DROP TABLE workflow_runs;
+          ALTER TABLE workflow_runs_nullable RENAME TO workflow_runs;
+          CREATE INDEX workflow_runs_app_idx ON workflow_runs(workflow_id, created_at DESC);`);
+        if (db.prepare("PRAGMA foreign_key_check").all().length) {
+          throw new Error("workflow run migration violated foreign keys");
+        }
+      });
+    } finally {
+      db.exec("PRAGMA foreign_keys = ON");
+    }
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS workflow_run_snapshots (
+    run_id TEXT PRIMARY KEY REFERENCES workflow_runs(id) ON DELETE CASCADE,
+    graph_json TEXT NOT NULL
+  )`);
   return db;
 }
 
@@ -253,7 +286,11 @@ export function createDefaultWorkflowGraph(name: string): WorkflowGraph {
           label: "开始",
           description: "工作流入口",
           status: "idle",
-          config: { inputs: [], outputs: [], runVariables: [{ name: "query", type: "string", required: true }] },
+          config: {
+            inputs: [],
+            outputs: [],
+            runVariables: [{ name: "query", type: "string", required: true }],
+          },
         },
       },
       {
@@ -556,15 +593,25 @@ export function revokeWorkflowApiKey(workflowId: string, keyId: string): boolean
   return result.changes === 1;
 }
 
-export function createWorkflowRun(record: WorkflowRunRecord): void {
-  database()
-    .prepare(
+export function createWorkflowRun(record: WorkflowRunRecord, graph?: WorkflowGraph): void {
+  const db = database();
+  transaction(db, () => {
+    const app = db
+      .prepare("SELECT id FROM workflow_apps WHERE id = ? AND status = 'ACTIVE'")
+      .get(record.workflowId);
+    if (!app) throw new WorkflowNotFoundError("workflow not found");
+    if (record.versionId) {
+      const version = db
+        .prepare("SELECT id FROM workflow_versions WHERE id = ? AND workflow_id = ?")
+        .get(record.versionId, record.workflowId);
+      if (!version) throw new WorkflowNotFoundError("workflow version not found");
+    }
+    db.prepare(
       `INSERT INTO workflow_runs
         (id, task_id, workflow_id, version_id, user_id, source, status, inputs_json,
          outputs_json, error, total_steps, total_tokens, created_at, finished_at, elapsed_time)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+    ).run(
       record.id,
       record.taskId,
       record.workflowId,
@@ -581,6 +628,20 @@ export function createWorkflowRun(record: WorkflowRunRecord): void {
       record.finishedAt,
       record.elapsedTime,
     );
+    if (graph) {
+      db.prepare("INSERT INTO workflow_run_snapshots (run_id, graph_json) VALUES (?, ?)").run(
+        record.id,
+        JSON.stringify(structuredClone(graph)),
+      );
+    }
+  });
+}
+
+export function getWorkflowRunSnapshot(runId: string): WorkflowGraph | null {
+  const row = database()
+    .prepare("SELECT graph_json FROM workflow_run_snapshots WHERE run_id = ?")
+    .get(runId) as Row | undefined;
+  return row ? parseJson<WorkflowGraph>(row.graph_json) : null;
 }
 
 export function finishWorkflowRun(input: {

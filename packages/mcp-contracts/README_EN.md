@@ -56,7 +56,7 @@ Manifest rules:
 - A Prompt-only manifest cannot contain `runtime`, `entry`, `build`, or `limits`.
 - The only supported build command is `npm run build`, and `build` requires an `entry`.
 - The top level of a Tool `inputSchema` must be a JSON Schema object.
-- `network` is currently fixed to `none`; `timeoutMs` is capped at 120 seconds, memory at 4096 MiB, and CPU at 8000 millicores.
+- `network` supports `none` (disabled) and `bridge` (outbound access). The published version determines the execution container's network mode. `timeoutMs` is capped at 120 seconds, memory at 4096 MiB, and CPU at 8000 millicores.
 
 ## Prompt definitions and rendering
 

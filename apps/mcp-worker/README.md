@@ -1,18 +1,23 @@
 # MCP Worker
 
-[English](./README_EN.md) | [平台总览](../../README.md)
+[English](./README_EN.md) | [平台总览](../../README.md) | [Control Plane 管理 API](./CONTROL_PLANE.md)
 
-`@open-agent-tools/mcp-worker` 是 MCP 平台的受信任后台执行组件。一个 Worker 进程同时消费 Artifact 检查/构建队列和 Tool 执行队列，并通过 Docker 隔离不受信任的用户代码。
+`@open-agent-tools/mcp-worker` 同时包含 Control Plane 管理 API 与受信任后台 Worker，但两者使用独立入口、进程和权限。本文介绍后台 Worker；管理 API 的职责、接口和访问模型见 [Control Plane 文档](./CONTROL_PLANE.md)。一个后台 Worker 进程同时消费 Artifact 检查/构建队列和 Tool 执行队列，并通过 Docker 隔离不受信任的用户代码。
 
 Worker 拥有 Docker、对象存储、Registry、PostgreSQL 和 Redis 访问权限，应部署在独立的受限网络中，不能暴露到公网。
 
+管理 API 仅通过 BullMQ 调度任务，不启动后台 Worker，不需要 Docker、Runner 镜像或 Registry 权限。共用一个包不代表合并进程，也不改变 BullMQ 与隔离 Tool 容器的边界。`apps/mcp-server` 不在本次合并范围内，其结构和职责保持不变。
+
 ## 代码结构
 
-`src` 按依赖方向分层：入口 → 队列 → 服务 → 基础设施。
+后台 Worker 源码按依赖方向分层：入口 → 队列 → 服务 → 基础设施；`control-plane/` 单独组织管理 API 源码。
 
 ```
 src/
-├── index.ts                     # 进程入口（组合根，装配所有依赖）
+├── index.ts                     # 后台 Worker 入口（组合根，装配 Worker 依赖）
+├── control-plane/               # Control Plane 源码（独立管理 API 进程）
+│   ├── index.ts                 # 管理 API 入口，默认端口 4200
+│   └── db/schema.ts             # Drizzle Schema
 ├── workers/                     # BullMQ 队列消费层
 │   ├── build-queue.ts           # 构建队列：Artifact 检查与 Tool 构建
 │   └── execution-queue.ts       # 执行队列：运行已发布的 Tool 镜像
@@ -28,7 +33,7 @@ src/
     └── storage/                 # S3 对象存储（Artifact 下载、SBOM 上传）
 ```
 
-依赖方向为 `infrastructure` 向上提供端口实现、`services` 编排业务流程、`workers` 消费队列，各层不反向依赖。
+后台 Worker 的依赖方向为 `infrastructure` 向上提供端口实现、`services` 编排业务流程、`workers` 消费队列，各层不反向依赖。`control-plane/` 使用独立入口，不由后台入口启动。
 
 ## Worker 模式
 
@@ -81,13 +86,15 @@ src/
 1. 从 BullMQ 读取并校验 `ToolExecutionJob`。
 2. 使用 `TOOL_IMAGE_REPOSITORY@sha256:...` 解析不可变镜像。
 3. 创建只读输入文件和输出目录。
-4. 创建非 root、无网络、只读根文件系统的容器，容器名以 `mcp-tool-${toolName}-` 为前缀。
+4. 从管理数据库读取该服务的环境变量并通过 Docker `Env` 注入非 root、只读根文件系统的容器，容器名以 `mcp-tool-${toolName}-` 为前缀。执行网络按已发布版本的 `limits.network` 选择 `none` 或 `bridge`。变量不经过队列，也不注入构建容器。
 5. 应用内存、CPU、PID、Capability、日志和 Wall-clock Timeout 限制。
 6. Runner 读取 `/run/tool/input.json`，调用 Handler，并写入 `/run/tool/output.json`。
 7. Worker 校验输出大小和 MCP `CallToolResult`，再返回 Gateway。
 8. 无论成功或失败都删除容器和临时目录。
 
 Tool 失败返回协议安全的 `isError: true` 结果，不向 Client 暴露堆栈、主机路径或 Docker 细节。
+
+Studio 预览面板支持查看和修改未发布版本的超时、内存、CPU 和网络限制。代码包检查先导入 `mcp.json` 中的值，之后的面板修改不会被构建覆盖。DRAFT、FAILED 和 READY 版本可编辑，检查/构建中的版本和已发布版本不可直接修改。`bridge` 提供联网能力，不提供域名白名单；构建和 Smoke 验证继续使用原有隔离策略。
 
 ## 环境要求
 
@@ -103,11 +110,17 @@ Tool 失败返回协议安全的 `isError: true` 结果，不向 Client 暴露�
 
 ## 环境变量
 
+统一示例位于 `apps/mcp-worker/.env.example`。在仓库根目录执行，且仅在 `.env` 不存在时创建：
+
 ```bash
-cp .env.example .env
+test -e apps/mcp-worker/.env || cp apps/mcp-worker/.env.example apps/mcp-worker/.env
 ```
 
-开发脚本通过 Node.js 的 `--env-file` 从 `.env` 加载变量；生产启动仍必须由进程管理器或 Shell 注入变量：
+已有 `apps/mcp-control-plane/.env` 和 Worker `.env` 时，请手工把原 Control Plane 所需值合并到 Worker 的 `.env` 并核对冲突；不要覆盖任何已有环境文件或密钥。管理 API 不再读取旧目录的 `.env`。
+
+后台 `dev`/`dev:worker` 通过 Node.js 的 `--env-file=.env` 加载 Worker `.env`；`start`/`start:worker` 仍必须由进程管理器或 Shell 注入变量。管理 `dev:admin`/`start:admin` 则保留既有 `dotenv` 加载方式，从同一目录读取 `.env`。生产部署应分别注入各进程所需变量和授予最小权限，不给管理 API Docker Socket 或 Registry 权限。
+
+以下变量用于后台 Worker；管理 API 变量见 [Control Plane 文档](./CONTROL_PLANE.md#环境变量)：
 
 | 变量                    | 必需       | 说明                                                                                |
 | ----------------------- | ---------- | ----------------------------------------------------------------------------------- |
@@ -126,22 +139,54 @@ cp .env.example .env
 | `AWS_ACCESS_KEY_ID`     | 视环境而定 | S3 凭据                                                                             |
 | `AWS_SECRET_ACCESS_KEY` | 视环境而定 | S3 凭据                                                                             |
 
+## 数据库迁移
+
+Drizzle Schema 位于 `src/control-plane/db/schema.ts`，迁移位于本包 `drizzle/`（仓库路径 `apps/mcp-worker/drizzle/`）。原有 SQL 和 journal 保持不变。Drizzle 从进程环境读取 `DATABASE_URL`：
+
+```bash
+export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcp_management
+pnpm --filter @open-agent-tools/mcp-worker db:migrate
+```
+
+Schema 变更后生成新迁移使用 `pnpm --filter @open-agent-tools/mcp-worker db:generate`。旧 `apps/mcp-control-plane` 不再是工作区包或源码树，只保留 README 跳转和 `drizzle -> ../mcp-worker/drizzle` 兼容链接，确保旧迁移路径消费者无需改动；不要修改 `apps/mcp-server`。
+
 ## 启动
 
-Bash/Zsh 示例：
+### 后台 Worker
+
+在仓库根目录启动后台进程（无 HTTP 端口）：
 
 ```bash
 pnpm --filter @open-agent-tools/mcp-worker dev
 ```
 
-生产构建：
+`dev:worker` 是显式别名。`dev` 和 `dev:worker` 都只运行 `src/index.ts`，不启动管理 API。
+
+生产构建与后台启动（先注入环境变量）：
 
 ```bash
 pnpm --filter @open-agent-tools/mcp-worker build
 pnpm --filter @open-agent-tools/mcp-worker start
 ```
 
-进程没有 HTTP 端口。健康状态应由进程存活、BullMQ Worker 状态、队列指标和 PostgreSQL Job 心跳共同监控。
+`start:worker` 是显式别名，两个脚本都只运行 `dist/index.js`。后台健康状态应由进程存活、BullMQ Worker 状态、队列指标和 PostgreSQL Job 心跳共同监控。
+
+### 管理 API（Control Plane）
+
+准备 PostgreSQL、Redis 和 S3 配置并完成迁移后，可单独启动管理 API，无需 Docker、Runner 镜像、Registry、Syft 或 Trivy：
+
+```bash
+pnpm --filter @open-agent-tools/mcp-worker dev:admin
+```
+
+该脚本只运行 `src/control-plane/index.ts`。生产构建与管理启动：
+
+```bash
+pnpm --filter @open-agent-tools/mcp-worker build
+pnpm --filter @open-agent-tools/mcp-worker start:admin
+```
+
+`start:admin` 只运行 `dist/control-plane/index.js`，默认健康检查地址为 `http://localhost:4200/health`。需要完整 Tool 流程时，在另一个进程启动后台 Worker；本包的单个角色启动脚本都不会同时启动两个角色。
 
 ## Runner 镜像
 
@@ -179,6 +224,8 @@ pnpm --filter @open-agent-tools/mcp-worker typecheck
 pnpm --filter @open-agent-tools/mcp-worker lint
 ```
 
+同一测试命令覆盖后台 Worker 与 `src/control-plane/` 下的管理 API 测试，无需重复运行已删除的 Control Plane 包测试。
+
 部分测试依赖：
 
 - PostgreSQL：设置专用 `TEST_DATABASE_URL`；相关测试会删除并重建目标数据库的 `public` Schema。
@@ -190,5 +237,5 @@ pnpm --filter @open-agent-tools/mcp-worker lint
 - 仅支持 Node.js 20、ESM 和 npm Lockfile。
 - 构建期间 npm Lifecycle Script 被 `--ignore-scripts` 禁用；依赖这些脚本的包无法构建。
 - 只支持无网络 Tool 执行。
-- 当前进程把检查、构建和执行 Worker 放在一起；生产环境可根据权限与扩缩容需求进一步拆分部署入口。
+- 后台进程仍把检查、构建和执行 Worker 放在一起，与管理 API 进程分离；生产环境可根据权限与扩缩容需求进一步拆分后台部署入口。
 - Registry 签名、远程证明和 Kubernetes Sandbox 尚未接入。

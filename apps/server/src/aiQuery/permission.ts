@@ -18,7 +18,7 @@ import {
   type DtmsIndustry,
   type DtmsModule,
 } from "./dtmsCatalog.js";
-import { logTrace, truncate } from "../trace.js";
+import { logDebugDuration, logTrace, truncate } from "../trace.js";
 
 export interface PermissionContext {
   userId: string;
@@ -87,21 +87,42 @@ async function oauthGet<T>(
   extraHeaders?: Record<string, string>,
 ): Promise<T> {
   const url = `${oauthBaseUrl()}${path}`;
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(extraHeaders ?? {}),
-    },
-  });
-  if (!resp.ok) {
-    throw new PermissionError();
+  const startedAt = Date.now();
+  try {
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(extraHeaders ?? {}),
+      },
+    });
+    if (!resp.ok) {
+      logDebugDuration("ai_query.permission.oauth_get", startedAt, {
+        path,
+        status: resp.status,
+        ok: false,
+      });
+      throw new PermissionError();
+    }
+    const json = (await resp.json()) as { code?: number; data?: T } & T;
+    logDebugDuration("ai_query.permission.oauth_get", startedAt, {
+      path,
+      status: resp.status,
+      ok: true,
+    });
+    if (json && typeof json === "object" && "data" in json && json.data !== undefined) {
+      return json.data;
+    }
+    return json as T;
+  } catch (error) {
+    if (error instanceof PermissionError) throw error;
+    logDebugDuration("ai_query.permission.oauth_get", startedAt, {
+      path,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-  const json = (await resp.json()) as { code?: number; data?: T } & T;
-  if (json && typeof json === "object" && "data" in json && json.data !== undefined) {
-    return json.data;
-  }
-  return json as T;
 }
 
 function flattenMenus(
@@ -207,15 +228,18 @@ function fallbackFromHeaders(req: Request): PermissionContext {
 }
 
 export async function resolvePermissionContext(req: Request): Promise<PermissionContext> {
+  const startedAt = Date.now();
   const token = bearerToken(req);
   if (!oauthBaseUrl()) {
     const ctx = fallbackFromHeaders(req);
     if (ctx.industries.length === 0 || ctx.orgNos.length === 0) throw new PermissionError();
+    logDebugDuration("ai_query.permission.resolve", startedAt, { source: "header_fallback" });
     return ctx;
   }
   if (!token) throw new PermissionError();
   const cached = cache.get(token);
   if (cached && cached.expiresAt > Date.now()) {
+    logDebugDuration("ai_query.permission.resolve", startedAt, { source: "cache" });
     return {
       ...cached.value,
       currentIndustry: industryFromSysId(header(req, "sub-sys-id")) ?? cached.value.currentIndustry,
@@ -225,6 +249,7 @@ export async function resolvePermissionContext(req: Request): Promise<Permission
   const value = await fetchPermissionContext(token, req);
   if (value.industries.length === 0 || value.orgNos.length === 0) throw new PermissionError();
   cache.set(token, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+  logDebugDuration("ai_query.permission.resolve", startedAt, { source: "oauth" });
   return value;
 }
 

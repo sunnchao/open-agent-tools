@@ -2,7 +2,7 @@
 
 [English](./README_EN.md) | [平台总览](../../README.md)
 
-`runtimes/nodejs` 包含托管 Tool 的 Node.js 20 基础镜像、容器内 Runner，以及用于集成测试的 Echo Tool Fixture。Worker 基于该镜像构建每个 Tool 的不可变 OCI 镜像，并在无网络、非 root、只读文件系统的容器中执行它。
+`runtimes/nodejs` 包含托管 Tool 的 Node.js 20 基础镜像、容器内 Runner，以及用于集成测试的 Echo Tool Fixture。Worker 基于该镜像构建每个 Tool 的不可变 OCI 镜像，并在非 root、只读文件系统的容器中按已发布版本的 `none`/`bridge` 网络配置执行它。
 
 当前只支持 Node.js 20、ESM 和 npm。
 
@@ -96,7 +96,7 @@ docker build \
 
 Dockerfile 使用摘要固定的 Node.js 20 Alpine 镜像，多阶段构建只复制 Runner 所需文件，最终以非 root `node` 用户和固定 EntryPoint 运行。推送后应把 Registry 返回的 `repository@sha256:...` 配置为 Worker 的 `MCP_RUNNER_IMAGE`，不要在生产环境使用可变 Tag。
 
-Runner 镜像只负责进程内校验和调用。无网络、只读根文件系统、CPU/内存/PID/超时及 Capability 限制由 Worker 创建容器时施加。
+Runner 镜像只负责进程内校验和调用。网络模式、只读根文件系统、CPU/内存/PID/超时及 Capability 限制由 Worker 创建容器时施加。Schema 更新后需重新构建 Runner 基础镜像，才能运行包内声明 `bridge` 的工具。
 
 ## 本地开发
 

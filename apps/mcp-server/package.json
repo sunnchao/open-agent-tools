@@ -23,6 +23,7 @@
     "@open-agent-tools/database": "workspace:*",
     "@open-agent-tools/mcp-auth": "workspace:*",
     "@open-agent-tools/mcp-contracts": "workspace:*",
+    "@open-agent-tools/observability": "workspace:*",
     "ajv": "^8.17.1",
     "bullmq": "catalog:",
     "dotenv": "catalog:",

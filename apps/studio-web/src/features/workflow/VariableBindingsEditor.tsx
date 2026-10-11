@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   runVariables,
   selectorIssue,
+  similarVariableNames,
   validVariableName,
 } from "@open-agent-tools/workflow-contracts";
 import { DeleteOutlined, PlusOutlined } from "../../lib/icons.js";
@@ -179,6 +180,26 @@ export function VariableBindingsEditor({
       {inputs.map((input, index) => {
         const value = sourceKey(input.source);
         const missing = !options.some((option) => option.value === value);
+        const runSuggestions =
+          input.source.type === "run"
+            ? similarVariableNames(
+                input.source.variable,
+                runVariables(variableNodes(nodes)).map((item) => item.name),
+              )
+            : [];
+        const nodeSuggestions =
+          input.source.type === "node"
+            ? options.filter((option) => {
+                if (!option.group.startsWith("前置节点 · ")) return false;
+                const source = JSON.parse(option.value) as NodeInputBinding["source"];
+                return (
+                  source.type === "node" &&
+                  input.source.type === "node" &&
+                  (source.output === input.source.output ||
+                    similarVariableNames(input.source.output, [source.output]).length > 0)
+                );
+              })
+            : [];
         const duplicate = inputs.some((item, i) => i !== index && item.name === input.name);
         return (
           <div className="variable-card" key={`${node.id}-input-${index}`}>
@@ -257,7 +278,35 @@ export function VariableBindingsEditor({
               />
             )}
             {missing && (
-              <small className="field-error">请选择有效来源；失效引用需要重新绑定。</small>
+              <div className="field-error">
+                <small>请选择有效来源；失效引用需要重新绑定。</small>
+                {runSuggestions.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    className="variable-text-button"
+                    onClick={() =>
+                      updateInput(index, { source: { type: "run", variable: suggestion } })
+                    }
+                  >
+                    重绑为 {suggestion}
+                  </button>
+                ))}
+                {nodeSuggestions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className="variable-text-button"
+                    onClick={() =>
+                      updateInput(index, {
+                        source: JSON.parse(option.value) as NodeInputBinding["source"],
+                      })
+                    }
+                  >
+                    重绑为 {option.label}
+                  </button>
+                ))}
+              </div>
             )}
             {(!validVariableName(input.name) || duplicate) && (
               <small className="field-error">变量名称无效或重复。</small>

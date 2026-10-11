@@ -22,6 +22,9 @@ export function RunPreview({
   outputs,
   onRun,
   onStop,
+  readOnly = false,
+  onResume,
+  resumeIssue,
 }: {
   nodes: WorkflowNode[];
   edges: Edge[];
@@ -31,6 +34,9 @@ export function RunPreview({
   outputs: Record<string, Record<string, unknown>> | null;
   onRun: () => void;
   onStop: () => void;
+  readOnly?: boolean;
+  onResume?: (nodeId: string) => void;
+  resumeIssue?: (nodeId: string) => string | null;
 }) {
   const endNodes = nodes.filter((node) => node.data.kind === "end");
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -63,16 +69,22 @@ export function RunPreview({
           <b>{edges.length}</b> 连接
         </span>
       </div>
-      <p className="muted-copy">运行会在服务端按拓扑顺序执行节点，并实时回传节点状态。</p>
-      <button
-        className={`studio-button run full-width${running ? " is-stop" : ""}`}
-        type="button"
-        disabled={runDisabled}
-        onClick={running ? onStop : onRun}
-      >
-        {running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-        {running ? "停止运行" : "开始运行"}
-      </button>
+      <p className="muted-copy">
+        {readOnly
+          ? "历史轨迹来自当次运行快照，仅供查看。"
+          : "运行会在服务端按拓扑顺序执行节点，并实时回传节点状态。"}
+      </p>
+      {!readOnly && (
+        <button
+          className={`studio-button run full-width${running ? " is-stop" : ""}`}
+          type="button"
+          disabled={runDisabled}
+          onClick={running ? onStop : onRun}
+        >
+          {running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+          {running ? "停止运行" : "开始运行"}
+        </button>
+      )}
       <div className="inspector-section-title run-log-title">
         <span>执行记录</span>
         {log.length > 0 && hasDetail ? (
@@ -97,6 +109,8 @@ export function RunPreview({
               index={index}
               collapsed={collapsedIds.has(item.id)}
               onToggle={() => toggleLogEntry(item.id)}
+              onResume={onResume}
+              resumeIssue={resumeIssue?.(item.id) ?? null}
             />
           ))}
         </ol>
@@ -162,11 +176,15 @@ function RunLogItem({
   index,
   collapsed,
   onToggle,
+  onResume,
+  resumeIssue,
 }: {
   item: RunLogEntry;
   index: number;
   collapsed: boolean;
   onToggle: () => void;
+  onResume?: (nodeId: string) => void;
+  resumeIssue: string | null;
 }) {
   const hasBody =
     item.detail !== undefined ||
@@ -203,8 +221,25 @@ function RunLogItem({
         ) : null}
         {item.status === "error" ? <CloseCircleFilled /> : <CheckCircleFilled />}
       </button>
+      {onResume && item.status === "success" ? (
+        <button
+          className="variable-text-button"
+          type="button"
+          disabled={Boolean(resumeIssue)}
+          title={resumeIssue ?? "复用上游真实输出，执行当前草稿的该节点及下游"}
+          onClick={() => onResume(item.id)}
+        >
+          从此节点续跑
+        </button>
+      ) : null}
       {!collapsed && hasBody ? (
         <div className="run-log-detail">
+          {item.cached ? <p className="field-help">复用历史缓存 · 本次未执行</p> : null}
+          {item.attempts && item.attempts > 1 ? (
+            <p className="field-help">
+              第 {item.attempts} 次尝试{item.status === "success" ? "成功" : "失败"}
+            </p>
+          ) : null}
           {item.systemPrompt !== undefined ? (
             <RunLogDataBlock title="系统提示词" value={item.systemPrompt} />
           ) : null}

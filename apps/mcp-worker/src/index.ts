@@ -27,6 +27,7 @@ import { ToolBuildService } from "./services/tool-build.js";
 import { DockerCliToolImageBuilder } from "./infrastructure/docker/tool-image-builder.js";
 import { createS3SbomStorage } from "./infrastructure/storage/s3-sbom-storage.js";
 import { DockerToolPackageVerifier, type VerificationDockerClient } from "./infrastructure/docker/docker-tool-verifier.js";
+import { createPostgresToolEnvironmentLoader } from "./infrastructure/repository/postgres-tool-environment.js";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const redisUrl = process.env.REDIS_URL;
@@ -45,7 +46,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   );
   const runtime = new DockerToolContainerRuntime(docker, { imageRepository });
   const concurrency = Number(process.env.EXECUTION_CONCURRENCY) || 4;
-  const worker = createToolExecutionWorker(redisUrl, runtime, concurrency);
+  const toolEnvironment = createPostgresToolEnvironmentLoader(databaseUrl);
+  const worker = createToolExecutionWorker(redisUrl, runtime, concurrency, toolEnvironment.load);
   const repository = createPostgresArtifactInspectionRepository(databaseUrl);
   const artifactStorage = createS3ArtifactDownload(artifactBucket, {
     region: process.env.ARTIFACT_S3_REGION || "us-east-1",
@@ -86,7 +88,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   );
 
   const shutdown = async (): Promise<void> => {
-    await Promise.all([worker.close(), inspection.close(), repository.close()]);
+    await Promise.all([worker.close(), inspection.close()]);
+    await Promise.all([repository.close(), toolEnvironment.close()]);
     artifactStorage.close();
     sbomStorage.close();
   };

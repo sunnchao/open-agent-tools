@@ -1,3 +1,6 @@
+export * from "./graph.js";
+export * from "./resume.js";
+
 /** Shared by the editor, published API and executor. Declarations live on the start node. */
 export type VariableType = "any" | "string" | "number" | "boolean" | "object" | "array";
 export interface RunVariable {
@@ -15,6 +18,9 @@ export interface VariableIssue {
   code: string;
   message: string;
   nodeId: string;
+  suggestions?: string[];
+  reference?: string;
+  field?: string;
 }
 interface InputBinding {
   name: string;
@@ -158,7 +164,19 @@ export function variableIssues(nodes: VariableNode[]): VariableIssue[] {
   const variables = runVariables(nodes);
   const declared = new Set(variables.map((item) => item?.name));
   for (const node of nodes) {
-    const add = (code: string, message: string) => issues.push({ code, message, nodeId: node.id });
+    const add = (
+      code: string,
+      message: string,
+      suggestions?: string[],
+      details?: { reference?: string; field?: string },
+    ) =>
+      issues.push({
+        code,
+        message,
+        nodeId: node.id,
+        ...(suggestions?.length ? { suggestions } : {}),
+        ...details,
+      });
     if (node.kind === "start" && Object.hasOwn(node.config ?? {}, "runVariables")) {
       if (!Array.isArray(node.config?.runVariables))
         add("run-declaration", "入口变量声明必须是列表");
@@ -187,11 +205,19 @@ export function variableIssues(nodes: VariableNode[]): VariableIssue[] {
     for (const input of inputs) {
       if (typeof input?.name !== "string" || !validVariableName(input.name))
         add("input-identifier", `输入变量名 ${input?.name ?? "（空）"} 无效`);
-      if (input?.source?.type === "run" && !declared.has(input.source.variable ?? ""))
+      if (input?.source?.type === "run" && !declared.has(input.source.variable ?? "")) {
+        const missing = input.source.variable ?? "";
+        const suggestions = similarVariableNames(
+          missing,
+          [...declared].filter(Boolean) as string[],
+        );
         add(
           "run-reference",
-          `入口变量 ${input.source.variable || "（未选择）"} 未声明，请在开始节点创建后选择`,
+          `入口变量 ${missing || "（未选择）"} 未声明，请在开始节点创建后选择`,
+          suggestions,
+          { reference: missing },
         );
+      }
     }
     for (const field of templateFields(node.kind)) {
       let value = node.config?.[field];
@@ -211,7 +237,9 @@ export function variableIssues(nodes: VariableNode[]): VariableIssue[] {
             );
             add(
               "template-reference",
-              `${field} 引用了未绑定变量 ${name || "（空）"}；${similar.length ? `是否选择 ${similar.join("、")}？` : "请通过“插入变量”选择"}`,
+              `${field} 引用了未绑定变量 ${name || "（空）"}；${similar.length ? `可修复为 ${similar.join("、")}` : "请通过“插入变量”选择"}`,
+              similar,
+              { reference: name, field },
             );
           }
         }

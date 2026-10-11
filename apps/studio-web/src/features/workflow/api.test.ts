@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createWorkflow, fetchWorkflows, saveWorkflowDraft } from "./api.js";
+import {
+  createWorkflow,
+  fetchWorkflows,
+  saveWorkflowDraft,
+  fetchWorkflowRunEvents,
+} from "./api.js";
 import type { WorkflowSnapshot } from "./types.js";
 
 const snapshot: WorkflowSnapshot = { name: "Test", nodes: [], edges: [] };
@@ -9,6 +14,24 @@ afterEach(() => {
 });
 
 describe("workflow management API client", () => {
+  it("reads Studio replay through the scoped management route and propagates cancellation", async () => {
+    const payload = { run: { id: "run/1" }, events: [], graph: snapshot };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(payload)))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "workflow run not found" }), { status: 404 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    expect(await fetchWorkflowRunEvents("wf/1", "run/1", controller.signal)).toEqual(payload);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/workflows/wf%2F1/runs/run%2F1/events", {
+      signal: controller.signal,
+    });
+    await expect(fetchWorkflowRunEvents("wf/1", "missing")).rejects.toThrow(
+      "workflow run not found",
+    );
+  });
   it("lists workflows and creates a server-backed draft", async () => {
     const fetchMock = vi
       .fn()

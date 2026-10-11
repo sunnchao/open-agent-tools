@@ -117,7 +117,7 @@ export class InMemoryGatewayRepository implements GatewayRepository {
 
   async getManagedService(serviceSlug: string): Promise<ManagedServiceSnapshot | null> {
     const service = this.services.get(serviceSlug);
-    return service ? clone(service) : null;
+    return service && service.serviceStatus !== "DELETED" ? clone(service) : null;
   }
 
   async getGrant(clientId: string, serviceId: string): Promise<ClientGrantRecord | null> {
@@ -131,7 +131,7 @@ export class InMemoryGatewayRepository implements GatewayRepository {
 
   async getServiceByServiceId(serviceId: string): Promise<ServiceSummary | null> {
     for (const service of this.services.values()) {
-      if (service.serviceId === serviceId) {
+      if (service.serviceId === serviceId && service.serviceStatus !== "DELETED") {
         return {
           serviceSlug: service.serviceSlug,
           serviceStatus: service.serviceStatus,

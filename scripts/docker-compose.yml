@@ -1,2 +1,18 @@
+# minio/minio was removed from Docker Hub in September 2026.
+# Chainguard publishes a maintained fork; it runs as uid 65532.
 services:
-  
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    user: "0:0"
+    ports:
+      - "9000:9000" # MinIO API 端口
+      - "9001:9001" # MinIO Console 端口
+    volumes:
+      - minio-data:/data # MinIO 数据存储
+    environment:
+      MINIO_ROOT_USER: "minioadmin" # 设置 MinIO 的用户名
+      MINIO_ROOT_PASSWORD: "minioadmin" # 设置 MinIO 的密码
+    command: server /data --console-address ":9001" # 启动命令，指定数据目录和控制台地址
+
+volumes:
+  minio-data: # 定义数据卷

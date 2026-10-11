@@ -48,7 +48,7 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
 
 | 组件           | 包名                                  | 职责                                                            |
 | -------------- | ------------------------------------- | --------------------------------------------------------------- |
-| Control Plane  | `@open-agent-tools/mcp-control-plane` | 匿名管理 API、服务版本、客户端 Key/Grant、上传和构建调度        |
+| Control Plane  | `@open-agent-tools/mcp-worker`        | 匿名管理 API、服务版本、客户端 Key/Grant、上传和构建调度        |
 | MCP Gateway    | `@open-agent-tools/mcp-server`        | MCP 协议入口、API Key 鉴权、Scope 检查、Tool 调用与 Prompt 渲染 |
 | MCP Worker     | `@open-agent-tools/mcp-worker`        | ZIP 检查、依赖安装、镜像构建/扫描、Tool 容器执行                |
 | Studio Web     | `@open-agent-tools/studio-web`        | Agent、MCP、RAG 与工作流统一 React 工作台                       |
@@ -57,13 +57,18 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
 | Auth           | `@open-agent-tools/mcp-auth`          | API Key 生成、解析、哈希和校验                                  |
 | Node.js Runner | `@open-agent-tools/mcp-nodejs-runner` | 在 Tool 容器内加载 handler 并校验 MCP 返回值                    |
 
+Control Plane 与 Worker 共用 `@open-agent-tools/mcp-worker` 包，但仍是独立进程和权限边界：管理 API 通过 BullMQ 调度后台 Worker，Tool 仍在隔离容器内执行。管理 API 不需要 Docker Socket、Runner 镜像或 Registry 权限；这些能力只属于后台 Worker。`apps/mcp-server` 不在本次合并范围内，其结构、职责和启动方式保持不变。
+
 ## 目录结构
 
 ```text
 apps/
-  mcp-control-plane/       管理 API 与 PostgreSQL 迁移
+  mcp-control-plane/       README 跳转与旧 drizzle 路径兼容链接（不再是工作区包）
   mcp-server/              动态 MCP Gateway
-  mcp-worker/              构建和执行 Worker
+  mcp-worker/              Control Plane 与后台 Worker 共用包
+    src/index.ts          后台 Worker 入口
+    src/control-plane/    Control Plane 源码与管理 API 入口 index.ts
+    drizzle/              PostgreSQL 迁移 SQL 与 journal
   studio-web/              统一 React 工作台
   rag-server/              RAG HTTP API 与 SQLite 数据
 packages/
@@ -84,7 +89,7 @@ docs/superpowers/
 | 组件            | 中文文档                                     | English                                            |
 | --------------- | -------------------------------------------- | -------------------------------------------------- |
 | CLI Agent       | [README](./apps/cli/README.md)               | [README_EN](./apps/cli/README_EN.md)               |
-| Control Plane   | [README](./apps/mcp-control-plane/README.md) | [README_EN](./apps/mcp-control-plane/README_EN.md) |
+| Control Plane   | [CONTROL_PLANE](./apps/mcp-worker/CONTROL_PLANE.md) | [CONTROL_PLANE_EN](./apps/mcp-worker/CONTROL_PLANE_EN.md) |
 | MCP Gateway     | [README](./apps/mcp-server/README.md)        | [README_EN](./apps/mcp-server/README_EN.md)        |
 | MCP Worker      | [README](./apps/mcp-worker/README.md)        | [README_EN](./apps/mcp-worker/README_EN.md)        |
 | Studio Web      | [README](./apps/studio-web/README.md)        | [README_EN](./apps/studio-web/README_EN.md)        |
@@ -106,6 +111,8 @@ docs/superpowers/
 
 仓库目前未提供 Docker Compose。PostgreSQL、Redis、对象存储和 Registry 需要单独准备。
 
+仅启动管理 API 时需要 PostgreSQL、Redis 和 S3 配置，不需要 Docker、Buildx、Runner 镜像、Registry、Syft 或 Trivy；后者仅在后台 Worker 构建/执行 Tool 时需要。
+
 ## 安装
 
 ```bash
@@ -122,11 +129,19 @@ pnpm build
 
 ## 配置
 
-### Control Plane
+### Control Plane 与 Worker 共用配置
+
+统一示例位于 `apps/mcp-worker/.env.example`。仅在 `.env` 不存在时创建：
 
 ```bash
-cp apps/mcp-control-plane/.env.example apps/mcp-control-plane/.env
+test -e apps/mcp-worker/.env || cp apps/mcp-worker/.env.example apps/mcp-worker/.env
 ```
+
+若旧 `apps/mcp-control-plane/.env` 和 `apps/mcp-worker/.env` 已有本地配置，请手工将原 Control Plane 所需值合并到 Worker 的 `.env`，核对数据库、Redis、S3 凭据和端口冲突；不要覆盖任何已有 `.env` 或密钥。管理 API 不再读取旧目录的 `.env`。生产部署仍应按进程分别注入必要变量和授予权限，不应因共用包而给管理 API Docker/Registry 权限。
+
+### Control Plane
+
+`dev:admin` 和 `start:admin` 通过既有 `dotenv` 从 `apps/mcp-worker/.env` 加载配置，只启动管理 API，默认端口为 `4200`。
 
 关键变量：
 
@@ -155,20 +170,13 @@ cp apps/mcp-server/.env.example apps/mcp-server/.env
 
 ### MCP Worker
 
-复制示例并填写真实值：
+使用前面的统一 `.env`。`dev` 和 `dev:worker` 通过 `--env-file=.env` 加载 `apps/mcp-worker/.env`，仅启动后台 Worker：
 
 ```bash
-cp apps/mcp-worker/.env.example apps/mcp-worker/.env
+pnpm --filter @open-agent-tools/mcp-worker dev:worker
 ```
 
-Worker 当前直接读取进程环境，不会自行加载 `.env`。在 Bash/Zsh 中可以这样启动：
-
-```bash
-set -a
-source apps/mcp-worker/.env
-set +a
-pnpm --filter @open-agent-tools/mcp-worker dev
-```
+`start` 和 `start:worker` 保持原有行为，仅读取由进程管理器或 Shell 注入的环境变量，不自动加载 `.env`。
 
 除 PostgreSQL、Redis 和 S3 变量外，Worker 还需要：
 
@@ -196,10 +204,12 @@ Studio Web 当前不做鉴权，不读取浏览器 Token；Control Plane 也将�
 
 ```bash
 export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcp_management
-pnpm --filter @open-agent-tools/mcp-control-plane db:migrate
+pnpm --filter @open-agent-tools/mcp-worker db:migrate
 ```
 
-迁移文件位于 `apps/mcp-control-plane/drizzle/`。不要让 Control Plane 和 Gateway 使用不同数据库，否则 Gateway 无法读取已发布服务和客户端授权。
+Schema 位于 `apps/mcp-worker/src/control-plane/db/schema.ts`，迁移文件位于 `apps/mcp-worker/drizzle/`，原有 SQL 和 journal 保持不变。需要根据 Schema 变更生成新迁移时，使用 `pnpm --filter @open-agent-tools/mcp-worker db:generate`。
+
+旧 `apps/mcp-control-plane` 不再是工作区包或源码树，仅保留 README 跳转与 `drizzle -> ../mcp-worker/drizzle` 符号链接，以兼容仍使用旧迁移路径的消费者；`apps/mcp-server` 完全不改动。不要让 Control Plane 和 Gateway 使用不同数据库，否则 Gateway 无法读取已发布服务和客户端授权。
 
 ## 构建 Node.js Runner 镜像
 
@@ -217,16 +227,24 @@ docker inspect --format='{{index .RepoDigests 0}}' registry.example.com/mcp-node
 
 ## 本地启动
 
-准备好依赖服务、环境变量、数据库迁移和 Runner 镜像后，分别启动：
+准备好 PostgreSQL、Redis、S3 配置和数据库迁移后，分别启动管理 API 与其他服务；管理 API 无需准备 Docker、Runner 镜像或 Registry：
 
 ```bash
-pnpm --filter @open-agent-tools/mcp-control-plane dev
+pnpm --filter @open-agent-tools/mcp-worker dev:admin
 pnpm --filter @open-agent-tools/mcp-server dev
 pnpm --filter @open-agent-tools/rag-server dev
 pnpm --filter @open-agent-tools/studio-web dev
 ```
 
-Worker 按前面的环境加载方式单独启动。默认地址：
+需要检查、构建或执行 Tool 时，再准备 Docker、Runner 镜像、Registry 等 Worker 依赖，并在另一个进程启动：
+
+```bash
+pnpm --filter @open-agent-tools/mcp-worker dev:worker
+```
+
+兼容脚本 `dev` 仍等同于 `dev:worker`，不会启动管理 API。构建后使用 `pnpm --filter @open-agent-tools/mcp-worker start:admin` 启动管理 API，使用 `start:worker`（或兼容的 `start`）启动已注入环境变量的后台 Worker；两者都不会启动另一角色。后台入口仍为 `src/index.ts` → `dist/index.js`，管理入口为 `src/control-plane/index.ts` → `dist/control-plane/index.js`。
+
+默认地址：
 
 | 服务                 | 地址                                               |
 | -------------------- | -------------------------------------------------- |
@@ -236,7 +254,7 @@ Worker 按前面的环境加载方式单独启动。默认地址：
 | MCP Gateway Health   | `http://localhost:4100/health`                     |
 | MCP Service Endpoint | `http://localhost:4100/mcp/services/{serviceSlug}` |
 
-不建议直接执行根目录 `pnpm dev` 来启动 MCP 平台，因为该命令还会并行启动仓库中的其他示例应用。
+根目录 `pnpm dev` 现在执行 `pnpm -r --parallel --if-present run "/^dev(:admin)?$/"`，因此移除旧 Control Plane 包后仍会分别启动共用包的后台 `dev` 和管理 `dev:admin` 进程，也会继续启动其他应用的 `dev`。MCP-only 工作流应使用前面的包级命令，不建议执行根目录 `pnpm dev`。
 
 ## 典型业务流程
 
@@ -383,18 +401,19 @@ pnpm format:check
 ```bash
 pnpm --filter @open-agent-tools/mcp-contracts test
 pnpm --filter @open-agent-tools/mcp-auth test
-pnpm --filter @open-agent-tools/mcp-control-plane test
 pnpm --filter @open-agent-tools/mcp-server test
 pnpm --filter @open-agent-tools/mcp-worker test
 pnpm --filter @open-agent-tools/studio-web test
 pnpm --filter @open-agent-tools/mcp-nodejs-runner test
 ```
 
+`mcp-worker test` 同时覆盖合并后的 Control Plane 与后台 Worker 测试，不再单独运行已删除包的测试。
+
 PostgreSQL 集成测试只会在设置 `TEST_DATABASE_URL` 时运行。测试会删除并重建目标数据库的 `public` Schema，因此必须使用专用测试数据库：
 
 ```bash
 TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcp_test \
-  pnpm --filter @open-agent-tools/mcp-control-plane test
+  pnpm --filter @open-agent-tools/mcp-worker test
 ```
 
 Docker E2E 还需要本机 Docker daemon 和已构建的测试 Runner 镜像。
@@ -402,7 +421,7 @@ Docker E2E 还需要本机 Docker daemon 和已构建的测试 Runner 镜像。
 ## 安全说明
 
 - 上传代码只在隔离的构建/执行环境中处理，不应被 Web、Control Plane 或 Gateway 直接导入。
-- Tool 容器使用非 root 用户、只读根文件系统、资源限制、Capability Drop 和无网络执行策略。
+- Tool 容器使用非 root 用户、只读根文件系统、资源限制和 Capability Drop；按已发布版本的 `limits.network` 使用 `none` 禁网或 `bridge` 联网。
 - Worker 是高权限基础设施组件，应部署在隔离网络中，不应暴露到公网。
 - Runner 与 Tool 镜像必须通过 SHA-256 摘要引用。
 - API Key、S3/Registry 凭据、完整 Tool 输入输出和渲染后的 Prompt 不应写入普通日志。

@@ -7,6 +7,7 @@ import {
   buildDataPayload,
   checkRateLimit,
   hitSensitiveWord,
+  scopedSessionKey,
   emptyResultText,
   __resetRateLimiter,
 } from "./aiQuery.js";
@@ -90,6 +91,15 @@ test("checkRateLimit：10 次/分钟，超限拒绝", () => {
     assert.equal(checkRateLimit(sid), true, `第 ${i + 1} 次应放行`);
   }
   assert.equal(checkRateLimit(sid), false, "第 11 次应限流");
+});
+
+test("scopedSessionKey：同一客户端 sessionId 按登录用户隔离且不暴露 userId", () => {
+  const first = scopedSessionKey("user-a", "session-1");
+  assert.equal(first, scopedSessionKey("user-a", "session-1"));
+  assert.notEqual(first, scopedSessionKey("user-b", "session-1"));
+  assert.notEqual(first, scopedSessionKey("user-a", "session-2"));
+  assert.equal(first.length, 64);
+  assert.doesNotMatch(first, /user-a|session-1/);
 });
 
 test("hitSensitiveWord：默认词表命中，空白分隔无法绕过", () => {

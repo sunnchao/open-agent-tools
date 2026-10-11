@@ -51,7 +51,10 @@ describe("MCP Gateway client", () => {
 
     expect(sdk.Transport).toHaveBeenCalledWith(
       new URL("http://studio.local/mcp/services/report%20tools"),
-      { requestInit: { headers: { authorization: "Bearer mcp.secret" } } },
+      {
+        fetch: expect.any(Function),
+        requestInit: { headers: { authorization: "Bearer mcp.secret" } },
+      },
     );
     expect(sdk.connect).toHaveBeenCalledWith({ kind: "transport" });
     expect(sdk.callTool).toHaveBeenCalledWith({

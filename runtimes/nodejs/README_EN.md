@@ -2,7 +2,7 @@
 
 [中文](./README.md) | [Platform overview](../../README_EN.md)
 
-`runtimes/nodejs` contains the Node.js 20 base image for managed Tools, the in-container Runner, and an Echo Tool fixture used by integration tests. The Worker builds each Tool into an immutable OCI image based on this runtime and executes it in a network-disabled, non-root container with a read-only root filesystem.
+`runtimes/nodejs` contains the Node.js 20 base image for managed Tools, the in-container Runner, and an Echo Tool fixture used by integration tests. The Worker builds each Tool into an immutable OCI image based on this runtime and executes it in a non-root container with a read-only root filesystem and the published version's `none`/`bridge` network mode.
 
 Only Node.js 20, ESM, and npm are currently supported.
 
@@ -113,5 +113,5 @@ Runner unit tests do not require Docker. `runner/src/runtime-image.test.ts` stat
 
 - CommonJS, direct TypeScript execution, pnpm/yarn, Python, and Java are not supported.
 - Dependency installation uses `npm ci --ignore-scripts`; packages that require lifecycle scripts are incompatible.
-- Tool execution has no network access.
+- Tool execution enables network access only when the published version selects `bridge`.
 - The Runner does not validate Tool arguments against their JSON Schema; the Gateway performs that check before enqueueing the job.

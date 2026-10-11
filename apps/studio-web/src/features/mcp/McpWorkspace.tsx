@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Input, Select } from "antd";
 import {
   ApiOutlined,
   AuditOutlined,
@@ -15,6 +16,7 @@ import {
   ReloadOutlined,
   RocketOutlined,
   SearchOutlined,
+  SettingOutlined,
   TeamOutlined,
   ToolOutlined,
   UndoOutlined,
@@ -31,6 +33,7 @@ import {
   disableService,
   enableService,
   forkDraftVersion,
+  getServiceEnvironment,
   listServices,
   listVersions,
   previewPrompt,
@@ -40,6 +43,7 @@ import {
   uploadArtifact,
   updatePrompt,
   updateService,
+  updateServiceEnvironment,
   updateTool,
   validateVersion,
   type McpPrompt,
@@ -49,11 +53,13 @@ import {
 } from "./api.js";
 import { callGatewayTool } from "./gateway.js";
 import { AuditView, BuildsView, ClientsView, type McpManagementView } from "./McpOperations.js";
+import { VersionLimits } from "./VersionLimits.js";
 
 type Asset = { kind: "tool"; value: McpTool } | { kind: "prompt"; value: McpPrompt };
 type AssetTab = "tools" | "prompts";
 type DialogState =
   | { kind: "service"; initial?: McpService }
+  | { kind: "environment"; service: McpService }
   | { kind: "tool"; initial?: McpTool }
   | { kind: "prompt"; initial?: McpPrompt }
   | null;
@@ -245,6 +251,14 @@ export function McpWorkspace() {
                     <EditOutlined />
                   </button>
                   <button
+                    className="studio-button secondary"
+                    type="button"
+                    disabled={serviceBusy}
+                    onClick={() => setDialog({ kind: "environment", service: selectedService })}
+                  >
+                    <SettingOutlined /> 环境变量
+                  </button>
+                  <button
                     className="icon-command"
                     type="button"
                     title={selectedService.status === "DISABLED" ? "启用服务" : "禁用服务"}
@@ -372,12 +386,11 @@ export function McpWorkspace() {
                 </div>
                 <label className="studio-search">
                   <SearchOutlined />
-                  <input
+                  <Input
                     value={search}
+                    autoComplete="off"
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="搜索资源"
-                    autoComplete="off"
-                    autoFocus={false}
                   />
                 </label>
                 <button
@@ -453,6 +466,14 @@ export function McpWorkspace() {
 
             <aside className="inspector-panel">
               <div className="panel-heading">配置与预览</div>
+              {selectedService && version ? (
+                <VersionLimits
+                  key={version.id}
+                  serviceId={selectedService.id}
+                  version={version}
+                  onRefresh={refreshSelected}
+                />
+              ) : null}
               {asset ? (
                 <AssetInspector
                   service={selectedService!}
@@ -509,6 +530,14 @@ export function McpWorkspace() {
               service={selectedService}
               version={version}
               initial={dialog.initial}
+              onClose={() => setDialog(null)}
+              onSaved={refreshSelected}
+            />
+          ) : null}
+          {dialog?.kind === "environment" ? (
+            <EnvironmentDialog
+              key={dialog.service.id}
+              service={dialog.service}
               onClose={() => setDialog(null)}
               onSaved={refreshSelected}
             />
@@ -586,15 +615,18 @@ function VersionLifecycle({
       <div className="version-lifecycle-main">
         <label className="version-picker">
           <span>版本</span>
-          <select value={version.id} onChange={(event) => onSelect(event.target.value)}>
-            {[...versions]
+          <Select
+            value={version.id}
+            aria-label="版本"
+            popupMatchSelectWidth={false}
+            onChange={onSelect}
+            options={[...versions]
               .sort((left, right) => right.versionNumber - left.versionNumber)
-              .map((item) => (
-                <option value={item.id} key={item.id}>
-                  v{item.versionNumber} · {item.status}
-                </option>
-              ))}
-          </select>
+              .map((item) => ({
+                value: item.id,
+                label: `v${item.versionNumber} · ${item.status}`,
+              }))}
+          />
         </label>
         <span className={`version-status version-${version.status.toLowerCase()}`}>
           {processing ? <LoadingOutlined spin /> : null}
@@ -914,8 +946,7 @@ function AssetInspector({
               Gateway API Key
               <small>Bearer</small>
             </span>
-            <input
-              type="password"
+            <Input.Password
               autoComplete="off"
               spellCheck={false}
               value={apiKey}
@@ -934,8 +965,9 @@ function AssetInspector({
             {name}
             <small>{schema.type ?? "string"}</small>
           </span>
-          <input
+          <Input
             value={values[name] ?? ""}
+            autoComplete="off"
             onChange={(event) => setValues({ ...values, [name]: event.target.value })}
             placeholder={schema.description ?? "输入测试值"}
           />
@@ -1027,13 +1059,20 @@ function ServiceDialog({
       <form className="dialog-form" onSubmit={(event) => void submit(event)}>
         <label className="studio-field">
           <span>服务名称</span>
-          <input required name="name" defaultValue={initial?.name} placeholder="例如：文档分析" />
+          <Input
+            required
+            name="name"
+            autoComplete="off"
+            defaultValue={initial?.name}
+            placeholder="例如：文档分析"
+          />
         </label>
         <label className="studio-field">
           <span>Slug</span>
-          <input
+          <Input
             required
             name="slug"
+            autoComplete="off"
             defaultValue={initial?.slug}
             pattern="[a-z][a-z0-9-]*"
             placeholder="document-analysis"
@@ -1041,6 +1080,190 @@ function ServiceDialog({
         </label>
         {error ? <p className="field-message error">{error}</p> : null}
         <DialogActions busy={busy} onClose={onClose} />
+      </form>
+    </Dialog>
+  );
+}
+
+interface EnvironmentRow {
+  id: number;
+  name: string;
+  value: string | null;
+  saved: boolean;
+}
+
+function EnvironmentDialog({
+  service,
+  onClose,
+  onSaved,
+}: {
+  service: McpService;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [rows, setRows] = useState<EnvironmentRow[]>([]);
+  const [revision, setRevision] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+  const nextRowId = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setRevision(null);
+    getServiceEnvironment(service.id)
+      .then((result) => {
+        if (cancelled) return;
+        setRevision(result.revision);
+        setRows(
+          Object.keys(result.environment)
+            .sort()
+            .map((name) => ({ id: nextRowId.current++, name, value: null, saved: true })),
+        );
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [service.id, retry]);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (revision === null || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const entries = rows.map((row) => [row.name.trim(), row.value] as const);
+      if (new Set(entries.map(([name]) => name)).size !== entries.length) {
+        throw new Error("变量名不能重复");
+      }
+      const result = await updateServiceEnvironment(
+        service.id,
+        revision,
+        Object.fromEntries(entries),
+      );
+      setRevision(result.revision);
+      setRows((current) => current.map((row) => ({ ...row, value: null, saved: true })));
+      await onSaved();
+      onClose();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog title="配置环境变量" onClose={onClose}>
+      <form className="dialog-form" onSubmit={(event) => void submit(event)}>
+        <div className="mcp-env-heading">
+          <b>{service.name}</b>
+          <span className="count-badge">{rows.length} / 64</span>
+        </div>
+        <p className="mcp-env-note">
+          服务下的所有 Tool
+          共享这些变量，保存后下一次调用生效。已保存的值不会回显，未修改的值会保留。
+        </p>
+        {loading ? <p className="field-message">正在加载环境变量...</p> : null}
+        {!loading && revision !== null ? (
+          <>
+            <div className="mcp-env-rows">
+              {rows.map((row, index) => (
+                <div className="mcp-env-row" key={row.id}>
+                  <label className="studio-field">
+                    <span>变量名</span>
+                    <Input
+                      required
+                      disabled={busy || row.saved}
+                      aria-label={`变量名 ${index + 1}`}
+                      autoComplete="off"
+                      spellCheck={false}
+                      maxLength={128}
+                      pattern="[A-Za-z_][A-Za-z0-9_]*"
+                      placeholder="TAVILY_API_KEY"
+                      value={row.name}
+                      onChange={(event) =>
+                        setRows((current) =>
+                          current.map((item) =>
+                            item.id === row.id ? { ...item, name: event.target.value } : item,
+                          ),
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="studio-field">
+                    <span>变量值 {row.value === null ? <small>已保存</small> : null}</span>
+                    <Input.Password
+                      disabled={busy}
+                      aria-label={`变量值 ${index + 1}`}
+                      autoComplete="new-password"
+                      spellCheck={false}
+                      maxLength={8192}
+                      value={row.value ?? ""}
+                      placeholder={row.value === null ? "输入新值替换" : "输入变量值"}
+                      onChange={(event) =>
+                        setRows((current) =>
+                          current.map((item) =>
+                            item.id === row.id ? { ...item, value: event.target.value } : item,
+                          ),
+                        )
+                      }
+                    />
+                  </label>
+                  <button
+                    className="icon-command danger"
+                    type="button"
+                    aria-label={`删除变量 ${row.name || index + 1}`}
+                    title="删除变量"
+                    disabled={busy}
+                    onClick={() =>
+                      setRows((current) => current.filter((item) => item.id !== row.id))
+                    }
+                  >
+                    <DeleteOutlined />
+                  </button>
+                </div>
+              ))}
+              {rows.length === 0 ? <div className="variable-empty">尚未配置环境变量</div> : null}
+            </div>
+            <button
+              className="studio-button secondary compact"
+              type="button"
+              disabled={busy || rows.length >= 64}
+              onClick={() =>
+                setRows((current) => [
+                  ...current,
+                  { id: nextRowId.current++, name: "", value: "", saved: false },
+                ])
+              }
+            >
+              <PlusOutlined /> 添加变量
+            </button>
+          </>
+        ) : null}
+        {error ? (
+          <p className="field-message error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        {!loading && revision === null ? (
+          <button
+            className="studio-button secondary compact"
+            type="button"
+            onClick={() => setRetry((current) => current + 1)}
+          >
+            <ReloadOutlined /> 重新加载
+          </button>
+        ) : null}
+        <DialogActions busy={busy} disabled={loading || revision === null} onClose={onClose} />
       </form>
     </Dialog>
   );
@@ -1089,21 +1312,22 @@ function ToolDialog({
         <div className="field-grid">
           <label className="studio-field">
             <span>Tool 名称</span>
-            <input required name="name" defaultValue={initial?.name} />
+            <Input required name="name" autoComplete="off" defaultValue={initial?.name} />
           </label>
           <label className="studio-field">
             <span>Handler 导出名</span>
-            <input required name="handler" defaultValue={initial?.handler} />
+            <Input required name="handler" autoComplete="off" defaultValue={initial?.handler} />
           </label>
         </div>
         <label className="studio-field">
           <span>说明</span>
-          <input name="description" defaultValue={initial?.description} />
+          <Input name="description" autoComplete="off" defaultValue={initial?.description} />
         </label>
         <label className="studio-field">
           <span>输入 Schema</span>
-          <textarea
+          <Input.TextArea
             name="schema"
+            autoComplete="off"
             rows={9}
             defaultValue={JSON.stringify(
               initial?.inputSchema ?? {
@@ -1167,21 +1391,22 @@ function PromptDialog({
         <div className="field-grid">
           <label className="studio-field">
             <span>Prompt 名称</span>
-            <input required name="name" defaultValue={initial?.name} />
+            <Input required name="name" autoComplete="off" defaultValue={initial?.name} />
           </label>
           <label className="studio-field">
             <span>标题</span>
-            <input name="title" defaultValue={initial?.title} />
+            <Input name="title" autoComplete="off" defaultValue={initial?.title} />
           </label>
         </div>
         <label className="studio-field">
           <span>说明</span>
-          <input name="description" defaultValue={initial?.description} />
+          <Input name="description" autoComplete="off" defaultValue={initial?.description} />
         </label>
         <label className="studio-field">
           <span>参数定义</span>
-          <textarea
+          <Input.TextArea
             name="arguments"
+            autoComplete="off"
             rows={6}
             defaultValue={JSON.stringify(
               initial?.arguments ?? [{ name: "input", required: true }],
@@ -1192,8 +1417,9 @@ function PromptDialog({
         </label>
         <label className="studio-field">
           <span>消息模板</span>
-          <textarea
+          <Input.TextArea
             name="messages"
+            autoComplete="off"
             rows={9}
             defaultValue={JSON.stringify(
               initial?.messages ?? [{ role: "user", content: { type: "text", text: "{{input}}" } }],
@@ -1239,13 +1465,21 @@ function Dialog({
   );
 }
 
-function DialogActions({ busy, onClose }: { busy: boolean; onClose: () => void }) {
+function DialogActions({
+  busy,
+  disabled = false,
+  onClose,
+}: {
+  busy: boolean;
+  disabled?: boolean;
+  onClose: () => void;
+}) {
   return (
     <div className="dialog-actions">
       <button className="studio-button secondary" type="button" onClick={onClose}>
         取消
       </button>
-      <button className="studio-button primary" type="submit" disabled={busy}>
+      <button className="studio-button primary" type="submit" disabled={busy || disabled}>
         {busy ? "保存中..." : "保存"}
       </button>
     </div>

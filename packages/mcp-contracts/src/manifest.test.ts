@@ -73,6 +73,17 @@ test("MAN-002 accepts a valid Tool-only manifest", () => {
   assert.equal(result.success, true);
 });
 
+test("accepts bridge networking for an explicitly networked Tool package", () => {
+  const result = ManagedMcpManifestSchema.safeParse({
+    schemaVersion: 1,
+    ...toolRuntime,
+    limits: { ...toolRuntime.limits, network: "bridge" },
+    tools: [tool],
+  });
+
+  assert.equal(result.success, true);
+});
+
 test("MAN-003 accepts a Prompt-only manifest without runtime fields", () => {
   const result = ManagedMcpManifestSchema.safeParse({
     schemaVersion: 1,
@@ -212,6 +223,8 @@ test("TOOL-007 and TOOL-008 reject unsafe execution limits", () => {
     { ...toolRuntime.limits, memoryMb: 4_097 },
     { ...toolRuntime.limits, cpuMillis: 8_001 },
     { ...toolRuntime.limits, network: "full" },
+    { ...toolRuntime.limits, network: "host" },
+    { ...toolRuntime.limits, network: "container:other-tool" },
   ];
 
   for (const limits of invalidLimits) {

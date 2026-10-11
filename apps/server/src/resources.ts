@@ -114,18 +114,25 @@ async function gatewayServices(): Promise<GatewayServiceSummary[]> {
 async function withMcpClient<T>(
   serviceSlug: string,
   run: (client: Client) => Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const { gatewayApiKey, gatewayUrl } = resourceConfig();
   if (!gatewayApiKey) throw new Error("MCP Gateway API Key is not configured");
   const client = new Client({ name: "open-agent-studio-server", version: "0.0.0" });
   const transport = new StreamableHTTPClientTransport(
     new URL(`${gatewayUrl}/mcp/services/${encodeURIComponent(serviceSlug)}`),
-    { requestInit: { headers: { authorization: `Bearer ${gatewayApiKey}` } } },
+    { requestInit: { headers: { authorization: `Bearer ${gatewayApiKey}` }, signal } },
   );
+  const abort = () => {
+    void client.close().catch(() => undefined);
+  };
+  if (signal?.aborted) throw new Error("workflow run cancelled");
+  signal?.addEventListener("abort", abort, { once: true });
   try {
     await client.connect(transport);
     return await run(client);
   } finally {
+    signal?.removeEventListener("abort", abort);
     await client.close().catch(() => undefined);
   }
 }
@@ -228,9 +235,15 @@ export function resolveMcpToolsFromCatalog(
 export async function callMcpTool(
   binding: McpToolBinding,
   args: Record<string, unknown>,
+  options?: { signal?: AbortSignal },
 ): Promise<unknown> {
-  return withMcpClient(binding.serviceSlug, (client) =>
-    client.callTool({ name: binding.toolName, arguments: args }),
+  return withMcpClient(
+    binding.serviceSlug,
+    (client) =>
+      client.callTool({ name: binding.toolName, arguments: args }, undefined, {
+        signal: options?.signal,
+      }),
+    options?.signal,
   );
 }
 

@@ -1,12 +1,21 @@
+import { randomUUID } from "node:crypto";
 import express, { type Express, type Request, type Response } from "express";
+import {
+  captureAuditResponse,
+  redactAuditPayload,
+  type AuditEvent,
+} from "@open-agent-tools/observability/audit";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { GatewayAccessError, type GatewayAccessService } from "./access.js";
 import { createManagedMcpServer } from "./managed-server.js";
 import type { ToolExecutor } from "./tool-executor.js";
+import type { AuthorizedService } from "./access.js";
+import type { GatewayAuditSink } from "./audit.js";
 
 export interface GatewayAppOptions {
   access: GatewayAccessService;
   executor?: ToolExecutor;
+  audit?: GatewayAuditSink;
 }
 
 function bearerToken(request: Request): string | null {
@@ -62,6 +71,51 @@ export function createGatewayApp(options: GatewayAppOptions): Express {
   app.delete("/mcp/services/:serviceSlug", (_request, response) => methodNotAllowed(response));
 
   app.post("/mcp/services/:serviceSlug", async (request, response) => {
+    const requestId = randomUUID();
+    const startedAt = Date.now();
+    let authorized: AuthorizedService | undefined;
+    response.setHeader("x-request-id", requestId);
+    if (options.audit) {
+      const output = captureAuditResponse(response);
+      response.once("finish", () => {
+        const result = output();
+        const body = result as { error?: unknown; result?: { isError?: boolean } } | null;
+        const method = typeof request.body?.method === "string" ? request.body.method : "unknown";
+        const event: AuditEvent = {
+          id: randomUUID(),
+          actorId: authorized?.clientId ?? "unauthenticated",
+          actorRole: "client",
+          source: "gateway",
+          action: `MCP ${method}`.slice(0, 180),
+          target: request.originalUrl.split("?", 1)[0]!.slice(0, 2000),
+          requestId,
+          outcome:
+            response.statusCode >= 400 || body?.error || body?.result?.isError === true
+              ? "FAILED"
+              : "SUCCEEDED",
+          statusCode: response.statusCode,
+          durationMs: Date.now() - startedAt,
+          createdAt: new Date().toISOString(),
+          input: redactAuditPayload(request.body),
+          output: redactAuditPayload(result),
+          context: redactAuditPayload({
+            serviceSlug: request.params.serviceSlug,
+            serviceId: authorized?.snapshot.serviceId,
+            versionId: authorized?.snapshot.versionId,
+            imageDigest: authorized?.snapshot.imageDigest,
+            limits: authorized?.snapshot.limits,
+            clientId: authorized?.clientId,
+            rpcRequestId: request.body?.id,
+            clientRequestId: request.header("x-request-id"),
+          }),
+        };
+        void Promise.resolve()
+          .then(() => options.audit!.record(event))
+          .catch(() => {
+            console.error("Failed to report MCP audit event");
+          });
+      });
+    }
     const rawKey = bearerToken(request);
     if (!rawKey) {
       response.status(401).json({ error: { code: "UNAUTHORIZED", message: "Unauthorized" } });
@@ -69,11 +123,11 @@ export function createGatewayApp(options: GatewayAppOptions): Express {
     }
 
     try {
-      const authorized = await options.access.authorize(
-        rawKey,
-        request.params.serviceSlug as string,
-      );
-      const server = createManagedMcpServer(authorized, { executor: options.executor });
+      authorized = await options.access.authorize(rawKey, request.params.serviceSlug as string);
+      const server = createManagedMcpServer(authorized, {
+        executor: options.executor,
+        createRequestId: () => requestId,
+      });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,

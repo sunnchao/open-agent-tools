@@ -140,7 +140,7 @@ describe("managed MCP Tool server", () => {
         timeoutMs: 30_000,
         memoryMb: 256,
         cpuMillis: 1_000,
-        network: "none",
+        network: "bridge",
       },
       tools: [
         {

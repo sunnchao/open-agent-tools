@@ -1,8 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
-import type {
-  NodeKind,
-  WorkflowNodeData,
-} from "./model.js";
+import type { NodeKind, WorkflowNodeData } from "./model.js";
 import type { WorkflowTokenUsage } from "../../lib/api.js";
 
 export type WorkflowNode = Node<WorkflowNodeData, "studio">;
@@ -46,5 +43,8 @@ export interface RunLogEntry {
   /** LLM 节点插值后的系统提示词（system 消息）。 */
   systemPrompt?: string;
   durationMs?: number;
+  attempts?: number;
+  cached?: boolean;
+  incomingEdgeIds?: string[];
   tokenUsage?: WorkflowTokenUsage;
 }

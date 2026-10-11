@@ -20,6 +20,11 @@ export async function callGatewayTool(
   );
   const client = new Client({ name: "open-agent-studio", version: "0.0.0" });
   const transport = new StreamableHTTPClientTransport(endpoint, {
+    fetch: async (url, init) => {
+      // Answer the SDK's optional SSE probe locally for this POST-only Gateway.
+      if (init?.method === "GET") return new Response(null, { status: 405 });
+      return fetch(url, init);
+    },
     requestInit: {
       headers: { authorization: `Bearer ${apiKey}` },
     },

@@ -1,17 +1,18 @@
+import { createHash, randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { openDb } from "../db.js";
 import { executeQuerySql } from "../function_tools/sqlQueryBuiltin.js";
 import { getDefaultProvider, getProvider, type ProviderWithKey } from "../providers/store.js";
 import { createLlmClient, type LlmClient } from "../providers/clients/index.js";
-import { logTrace, truncate } from "../trace.js";
+import { logDebug, logDebugDuration, logTrace, truncate } from "../trace.js";
 import {
   buildDtmsSchemaPrompt,
   buildUnknownReplyText,
   isAllowedIndustry,
   resolvePageContext,
 } from "../aiQuery/dtmsCatalog.js";
-import { maskSensitiveRows, validateDtmsQuerySql } from "../aiQuery/sqlGuard.js";
-import { rewriteSqlWithAuth } from "../aiQuery/sqlRewrite.js";
+import { maskSensitiveRows } from "../aiQuery/sqlGuard.js";
+import { rewriteAndValidateSqlWithAuth } from "../aiQuery/sqlRewrite.js";
 import {
   PermissionError,
   assertQueryInScope,
@@ -19,11 +20,12 @@ import {
   resolvePermissionContext,
   type PermissionContext,
 } from "../aiQuery/permission.js";
+import { routeIntentWithGateA } from "../aiQuery/decisionProvider.js";
 
 /**
  * AI 问数端点（POST /api/ai/query，标准 SSE）。
  *
- * 契约见 dtms-web `docs/AI问数接口契约.md` v2。
+ * 契约见 dtms-web `docs/AI问数接口契约.md` v2.1。
  * 业务范围仅限 DTMS：合同 / 发票 / 付款 / 收款 / 库存 / 清算；禁止 NEW-API 运营库。
  */
 
@@ -152,6 +154,11 @@ export function checkRateLimit(sessionId: string): boolean {
 /** 测试辅助：清空限流桶。 */
 export function __resetRateLimiter(): void {
   rateBuckets.clear();
+}
+
+/** 会话存储与限流绑定登录用户；不把 userId 原文写入 SQLite 主键。 */
+export function scopedSessionKey(userId: string, sessionId: string): string {
+  return createHash("sha256").update(userId).update("\0").update(sessionId).digest("hex");
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +497,7 @@ function rejectRequest(
 
 aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
   const startedAt = Date.now();
+  const traceId = randomUUID();
   const { sessionId, question, pageContext, industry } = (req.body ?? {}) as AiQueryRequestBody;
 
   if (typeof sessionId !== "string" || sessionId.trim().length === 0 || sessionId.length > 64) {
@@ -508,22 +516,22 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
     rejectRequest(res, 400, "INVALID_REQUEST", "industry 长度 ≤ 100");
     return;
   }
-  if (!checkRateLimit(sessionId.trim())) {
-    logTrace("ai_query.rejected", { sessionId, reason: "rate limited" }, "warn");
-    rejectRequest(res, 429, "RATE_LIMITED", `${RATE_LIMIT_MAX} 次/分钟`);
-    return;
-  }
-
   const trimmedQuestion = question.trim();
   const trimmedPageContext =
     typeof pageContext === "string" && pageContext.trim() ? pageContext.trim() : undefined;
   const pageHint = resolvePageContext(trimmedPageContext);
   const sid = sessionId.trim();
 
+  const permissionStartedAt = Date.now();
   let perm: PermissionContext;
   try {
     perm = await resolvePermissionContext(req);
     assertQueryInScope(trimmedQuestion, trimmedPageContext, perm);
+    logDebugDuration("ai_query.stage.permission", permissionStartedAt, {
+      traceId,
+      industries: perm.industries.length,
+      modules: perm.modules.length,
+    });
   } catch (error) {
     if (error instanceof PermissionError) {
       res.status(200);
@@ -544,6 +552,12 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
       return;
     }
     throw error;
+  }
+  const sessionKey = scopedSessionKey(perm.userId, sid);
+  if (!checkRateLimit(sessionKey)) {
+    logTrace("ai_query.rejected", { sessionId: sid, reason: "rate limited" }, "warn");
+    rejectRequest(res, 429, "RATE_LIMITED", `${RATE_LIMIT_MAX} 次/分钟`);
+    return;
   }
   const rowScope = effectiveRowScope(perm);
   const bodyIndustryRaw = typeof industry === "string" ? industry.trim() : "";
@@ -580,6 +594,12 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
   res.flushHeaders?.();
 
   let finished = false;
+  let intentMeta: {
+    via?: "rule" | "decision" | "llm" | "blocked";
+    decisionMs?: number;
+    confidence?: number;
+    gates?: string[];
+  } = {};
   const abort = new AbortController();
   res.on("close", () => {
     if (!finished) abort.abort();
@@ -604,7 +624,7 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
         `event: done\ndata: ${JSON.stringify({
           code,
           sessionId: sid,
-          meta: { ...meta, durationMs: Date.now() - startedAt },
+          meta: { ...meta, ...intentMeta, durationMs: Date.now() - startedAt },
         })}\n\n`,
       );
       res.end();
@@ -623,11 +643,12 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
 
   const persistSuccess = (replyText: string, replyType: string): void => {
     if (abort.signal.aborted) return;
-    persistTurn(sid, "user", trimmedQuestion);
-    persistTurn(sid, "assistant", replyText, replyType);
+    persistTurn(sessionKey, "user", trimmedQuestion);
+    persistTurn(sessionKey, "assistant", replyText, replyType);
   };
 
   logTrace("ai_query.start", {
+    traceId,
     sessionId: sid,
     questionLength: trimmedQuestion.length,
     pageContext: trimmedPageContext ?? null,
@@ -635,6 +656,7 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
 
   const sensitive = hitSensitiveWord(trimmedQuestion);
   if (sensitive) {
+    intentMeta = { via: "blocked" };
     logTrace(
       "ai_query.blocked",
       { sessionId: sid, hit: sensitive, durationMs: Date.now() - startedAt },
@@ -663,12 +685,40 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
       }
       const llm = createLlmClient({ ...provider, apiKey: provider.apiKey ?? "ollama" });
       const model = process.env.AI_QUERY_MODEL || provider.models[0] || "gpt-4o-mini";
-      const history = loadHistory(sid);
+      const history = loadHistory(sessionKey);
       const signal = abort.signal;
 
-      const intentType: "DATA_QUERY" | "UNKNOWN" =
-        fastIntent(trimmedQuestion) ??
-        (await classifyIntentWithLlm(llm, model, trimmedQuestion, trimmedPageContext, signal));
+      const intentStartedAt = Date.now();
+      const fast = fastIntent(trimmedQuestion);
+      let intentType: "DATA_QUERY" | "UNKNOWN";
+      if (fast) {
+        intentType = fast;
+        intentMeta = { via: "rule" };
+      } else {
+        const routed = await routeIntentWithGateA(
+          {
+            traceId,
+            question: trimmedQuestion,
+            pageContext: trimmedPageContext,
+            industry: trimmedIndustry,
+            hasSessionHistory: history.length > 0,
+            signal,
+          },
+          () => classifyIntentWithLlm(llm, model, trimmedQuestion, trimmedPageContext, signal),
+        );
+        intentType = routed.intent;
+        intentMeta = {
+          via: routed.via,
+          ...(routed.decisionMs === undefined ? {} : { decisionMs: routed.decisionMs }),
+          ...(routed.confidence === undefined ? {} : { confidence: routed.confidence }),
+          ...(routed.gates ? { gates: routed.gates } : {}),
+        };
+      }
+      logDebugDuration("ai_query.stage.intent", intentStartedAt, {
+        traceId,
+        intentType,
+        ...intentMeta,
+      });
       sendEvent("intent", { sessionId: sid, intentType, intentVersion: INTENT_VERSION });
 
       if (intentType === "UNKNOWN") {
@@ -684,6 +734,7 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
         return;
       }
 
+      const generateSqlStartedAt = Date.now();
       const gen = await generateSql(
         llm,
         model,
@@ -694,6 +745,11 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
         perm.modules,
         signal,
       );
+      logDebugDuration("ai_query.stage.generate_sql", generateSqlStartedAt, {
+        traceId,
+        hasSql: Boolean(gen.sql),
+        clarifying: Boolean(gen.clarifyingQuestion),
+      });
       if (abort.signal.aborted) return;
       if (gen.clarifyingQuestion) {
         persistSuccess(gen.clarifyingQuestion, "text");
@@ -711,27 +767,17 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
         return;
       }
 
+      let rewritten: ReturnType<typeof rewriteAndValidateSqlWithAuth>;
       try {
-        validateDtmsQuerySql(gen.sql);
+        rewritten = rewriteAndValidateSqlWithAuth(
+          gen.sql,
+          rowScope.industries,
+          rowScope.orgNos,
+          perm.modules,
+        );
       } catch (error) {
         logTrace(
           "ai_query.guard",
-          {
-            sessionId: sid,
-            reason: truncate(error instanceof Error ? error.message : String(error), 200),
-            sql: truncate(gen.sql, 200),
-          },
-          "warn",
-        );
-        failWith("QUERY_BLOCKED");
-        return;
-      }
-      let rewritten: ReturnType<typeof rewriteSqlWithAuth>;
-      try {
-        rewritten = rewriteSqlWithAuth(gen.sql, rowScope.industries, rowScope.orgNos, perm.modules);
-      } catch (error) {
-        logTrace(
-          "ai_query.rewrite",
           {
             sessionId: sid,
             reason: truncate(error instanceof Error ? error.message : String(error), 200),
@@ -743,6 +789,13 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
         return;
       }
       const executed = await executeQuerySql(rewritten.sql, rewritten.params);
+      logDebug("ai_query.stage.execute_sql", {
+        traceId,
+        ok: executed.ok,
+        rows: executed.rows?.length ?? 0,
+        durationMs: executed.durationMs,
+        ...(executed.error ? { error: truncate(executed.error, 200) } : {}),
+      });
       if (abort.signal.aborted) return;
       if (!executed.ok) {
         failWith(mapSqlError(executed.error ?? ""));
@@ -764,6 +817,7 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
 
       const data = buildDataPayload(rows, trimmedIndustry, trimmedPageContext);
 
+      const summaryStartedAt = Date.now();
       const summary = await llm.streamChat({
         model,
         signal,
@@ -787,6 +841,11 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
             sendEvent("delta", { text: delta });
           },
         },
+      });
+      logDebugDuration("ai_query.stage.summary", summaryStartedAt, {
+        traceId,
+        replyType: data.type,
+        contentLength: summary.content.length,
       });
       if (abort.signal.aborted) return;
 

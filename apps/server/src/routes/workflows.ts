@@ -21,6 +21,7 @@ import {
   listWorkflowApiKeys,
   listWorkflowEvents,
   listWorkflowRuns,
+  getWorkflowRunSnapshot,
   listWorkflows,
   publishWorkflow,
   revokeWorkflowApiKey,
@@ -32,6 +33,7 @@ import {
 import type { PublicWorkflowEvent } from "../workflows/runtime.js";
 import type { WorkflowGraph, WorkflowRunRecord } from "../workflows/types.js";
 import { graphToRunNodes } from "../workflows/types.js";
+import { workflowGraphSchema } from "@open-agent-tools/workflow-contracts";
 
 export const workflowsRouter: ReturnType<typeof Router> = Router();
 
@@ -53,6 +55,9 @@ function sendError(res: Response, error: unknown): void {
 }
 
 function graphFromBody(value: unknown): WorkflowGraph {
+  const parsed = workflowGraphSchema.safeParse(value);
+  if (!parsed.success)
+    throw new WorkflowValidationError(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new WorkflowValidationError("workflow graph is required");
   }
@@ -322,6 +327,28 @@ workflowsRouter.get("/api/workflows/:workflowId/runs", (req, res) => {
     return;
   }
   res.json({ runs: listWorkflowRuns(workflow.app.id, Number(req.query.limit) || 50) });
+});
+workflowsRouter.get("/api/workflows/:workflowId/runs/:runId/events", (req, res) => {
+  const workflow = getWorkflow(String(req.params.workflowId));
+  const run = getWorkflowRun(String(req.params.runId));
+  if (!workflow || !run || run.workflowId !== workflow.app.id) {
+    res.status(404).json({ error: "workflow run not found" });
+    return;
+  }
+  const rawAfter = req.query.after;
+  const after = rawAfter === undefined ? 0 : Number(rawAfter);
+  if (!Number.isInteger(after) || after < 0) {
+    res.status(400).json({ error: "after must be a non-negative integer" });
+    return;
+  }
+  const graph =
+    getWorkflowRunSnapshot(run.id) ??
+    (run.versionId ? getWorkflowVersion(run.versionId)?.graph : null);
+  if (!graph) {
+    res.status(404).json({ error: "workflow run graph not found" });
+    return;
+  }
+  res.json({ run, events: listWorkflowEvents(run.id, after), graph });
 });
 
 workflowsRouter.post("/v1/workflows/:slug/run", async (req, res) => {

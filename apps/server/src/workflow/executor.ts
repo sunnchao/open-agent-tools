@@ -3,6 +3,9 @@ import {
   runVariables,
   prepareRunInputs,
   variableIssues,
+  nodeKindSchema,
+  nodeConfigSchemas,
+  type WorkflowResumeCheckpoint,
 } from "@open-agent-tools/workflow-contracts";
 import { callMcpTool, retrieveRag, retrieveRagGraph, type McpToolBinding } from "../resources.js";
 import { getDefaultProvider, getProvider, type ProviderWithKey } from "../providers/store.js";
@@ -14,11 +17,11 @@ import {
   slimValue,
   type ObservationKind,
 } from "@open-agent-tools/observability";
-import { logTrace } from "../trace.js";
+import { logDebugDuration, logTrace } from "../trace.js";
 import { evaluateConditionExpression } from "./expression.js";
+import { setTimeout as delay } from "node:timers/promises";
 
-export type WorkflowNodeKind =
-  "start" | "input" | "rag" | "graph" | "llm" | "mcp" | "condition" | "end";
+export type WorkflowNodeKind = import("@open-agent-tools/workflow-contracts").NodeKind;
 
 export interface WorkflowNodeInput {
   id: string;
@@ -69,6 +72,7 @@ export interface WorkflowNodeTestResult {
     finishedAt: string;
     durationMs: number;
     tokenUsage: WorkflowTokenUsage;
+    attempts?: number;
   };
 }
 
@@ -90,11 +94,15 @@ export interface NodeOutputBinding {
 export interface WorkflowNodeResultMetadata {
   durationMs: number;
   tokenUsage: WorkflowTokenUsage;
+  attempts?: number;
+  cached?: boolean;
+  incomingEdgeIds?: string[];
 }
 
 export interface WorkflowEvent {
-  type: "node_start" | "node_result" | "run_done" | "run_error";
+  type: "node_start" | "node_result" | "node_cached" | "run_done" | "run_error";
   nodeId?: string;
+  incomingEdgeIds?: string[];
   label?: string;
   kind?: string;
   status?: "success" | "error";
@@ -122,6 +130,7 @@ export interface WorkflowDependencies {
   ) => Promise<string | WorkflowLlmCompletion>;
   timeoutMs?: Partial<Record<"rag" | "llm" | "mcp" | "graph", number>>;
   signal?: AbortSignal;
+  resume?: WorkflowResumeCheckpoint;
 }
 
 export interface WorkflowValidation {
@@ -146,16 +155,7 @@ export class WorkflowNodeError extends Error {
   }
 }
 
-const NODE_KINDS = new Set<WorkflowNodeKind>([
-  "start",
-  "input",
-  "rag",
-  "graph",
-  "llm",
-  "mcp",
-  "condition",
-  "end",
-]);
+const NODE_KINDS = new Set<WorkflowNodeKind>(nodeKindSchema.options);
 
 function configOf(node: WorkflowNodeInput): Record<string, unknown> {
   return node.config && typeof node.config === "object" ? node.config : {};
@@ -252,6 +252,11 @@ export function validateWorkflow(request: WorkflowRunRequest): WorkflowValidatio
     if (byId.has(node.id)) throw new WorkflowValidationError(`duplicate node id ${node.id}`);
     if (!NODE_KINDS.has(node.kind))
       throw new WorkflowValidationError(`invalid node kind ${node.kind}`);
+    const config = nodeConfigSchemas[node.kind].safeParse(node.config ?? {});
+    if (!config.success)
+      throw new WorkflowValidationError(
+        `node ${node.id}: ${config.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
+      );
     byId.set(node.id, node);
   }
   const edges: Array<WorkflowEdgeInput & { id: string }> = [];
@@ -353,6 +358,7 @@ function selectValue(selector: string, result: unknown, inputs: Record<string, u
 }
 
 function withTimeout<T>(promise: Promise<T>, timeout: number, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) return Promise.reject(new Error("workflow run cancelled"));
   if (!Number.isFinite(timeout) || timeout <= 0) return promise;
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
@@ -381,6 +387,7 @@ function withTimeout<T>(promise: Promise<T>, timeout: number, signal?: AbortSign
 
 interface NodeExecution {
   result: unknown;
+  attempts?: number;
   tokenUsage?: Partial<WorkflowTokenUsage>;
   /** LLM 节点插值后的最终 user 请求内容，随事件回传用于日志调试。 */
   prompt?: string;
@@ -438,6 +445,7 @@ async function runNode(
     WorkflowDependencies,
 ): Promise<NodeExecution> {
   const config = configOf(node);
+  const configuredTimeout = typeof config.timeoutMs === "number" ? config.timeoutMs : undefined;
   logTrace("workflow.node.start", {
     node,
     inputs,
@@ -459,7 +467,7 @@ async function runNode(
           topK: Math.max(1, Math.min(20, Number(config.topK) || 5)),
           signal: deps.signal,
         }),
-        deps.timeoutMs?.rag ?? 15_000,
+        configuredTimeout ?? deps.timeoutMs?.rag ?? 15_000,
         deps.signal,
       );
       return { result };
@@ -469,7 +477,7 @@ async function runNode(
       if (!query) throw new Error("graph node requires a query");
       const result = await withTimeout(
         deps.retrieveRagGraph({ query, signal: deps.signal }),
-        deps.timeoutMs?.graph ?? 15_000,
+        configuredTimeout ?? deps.timeoutMs?.graph ?? 15_000,
         deps.signal,
       );
       return {
@@ -547,7 +555,7 @@ async function runNode(
             prompt,
             temperature,
           }),
-          deps.timeoutMs?.llm ?? 30_000,
+          configuredTimeout ?? deps.timeoutMs?.llm ?? 30_000,
           deps.signal,
         );
       } catch (error) {
@@ -583,8 +591,8 @@ async function runNode(
       }
       const binding: McpToolBinding = { serviceSlug, toolName };
       const result = await withTimeout(
-        deps.callMcpTool(binding, args),
-        deps.timeoutMs?.mcp ?? 30_000,
+        deps.callMcpTool(binding, args, { signal: deps.signal }),
+        configuredTimeout ?? deps.timeoutMs?.mcp ?? 30_000,
         deps.signal,
       );
       return { result };
@@ -601,6 +609,65 @@ async function runNode(
     }
     case "end":
       return { result: inputs };
+  }
+}
+
+function transientFailure(error: unknown): boolean {
+  const failure = error as {
+    message?: string;
+    code?: string | number;
+    cause?: { code?: string };
+    status?: number;
+    statusCode?: number;
+  };
+  const status =
+    failure?.status ?? failure?.statusCode ??
+    (typeof failure?.code === "number" ? failure.code : undefined);
+  if (status !== undefined) return status === 408 || status === 429 || status >= 500;
+  const code = failure?.code ?? failure?.cause?.code;
+  if (
+    typeof code === "string" &&
+    [
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ETIMEDOUT",
+      "EAI_AGAIN",
+      "UND_ERR_CONNECT_TIMEOUT",
+      "UND_ERR_SOCKET",
+    ].includes(code)
+  )
+    return true;
+  return /fetch failed|network (error|failure)|(?:failed|error) \((?:408|429|5\d\d)\)/i.test(
+    failure?.message ?? "",
+  );
+}
+
+async function runNodeWithPolicy(
+  node: WorkflowNodeInput,
+  inputs: Record<string, unknown>,
+  deps: Parameters<typeof runNode>[2],
+): Promise<NodeExecution> {
+  const policy = configOf(node).retry as { maxRetries?: number; delayMs?: number } | undefined;
+  const retries = ["rag", "graph", "mcp"].includes(node.kind) ? (policy?.maxRetries ?? 0) : 0;
+  for (let attempt = 1; ; attempt++) {
+    if (deps.signal?.aborted) throw new Error("workflow run cancelled");
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    deps.signal?.addEventListener("abort", abort, { once: true });
+    try {
+      const result = await runNode(node, inputs, { ...deps, signal: controller.signal });
+      return { ...result, attempts: attempt };
+    } catch (reason) {
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      Object.assign(error, { attempts: attempt });
+      if (deps.signal?.aborted || attempt > retries || !transientFailure(reason)) throw error;
+    } finally {
+      controller.abort();
+      deps.signal?.removeEventListener("abort", abort);
+    }
+    await delay(Math.min(10000, (policy?.delayMs ?? 500) * 2 ** (attempt - 1)), undefined, {
+      signal: deps.signal,
+    });
   }
 }
 
@@ -681,6 +748,21 @@ export async function executeWorkflow(
   const activeEdges = new Set<string>();
   const statuses = new Map<string, "success" | "error">();
   const outputContext = new Map<string, Record<string, unknown>>();
+  const executeIds = deps.resume ? new Set(deps.resume.executeNodeIds) : null;
+  if (deps.resume) {
+    activeNodes.clear();
+    activeNodes.add(deps.resume.fromNodeId);
+    for (const id of deps.resume.activeEdgeIds) {
+      const edge = validation.edges.find((edge) => edge.id === id);
+      if (!edge) throw new WorkflowValidationError("resume edge is no longer available");
+      activeEdges.add(id);
+      if (executeIds?.has(edge.target)) activeNodes.add(edge.target);
+    }
+    for (const [id, cached] of Object.entries(deps.resume.cachedNodes)) {
+      outputContext.set(id, cached.outputs);
+      statuses.set(id, "success");
+    }
+  }
 
   return runTraced("workflow-run", async (span) => {
     span.update({
@@ -688,6 +770,7 @@ export async function executeWorkflow(
       metadata: {
         nodeCount: String(validation.nodes.length),
         edgeCount: String(validation.edges.length),
+        ...(deps.resume ? { resumeFromNodeId: deps.resume.fromNodeId } : {}),
       },
     });
     try {
@@ -699,8 +782,35 @@ export async function executeWorkflow(
           },
         },
         async () => {
+          if (deps.signal?.aborted) throw new Error("workflow run cancelled");
+          for (const [id, cached] of Object.entries(deps.resume?.cachedNodes ?? {})) {
+            const node = validation.byId.get(id)!;
+            const incomingEdgeIds = validation.incoming
+              .get(id)!
+              .filter((edge) => deps.resume?.activeEdgeIds.includes(edge.id))
+              .map((edge) => edge.id);
+            emit({
+              type: "node_cached",
+              nodeId: id,
+              kind: node.kind,
+              label: node.label,
+              status: "success",
+              inputs: cached.inputs,
+              outputs: cached.outputs,
+              result: cached.result,
+              incomingEdgeIds,
+              metadata: {
+                durationMs: 0,
+                tokenUsage: emptyTokenUsage(),
+                attempts: 0,
+                cached: true,
+                incomingEdgeIds,
+              },
+            });
+          }
           for (const nodeId of validation.order) {
             if (deps.signal?.aborted) throw new Error("workflow run cancelled");
+            if (executeIds && !executeIds.has(nodeId)) continue;
             if (!activeNodes.has(nodeId)) continue;
             const node = validation.byId.get(nodeId)!;
             const incoming = validation.incoming
@@ -712,6 +822,7 @@ export async function executeWorkflow(
             emit({
               type: "node_start",
               nodeId,
+              incomingEdgeIds: incoming.map((edge) => edge.id),
               label: node.label ?? node.kind,
               kind: node.kind,
             });
@@ -725,7 +836,12 @@ export async function executeWorkflow(
             try {
               const inputs = resolveInputs(node, request, outputContext);
               resolvedInputs = inputs;
-              const execution = await runNode(node, inputs, deps);
+              const execution = await runNodeWithPolicy(node, inputs, deps);
+              logDebugDuration("workflow.node.done", startedAtMs, {
+                nodeId,
+                kind: node.kind,
+                status: "success",
+              });
               const result = execution.result;
               nodeObservation.update({
                 input: slimValue(inputs),
@@ -775,6 +891,7 @@ export async function executeWorkflow(
                 metadata: {
                   durationMs: Date.now() - startedAtMs,
                   tokenUsage: normalizeTokenUsage(execution.tokenUsage),
+                  attempts: execution.attempts,
                 },
               });
               const outgoing = validation.outgoing.get(nodeId)!;
@@ -794,6 +911,12 @@ export async function executeWorkflow(
               }
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
+              logDebugDuration("workflow.node.done", startedAtMs, {
+                nodeId,
+                kind: node.kind,
+                status: "error",
+                error: message,
+              });
               nodeObservation.update({ level: "ERROR", statusMessage: message });
               statuses.set(nodeId, "error");
               const failedPrompt = (error as { prompt?: unknown })?.prompt;
@@ -831,6 +954,7 @@ export async function executeWorkflow(
                 metadata: {
                   durationMs: Date.now() - startedAtMs,
                   tokenUsage: emptyTokenUsage(),
+                  attempts: (error as { attempts?: number })?.attempts ?? 1,
                 },
               });
               throw new WorkflowNodeError(nodeId, message);
@@ -898,10 +1022,11 @@ export async function executeWorkflowNodeTest(
   const finish = (
     value: Omit<WorkflowNodeTestResult, "nodeId" | "inputs" | "metadata"> & {
       tokenUsage?: Partial<WorkflowTokenUsage>;
+      attempts?: number;
     },
   ): WorkflowNodeTestResult => {
     const finishedAtMs = Date.now();
-    const { tokenUsage, ...result } = value;
+    const { tokenUsage, attempts, ...result } = value;
     return {
       nodeId: request.node.id,
       inputs,
@@ -912,6 +1037,7 @@ export async function executeWorkflowNodeTest(
         finishedAt: new Date(finishedAtMs).toISOString(),
         durationMs: Math.max(0, finishedAtMs - startedAtMs),
         tokenUsage: normalizeTokenUsage(tokenUsage),
+        attempts,
       },
     };
   };
@@ -932,7 +1058,11 @@ export async function executeWorkflowNodeTest(
           throw new WorkflowNodeError(request.node.id, `required input ${binding.name} is missing`);
         }
       }
-      const execution = await runNode(request.node, inputs, resolvedDependencies(dependencies));
+      const execution = await runNodeWithPolicy(
+        request.node,
+        inputs,
+        resolvedDependencies(dependencies),
+      );
       const outputs: Record<string, unknown> = {};
       for (const output of outputsOf(request.node)) {
         outputs[output.name] = selectValue(output.selector, execution.result, inputs);
@@ -953,6 +1083,7 @@ export async function executeWorkflowNodeTest(
         result: execution.result,
         outputs,
         tokenUsage: execution.tokenUsage ?? emptyTokenUsage(),
+        attempts: execution.attempts,
       });
       span.update({ output: result });
       return result;
@@ -964,6 +1095,7 @@ export async function executeWorkflowNodeTest(
         result: null,
         outputs: {},
         error: message,
+        attempts: (error as { attempts?: number })?.attempts ?? 1,
       });
       span.update({ level: "ERROR", output: result });
       return result;

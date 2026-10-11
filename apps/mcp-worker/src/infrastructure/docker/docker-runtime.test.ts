@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
 import type { ToolExecutionJob } from "@open-agent-tools/mcp-contracts";
@@ -107,4 +107,78 @@ test("RUN-003 kills a container at its wall timeout", async () => {
     (result._meta?.["open-agent-tools/error"] as { code?: string } | undefined)?.code,
     "TIMEOUT",
   );
+});
+
+test("uses the published network and resource limits for an opted-in Tool", async () => {
+  let createdOptions: ContainerCreateOptions | undefined;
+  const container: DockerContainer = {
+    start: async () => {
+      assert.ok(createdOptions);
+      await writeFile(
+        `${outputMount(createdOptions)}/output.json`,
+        JSON.stringify({ content: [], isError: false }),
+      );
+    },
+    wait: async () => ({ StatusCode: 0 }),
+    kill: async () => undefined,
+    remove: async () => undefined,
+  };
+  const runtime = new DockerToolContainerRuntime(
+    {
+      createContainer: async (options) => {
+        createdOptions = options;
+        return container;
+      },
+    },
+    { imageRepository: "registry.example/mcp-tools" },
+  );
+  const result = await runtime.execute({
+    ...job,
+    limits: { timeoutMs: 15_000, memoryMb: 512, cpuMillis: 500, network: "bridge" },
+  });
+
+  assert.equal(result.isError, false);
+  assert.equal(createdOptions?.HostConfig.NetworkMode, "bridge");
+  assert.equal(createdOptions?.HostConfig.Memory, 512 * 1024 * 1024);
+  assert.equal(createdOptions?.HostConfig.NanoCpus, 500_000_000);
+  assert.equal(createdOptions?.User, "node");
+  assert.equal(createdOptions?.HostConfig.ReadonlyRootfs, true);
+  assert.deepEqual(createdOptions?.HostConfig.CapDrop, ["ALL"]);
+});
+
+test("injects only service variables into Docker Env and keeps them out of runner input", async () => {
+  let createdOptions: ContainerCreateOptions | undefined;
+  const environment = { TAVILY_API_KEY: "secret=token", EMPTY: "" };
+  const container: DockerContainer = {
+    start: async () => {
+      assert.ok(createdOptions);
+      const inputBinding = createdOptions.HostConfig.Binds.find((value) =>
+        value.endsWith(":/run/tool/input.json:ro"),
+      )!;
+      const input = await readFile(
+        inputBinding.slice(0, -":/run/tool/input.json:ro".length),
+        "utf8",
+      );
+      assert.equal(input.includes(environment.TAVILY_API_KEY), false);
+      await writeFile(
+        `${outputMount(createdOptions)}/output.json`,
+        JSON.stringify({ content: [] }),
+      );
+    },
+    wait: async () => ({ StatusCode: 0 }),
+    kill: async () => undefined,
+    remove: async () => undefined,
+  };
+  const runtime = new DockerToolContainerRuntime(
+    {
+      createContainer: async (options) => {
+        createdOptions = options;
+        return container;
+      },
+    },
+    { imageRepository: "registry.example/mcp-tools" },
+  );
+  await runtime.execute(job, environment);
+  assert.deepEqual(createdOptions?.Env, ["TAVILY_API_KEY=secret=token", "EMPTY="]);
+  await assert.rejects(runtime.execute(job, { NODE_OPTIONS: "--eval=bad" }));
 });

@@ -3,7 +3,7 @@ import type { ImConfig } from "../types.js";
 import { askChat } from "../chatClient.js";
 import { chunkText } from "../text.js";
 import { parseFeishuMessageEvent } from "./message.js";
-import { logTrace } from "../../trace.js";
+import { logDebugDuration, logTrace } from "../../trace.js";
 
 export interface FeishuBotHandle {
   stop: () => void;
@@ -71,6 +71,7 @@ export async function startFeishuBot(config: ImConfig): Promise<FeishuBotHandle>
       text: event.text.slice(0, 120),
     });
 
+    const askChatStartedAt = Date.now();
     try {
       const answer = await askChat({
         baseUrl: config.chatBaseUrl,
@@ -78,6 +79,10 @@ export async function startFeishuBot(config: ImConfig): Promise<FeishuBotHandle>
         sessionId: `feishu:${event.chatId}`,
         sources: config.ragSources,
         topK: config.ragTopK,
+      });
+      logDebugDuration("im.feishu.ask_chat", askChatStartedAt, {
+        chatId: event.chatId,
+        contentLength: answer.content.length,
       });
       const parts = chunkText(answer.content);
       if (parts.length === 0) {

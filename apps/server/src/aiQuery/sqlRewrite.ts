@@ -1,6 +1,7 @@
 import { DTMS_TABLE_NAMES, moduleOfTable, type DtmsModule } from "./dtmsCatalog.js";
-import { SqlGuardError } from "./sqlGuard.js";
+import { SqlGuardError, validateDtmsQuerySql } from "./sqlGuard.js";
 import { PermissionError } from "./permission.js";
+import { logDebugDuration } from "../trace.js";
 
 const UNION = /\bunion\b/i;
 const FROM_JOIN = /\b(?:from|join)\b/i;
@@ -141,4 +142,24 @@ export function rewriteSqlWithAuth(
   }
 
   return { sql: out, params };
+}
+
+/** 生成 SQL 与权限改写后的最终 SQL 都必须通过同一组硬护栏。 */
+export function rewriteAndValidateSqlWithAuth(
+  sql: string,
+  industries: string[],
+  orgNos: string[],
+  allowedModules?: readonly DtmsModule[],
+): RewrittenSql {
+  const startedAt = Date.now();
+  validateDtmsQuerySql(sql);
+  const rewritten = rewriteSqlWithAuth(sql, industries, orgNos, allowedModules);
+  validateDtmsQuerySql(rewritten.sql);
+  // 用 params.length 而不是重新 collectTableRefs(sql),避免非 debug 场景下白白多跑一次正则解析。
+  logDebugDuration("ai_query.sql_rewrite", startedAt, {
+    inputLength: sql.length,
+    outputLength: rewritten.sql.length,
+    params: rewritten.params.length,
+  });
+  return rewritten;
 }

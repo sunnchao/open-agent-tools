@@ -165,7 +165,7 @@ export const ExecutionLimitsSchema = z
     timeoutMs: z.number().int().min(1).max(120_000),
     memoryMb: z.number().int().min(32).max(4_096),
     cpuMillis: z.number().int().min(10).max(8_000),
-    network: z.literal("none"),
+    network: z.enum(["none", "bridge"]),
   })
   .strict();
 

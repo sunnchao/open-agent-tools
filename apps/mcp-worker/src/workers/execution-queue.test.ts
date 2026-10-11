@@ -60,3 +60,45 @@ test("RUN-005 rejects malformed container output", async () => {
 
   await assert.rejects(new ToolExecutionProcessor(runtime).process(job), /invalid MCP result/);
 });
+
+test("loads current environment per service at execution time without adding secrets to jobs", async () => {
+  const environments: Record<string, Record<string, string>> = {
+    "service-1": { TAVILY_API_KEY: "first" },
+    "service-2": { TAVILY_API_KEY: "other" },
+  };
+  const received: Array<Record<string, string> | undefined> = [];
+  const runtime: ToolContainerRuntime = {
+    execute: async (_input, environment) => {
+      received.push(environment);
+      return { content: [] };
+    },
+  };
+  const processor = new ToolExecutionProcessor(runtime, async (id) => environments[id]!);
+  await processor.process(job);
+  environments["service-1"] = { TAVILY_API_KEY: "rotated" };
+  await processor.process(job);
+  await processor.process({ ...job, serviceId: "service-2" });
+  assert.deepEqual(received, [
+    { TAVILY_API_KEY: "first" },
+    { TAVILY_API_KEY: "rotated" },
+    { TAVILY_API_KEY: "other" },
+  ]);
+  assert.equal(Object.hasOwn(job, "environment"), false);
+});
+
+test("does not execute the Tool if its environment cannot be loaded", async () => {
+  let calls = 0;
+  const processor = new ToolExecutionProcessor(
+    {
+      execute: async () => {
+        calls += 1;
+        return { content: [] };
+      },
+    },
+    async () => {
+      throw new Error("Environment unavailable");
+    },
+  );
+  await assert.rejects(processor.process(job), /Environment unavailable/);
+  assert.equal(calls, 0);
+});
