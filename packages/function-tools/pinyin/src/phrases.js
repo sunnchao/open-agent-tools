@@ -1,0 +1,21 @@
+// Place-name and common-word readings that differ from the character defaults.
+export const PHRASES = {
+  重庆: "chong2 qing4",
+  东莞: "dong1 guan3",
+  丽水: "li2 shui3",
+  成都: "cheng2 du1",
+  济南: "ji3 nan2",
+  厦门: "xia4 men2",
+  蚌埠: "beng4 bu4",
+  六安: "lu4 an1",
+  葫芦岛: "hu2 lu5 dao3",
+  西藏: "xi1 zang4",
+  内蒙古: "nei4 meng3 gu3",
+  番禺: "pan1 yu2",
+  荥阳: "xing2 yang2",
+  铅山: "yan2 shan1",
+  柏林: "bo2 lin2",
+  枞阳: "zong1 yang2",
+  大城: "dai4 cheng2",
+  东阿: "dong1 e1",
+};

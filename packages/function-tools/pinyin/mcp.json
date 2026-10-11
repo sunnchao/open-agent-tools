@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "runtime": { "name": "nodejs", "version": "20" },
+  "entry": "src/index.js",
+  "tools": [
+    {
+      "name": "chinese_to_pinyin",
+      "description": "Convert Chinese characters to pinyin. For example, 北京 returns beijing. Non-Chinese characters are preserved.",
+      "handler": "chineseToPinyin",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Chinese text to convert, such as a city name. Example: 北京."
+          },
+          "separator": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 8,
+            "default": "",
+            "description": "Separator inserted between pinyin syllables. Defaults to an empty string, so 北京 returns beijing."
+          },
+          "tone": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether to append tone numbers. Defaults to false. When true, 北京 returns bei3jing1."
+          }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "prompts": [],
+  "limits": {
+    "timeoutMs": 5000,
+    "memoryMb": 128,
+    "cpuMillis": 200,
+    "network": "none"
+  }
+}

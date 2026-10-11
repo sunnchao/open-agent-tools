@@ -7,9 +7,9 @@ MCP 工具包，作为 function tool 暴露给 AI 调用。
 > 自包含 `mcp.json + package.json + package-lock.json + src/`，由本目录的交互式
 > `build-package` 统一打包，走同一条控制面发布链路。
 >
-> ⚠️ **数据库类工具注意**：Worker 执行容器 `network: "none"` 且不注入环境变量，
-> 工具容器无法外连数据库。若需要 SQL 查询能力，当前方案是 Agent 侧（apps/server）
-> 内置 `query_sql` 直连数据库，见 `apps/server/src/function_tools/sqlQueryBuiltin.ts`。
+> **联网工具**：需要外部 API 或数据库的工具应声明 `limits.network: "bridge"`，
+> 并在 Studio 的服务环境变量中配置连接凭证。`none` 模式禁止联网；
+> 运行限制也可在代码包检查后的预览面板修改。
 
 工具包是自包含的 ZIP 交付物：`mcp.json + package.json + package-lock.json + src/`，
 由 MCP 控制面发布、Worker 构建为容器镜像、Gateway 鉴权后执行。

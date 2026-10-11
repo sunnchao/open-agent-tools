@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "runtime": { "name": "nodejs", "version": "20" },
+  "entry": "src/index.js",
+  "tools": [
+    {
+      "name": "web_search",
+      "description": "Search the public web through the configured Tavily proxy and return the answer plus source results.",
+      "handler": "webSearch",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400,
+            "description": "The search query."
+          },
+          "topic": {
+            "type": "string",
+            "enum": ["general", "news", "finance"],
+            "default": "general",
+            "description": "Search topic. Defaults to general."
+          },
+          "search_depth": {
+            "type": "string",
+            "enum": ["basic", "advanced"],
+            "default": "basic",
+            "description": "Search depth. Defaults to basic."
+          },
+          "include_answer": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to include a generated answer. Defaults to true."
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5,
+            "description": "Maximum number of source results, from 1 to 10. Defaults to 5."
+          }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "prompts": [],
+  "limits": {
+    "timeoutMs": 30000,
+    "memoryMb": 256,
+    "cpuMillis": 500,
+    "network": "bridge"
+  }
+}

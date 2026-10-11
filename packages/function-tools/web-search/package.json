@@ -1,0 +1,20 @@
+{
+  "name": "web-search",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tavily proxy web search MCP tool",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/stdio.js",
+    "local": "node scripts/local.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
