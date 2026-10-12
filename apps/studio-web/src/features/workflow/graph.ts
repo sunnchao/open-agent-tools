@@ -1,10 +1,15 @@
-import { hasRunDeclarations, runVariables } from "@open-agent-tools/workflow-contracts";
+import {
+  hasRunDeclarations,
+  runVariables,
+  effectiveNodeConfig,
+} from "@open-agent-tools/workflow-contracts";
+import { branchIdOf, restoreBranchEdge } from "./condition.js";
 import { variableNodes } from "./variables.js";
 import { MarkerType, type Edge } from "@xyflow/react";
 import { defaultConfig, migrateNodeData } from "./model.js";
 import type { NodeKind, WorkflowConfigValue } from "./model.js";
 import { palette } from "./palette.js";
-import type { WorkflowNode, WorkflowSnapshot } from "./types.js";
+import type { WorkflowNode, WorkflowSnapshot, WorkflowEdge } from "./types.js";
 
 export const storageKey = "open-agent-tools.workflow.v1";
 export const historyLimit = 50;
@@ -26,12 +31,15 @@ export function createNode(
       label: definition.label,
       description: definition.description,
       status: "idle",
-      config: { ...defaultConfig(kind), ...config },
+      config:
+        kind === "condition" && config !== undefined
+          ? effectiveNodeConfig(kind, config)
+          : { ...defaultConfig(kind), ...config },
     },
   };
 }
 
-export function createEdge(source: string, target: string): Edge {
+export function createEdge(source: string, target: string): WorkflowEdge {
   return {
     id: `edge-${source}-${target}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     source,
@@ -56,16 +64,28 @@ export function hydrateWorkflowSnapshot(saved: WorkflowSnapshot): WorkflowSnapsh
   let nodes = saved.nodes.map((node) => ({ ...node, data: migrateNodeData(node.data, node.id) }));
   if (!hasRunDeclarations(variableNodes(nodes))) {
     const variables = runVariables(variableNodes(nodes));
-    nodes = nodes.map((node) => node.data.kind === "start" ? { ...node, data: { ...node.data, config: { ...node.data.config, runVariables: variables } } } : node);
+    nodes = nodes.map((node) =>
+      node.data.kind === "start"
+        ? {
+            ...node,
+            data: { ...node.data, config: { ...node.data.config, runVariables: variables } },
+          }
+        : node,
+    );
   }
   return {
     ...saved,
     nodes,
-    edges: saved.edges.map((edge) => ({
-      ...edge,
-      type: "studio",
-      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
-    })),
+    edges: saved.edges.map((edge) =>
+      restoreBranchEdge(
+        {
+          ...edge,
+          type: "studio",
+          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+        },
+        nodes,
+      ),
+    ),
   };
 }
 
@@ -92,6 +112,7 @@ export function snapshotGraph(
       target: edge.target,
       type: "studio",
       ...(edge.label !== undefined ? { label: edge.label } : {}),
+      ...(branchIdOf(edge) !== undefined ? { branchId: branchIdOf(edge) } : {}),
       markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
     })),
   };
@@ -102,7 +123,12 @@ export function snapshotKey(snapshot: WorkflowSnapshot): string {
 }
 
 export const initialNodes: WorkflowNode[] = [
-  createNode("start-1", "start", { x: 80, y: 260 }, { runVariables: [{ name: "query", type: "string", required: true }] }),
+  createNode(
+    "start-1",
+    "start",
+    { x: 80, y: 260 },
+    { runVariables: [{ name: "query", type: "string", required: true }] },
+  ),
   createNode("input-1", "input", { x: 350, y: 260 }),
   createNode(
     "rag-1",

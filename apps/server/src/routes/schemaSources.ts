@@ -34,6 +34,10 @@ function sourcePayload(body: unknown): Partial<SchemaSourceInput> {
     ...(typeof value?.connectionString === "string"
       ? { connectionString: value.connectionString }
       : {}),
+    ...(typeof value?.host === "string" ? { host: value.host } : {}),
+    ...(value?.port !== undefined ? { port: value.port as number } : {}),
+    ...(typeof value?.username === "string" ? { username: value.username } : {}),
+    ...(typeof value?.password === "string" ? { password: value.password } : {}),
     ...(typeof value?.databaseName === "string" || value?.databaseName === null
       ? { databaseName: value.databaseName as string | null }
       : {}),
@@ -198,22 +202,7 @@ schemaSourcesRouter.get(
 
 schemaSourcesRouter.post("/api/admin/schema-sources/test", async (req: Request, res: Response) => {
   try {
-    const value = req.body as
-      | {
-          connectionString?: unknown;
-          connector?: unknown;
-          databaseName?: unknown;
-          schemaName?: unknown;
-        }
-      | undefined;
-    const result = await probeSchemaSource({
-      connectionString: typeof value?.connectionString === "string" ? value.connectionString : "",
-      ...(typeof value?.connector === "string"
-        ? { connector: value.connector as SchemaSourceConnector }
-        : {}),
-      databaseName: typeof value?.databaseName === "string" ? value.databaseName : undefined,
-      schemaName: typeof value?.schemaName === "string" ? value.schemaName : undefined,
-    });
+    const result = await probeSchemaSource(sourcePayload(req.body));
     res.json({ ok: true, ...result });
   } catch (error) {
     res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
@@ -224,7 +213,10 @@ schemaSourcesRouter.post(
   "/api/admin/schema-sources/:id/test",
   async (req: Request, res: Response) => {
     try {
-      const result = await probeStoredSchemaSource(req.params.id as string);
+      const result = await probeStoredSchemaSource(
+        req.params.id as string,
+        sourcePayload(req.body),
+      );
       res.json({ ok: true, ...result });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

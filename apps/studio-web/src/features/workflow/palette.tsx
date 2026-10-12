@@ -22,7 +22,12 @@ export const palette: PaletteItem[] = [
   { kind: "llm", label: "LLM", description: "生成或理解文本", group: "知识与模型" },
   { kind: "mcp", label: "MCP Tool", description: "调用 MCP 工具", group: "工具与逻辑" },
   { kind: "http", label: "HTTP 请求", description: "调用外部 API", group: "工具与逻辑" },
-  { kind: "condition", label: "条件分支", description: "按表达式分流", group: "工具与逻辑" },
+  {
+    kind: "condition",
+    label: "条件分支",
+    description: "按 IF / ELIF / ELSE 条件分流",
+    group: "工具与逻辑",
+  },
   { kind: "end", label: "结束", description: "定义最终输出", group: "输出" },
 ];
 
@@ -45,7 +50,7 @@ export function nodeColor(kind: NodeKind): string {
   if (kind === "mcp") return "#16806a";
   if (kind === "http") return "#b46438";
   if (kind === "sql") return "#9a651f";
-  if (kind === "condition") return "#7a5da6";
+  if (kind === "condition") return "#06abc5";
   if (kind === "llm") return "#356bc4";
   return "#69717d";
 }

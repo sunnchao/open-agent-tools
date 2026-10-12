@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { conditionFields } from "./condition.js";
 
 export const nodeKindSchema = z.enum([
   "start",
@@ -135,7 +136,7 @@ export const nodeConfigSchemas = {
       sslVerify: z.boolean().optional(),
     })
     .passthrough(),
-  condition: z.object({ ...bindings, expression: z.string().optional() }).passthrough(),
+  condition: z.object({ ...bindings, ...conditionFields }).passthrough(),
   end: z.object(bindings).passthrough(),
 } satisfies Record<NodeKind, z.ZodType>;
 
@@ -282,6 +283,10 @@ export const workflowGraphSchema = z
           source: z.string().min(1),
           target: z.string().min(1),
           label: z.enum(["true", "false"]).optional(),
+          branchId: z
+            .string()
+            .regex(/^[A-Za-z0-9_-]{1,200}$/)
+            .optional(),
         }),
       )
       .max(2000),

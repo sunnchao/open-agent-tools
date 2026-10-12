@@ -9,7 +9,9 @@ import {
   fetchQueryAudits,
   pendingQuerySteps,
   runObservatoryQuery,
+  saveSchemaSource,
   syncSchemaSource,
+  testSchemaSource,
   walkChain,
   type GraphEdge,
   type GraphNode,
@@ -203,6 +205,65 @@ describe("observatory api", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(fetchSchemaSources()).resolves.toEqual([{ id: "a", name: "A" }]);
     expect(fetchMock).toHaveBeenCalledWith("/api/schema-sources", undefined);
+  });
+
+  it("saves individual database connection fields to the source endpoint", async () => {
+    const input = {
+      id: "a/b",
+      name: "Analysis",
+      connector: "postgresql" as const,
+      host: "pg.internal",
+      port: 5433,
+      username: "reader",
+      password: "",
+      databaseName: "analytics",
+      schemaName: "reporting",
+      tableFilter: [],
+      semanticProfile: "generic" as const,
+      enabled: true,
+    };
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ source: { id: "a/b" } }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await saveSchemaSource(input);
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/schema-sources/a%2Fb", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  });
+
+  it("tests unsaved connection fields for existing and new sources", async () => {
+    const input = {
+      connector: "mysql" as const,
+      host: "new.internal",
+      port: 3307,
+      username: "reader",
+      password: "",
+      databaseName: "ops",
+    };
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, database: "ops", version: "8.0" }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await testSchemaSource({ ...input, id: "a/b" });
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/admin/schema-sources/a%2Fb/test", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...input, id: "a/b" }),
+    });
+    await testSchemaSource(input);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/admin/schema-sources/test",
+      expect.objectContaining({ body: JSON.stringify(input) }),
+    );
   });
 
   it("uses source-scoped admin endpoints for duplicate, sync, and catalog preview", async () => {

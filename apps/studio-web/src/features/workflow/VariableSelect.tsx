@@ -8,12 +8,14 @@ export function VariableSelect({
   onChange,
   label,
   placeholder = "选择变量",
+  autoFocus = false,
 }: {
   value?: string;
   options: VariableOption[];
   onChange: (value: string) => void;
   label: string;
   placeholder?: string;
+  autoFocus?: boolean;
 }) {
   const invalid = Boolean(value && !options.some((option) => option.value === value));
   let invalidLabel = value ?? "";
@@ -40,6 +42,7 @@ export function VariableSelect({
   return (
     <Select
       className="workflow-variable-select"
+      autoFocus={autoFocus}
       aria-label={label}
       value={value || null}
       placeholder={placeholder}

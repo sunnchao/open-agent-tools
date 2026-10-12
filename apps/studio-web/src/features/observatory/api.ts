@@ -163,6 +163,9 @@ export interface SchemaSourceOption {
 
 export interface SchemaSourceMetadata extends SchemaSourceOption {
   endpoint: string;
+  host: string;
+  port: number;
+  username: string;
   tableFilter: string[];
   enabled: boolean;
   hasCredential: boolean;
@@ -189,6 +192,10 @@ export interface SchemaSourceDraft {
   name: string;
   connector: SchemaSourceConnector;
   connectionString?: string;
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
   databaseName: string;
   schemaName: string;
   tableFilter: string[];
@@ -266,6 +273,10 @@ export function testSchemaSource(input: {
   id?: string;
   connector?: SchemaSourceConnector;
   connectionString?: string;
+  host?: string;
+  port?: number;
+  username?: string;
+  password?: string;
   databaseName?: string;
   schemaName?: string;
 }): Promise<{ ok: true; database: string; version: string }> {

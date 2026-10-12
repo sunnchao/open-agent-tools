@@ -5,6 +5,8 @@ import {
   type VariableIssue,
   type VariableNode,
   referenceRoot,
+  conditionCases,
+  conditionReference,
 } from "@open-agent-tools/workflow-contracts";
 import { nodeInputs, nodeOutputs, type NodeInputBinding } from "./model.js";
 import type { WorkflowNode } from "./types.js";
@@ -146,6 +148,32 @@ export function repairVariableReference(
   const target = nodes.find((node) => node.id === issue.nodeId);
   if (!target || typeof issue.reference !== "string") return nodes;
 
+  if (issue.code === "condition-reference") {
+    if (!nodeInputs(target.data).some((input) => input.name === referenceRoot(replacement)))
+      return nodes;
+    return nodes.map((node) =>
+      node.id !== target.id
+        ? node
+        : {
+            ...node,
+            data: {
+              ...node.data,
+              config: {
+                ...node.data.config,
+                cases: conditionCases(node.data.config).map((item) => ({
+                  ...item,
+                  rules: item.rules.map((rule) =>
+                    conditionReference(rule.variable) === issue.reference
+                      ? { ...rule, variable: replacement }
+                      : rule,
+                  ),
+                })),
+              },
+            },
+          },
+    );
+  }
+
   if (issue.code === "run-reference") {
     const declared = new Set(
       runVariables(variableNodes(nodes))
@@ -277,6 +305,16 @@ export function renameVariable(
           }
         } else config[field] = replace(value);
       }
+      if (node.data.kind === "condition" && Array.isArray(config.cases))
+        config.cases = conditionCases(config).map((item) => ({
+          ...item,
+          rules: item.rules.map((rule) => {
+            const reference = conditionReference(rule.variable);
+            return referenceRoot(reference) === before
+              ? { ...rule, variable: after + reference.slice(before.length) }
+              : rule;
+          }),
+        }));
       config.outputs = nodeOutputs(node.data).map((output) => {
         const roots = [
           "$inputs",

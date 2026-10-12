@@ -2,6 +2,7 @@ import type { Edge } from "@xyflow/react";
 import { createEdge, snapshotGraph } from "./graph.js";
 import type { NodeInputBinding } from "./model.js";
 import type { WorkflowNode } from "./types.js";
+import { branchIdOf, restoreBranchEdge } from "./condition.js";
 
 export function cloneSubgraph(
   nodes: WorkflowNode[],
@@ -53,9 +54,15 @@ export function cloneSubgraph(
   });
   const links = edges
     .filter((edge) => ids.has(edge.target) && (ids.has(edge.source) || includeIncoming))
-    .map((edge) => ({
-      ...createEdge(ids.get(edge.source) ?? edge.source, ids.get(edge.target)!),
-      ...(edge.label !== undefined ? { label: edge.label } : {}),
-    }));
+    .map((edge) =>
+      restoreBranchEdge(
+        {
+          ...createEdge(ids.get(edge.source) ?? edge.source, ids.get(edge.target)!),
+          ...(edge.label !== undefined ? { label: edge.label } : {}),
+          ...(branchIdOf(edge) ? { branchId: branchIdOf(edge) } : {}),
+        },
+        copies,
+      ),
+    );
   return { nodes: copies, edges: links };
 }

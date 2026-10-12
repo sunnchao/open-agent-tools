@@ -1,9 +1,10 @@
 import type { VariableNode } from "./index.js";
 import { effectiveNodeConfig } from "./graph.js";
+import { selectedConditionEdges } from "./condition.js";
 
 export interface ResumeGraph {
   nodes: VariableNode[];
-  edges: Array<{ id?: string; source: string; target: string; label?: string }>;
+  edges: Array<{ id?: string; source: string; target: string; label?: string; branchId?: string }>;
 }
 export interface CachedWorkflowNode {
   outputs: Record<string, unknown>;
@@ -87,7 +88,12 @@ export function prepareResumeCheckpoint(
     canonical(
       graph.edges
         .filter((edge) => edge[direction] === id)
-        .map((edge) => ({ source: edge.source, target: edge.target, label: edge.label ?? "" }))
+        .map((edge) => ({
+          source: edge.source,
+          target: edge.target,
+          label: edge.label ?? "",
+          branchId: edge.branchId ?? "",
+        }))
         .sort((a, b) => canonical(a).localeCompare(canonical(b))),
     );
   if (connections(current, fromNodeId, "target") !== connections(previous, fromNodeId, "target")) {
@@ -152,10 +158,7 @@ export function prepareResumeCheckpoint(
     reused.push([id, cached]);
     let selected = outgoing(id);
     if (node.kind === "condition") {
-      if (typeof cached.result !== "boolean")
-        throw new Error(`条件节点 ${id} 缓存不完整，请先完整运行`);
-      const branches = selected.filter((edge) => edge.label === String(cached.result));
-      selected = branches.length ? branches : selected.filter((edge) => !edge.label);
+      selected = selectedConditionEdges(node.config ?? {}, cached.result, selected);
     }
     for (const edge of selected) {
       active.add(edge.target);

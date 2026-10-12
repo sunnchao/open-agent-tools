@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { createApp } from "../app.js";
 import { closeDb } from "../db.js";
+import { getSchemaSource } from "../schemaSources/store.js";
 
 let server: Server;
 let origin: string;
@@ -90,6 +91,83 @@ describe("schema source API", () => {
     assert.equal(body.source.connector, "postgresql");
     assert.equal(body.source.endpoint, "pg.internal:5432/analytics#reporting");
     assert.equal(body.source.schemaName, "reporting");
+  });
+
+  it("creates and edits individual fields while retaining the stored password", async () => {
+    const response = await fetch(`${origin}/api/admin/schema-sources`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Fields",
+        connector: "mysql",
+        host: "db.internal",
+        port: 3307,
+        username: "reader",
+        password: "private@password",
+        databaseName: "ops",
+      }),
+    });
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as { source: Record<string, unknown> };
+    const id = created.source.id as string;
+    assert.equal(created.source.host, "db.internal");
+    assert.equal(created.source.port, 3307);
+    assert.equal(created.source.username, "reader");
+    assert.equal("password" in created.source, false);
+    assert.equal("connectionString" in created.source, false);
+    const editedResponse = await fetch(`${origin}/api/admin/schema-sources/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        host: "new.internal",
+        port: 3308,
+        username: "reader2",
+        password: "",
+        databaseName: "new_ops",
+      }),
+    });
+    assert.equal(editedResponse.status, 200);
+    const edited = (await editedResponse.json()) as { source: Record<string, unknown> };
+    assert.equal(edited.source.endpoint, "new.internal:3308/new_ops");
+    const url = new URL(getSchemaSource(id)!.connectionString);
+    assert.equal(decodeURIComponent(url.password), "private@password");
+    assert.equal(url.username, "reader2");
+    const publicList = (await fetch(`${origin}/api/schema-sources`).then((result) =>
+      result.json(),
+    )) as { sources: Array<Record<string, unknown>> };
+    assert.equal("username" in publicList.sources[0]!, false);
+    assert.equal("host" in publicList.sources[0]!, false);
+  });
+
+  it("validates the current test draft without saving it", async () => {
+    const previous = getSchemaSource(sourceId)!.connectionString;
+    const response = await fetch(`${origin}/api/admin/schema-sources/${sourceId}/test`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ port: 65536 }),
+    });
+    assert.equal(response.status, 502);
+    const body = (await response.json()) as { error: string };
+    assert.match(body.error, /端口/);
+    assert.equal(getSchemaSource(sourceId)!.connectionString, previous);
+  });
+
+  it("rejects invalid ports from JSON payloads", async () => {
+    for (const port of [0, 65536, "3306"]) {
+      const response = await fetch(`${origin}/api/admin/schema-sources`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Invalid",
+          host: "db.internal",
+          port,
+          username: "reader",
+          databaseName: "ops",
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.match(((await response.json()) as { error: string }).error, /端口/);
+    }
   });
 
   it("protects the default source from deletion", async () => {

@@ -67,6 +67,22 @@ export function NodeTestResultPanel({
           <Typography.Text strong>{usage.totalTokens} Tokens</Typography.Text>
         </Typography.Text>
       </Flex>
+      {result.metadata.selectedBranchLabel && (
+        <Alert
+          className="condition-branch-result"
+          type="success"
+          showIcon
+          title={`命中分支：${result.metadata.selectedBranchLabel}`}
+        />
+      )}
+      {result.metadata.warnings?.map((warning, index) => (
+        <Alert
+          key={index}
+          type="warning"
+          showIcon
+          title={`${warning.caseLabel ?? warning.caseId} 条件 ${warning.ruleIndex + 1}：${warning.message}`}
+        />
+      ))}
       {result.error ? (
         <Alert className="node-test-error" type="error" title={result.error} showIcon />
       ) : null}

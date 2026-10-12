@@ -3,6 +3,11 @@ import { createMysqlPool } from "@open-agent-tools/database/mysql";
 import { createPostgresPool } from "@open-agent-tools/database/postgres";
 import { openDb } from "../db.js";
 import { decryptConfigSecret, encryptConfigSecret } from "../providers/crypto.js";
+import {
+  buildSchemaSourceConnectionString,
+  schemaSourceConnectionMetadata,
+  type SchemaSourceConnectionInput,
+} from "./connection.js";
 
 export type SchemaSourceConnector = "mysql" | "postgresql";
 export type SchemaSemanticProfile = "generic" | "oneapi";
@@ -13,6 +18,9 @@ export interface SchemaSource {
   name: string;
   connector: SchemaSourceConnector;
   endpoint: string;
+  host: string;
+  port: number;
+  username: string;
   databaseName: string | null;
   schemaName: string | null;
   tableFilter: string[];
@@ -34,12 +42,10 @@ export interface SchemaSourceWithSecret extends SchemaSource {
   connectionString: string;
 }
 
-export interface SchemaSourceInput {
+export interface SchemaSourceInput extends SchemaSourceConnectionInput {
   id?: string;
   name: string;
   connector?: SchemaSourceConnector;
-  connectionString?: string;
-  databaseName?: string | null;
   schemaName?: string | null;
   tableFilter?: string[];
   semanticProfile?: SchemaSemanticProfile;
@@ -158,7 +164,7 @@ function rowToSource(
     name: row.name,
     connector,
     endpoint: endpointOf(connectionString, row.database_name, row.schema_name),
-    databaseName: row.database_name,
+    ...schemaSourceConnectionMetadata(connectionString, row.database_name),
     schemaName: row.schema_name,
     tableFilter: parseFilters(row.table_filter_json),
     semanticProfile: isProfile(row.semantic_profile) ? row.semantic_profile : "generic",
@@ -220,7 +226,7 @@ function environmentSource(): SchemaSourceWithSecret | null {
     name: process.env.SCHEMA_SOURCE_NAME?.trim() || "环境变量数据源",
     connector,
     endpoint: endpointOf(normalized, databaseName, schemaName),
-    databaseName,
+    ...schemaSourceConnectionMetadata(normalized, databaseName),
     schemaName,
     tableFilter: normalizeFilters(process.env.SCHEMA_SOURCE_TABLE_FILTER?.split(",")),
     semanticProfile: isProfile(process.env.SCHEMA_SOURCE_PROFILE)
@@ -289,7 +295,10 @@ export function createSchemaSource(input: SchemaSourceInput): SchemaSource {
   const connector =
     input.connector ?? connectorForConnectionString(input.connectionString ?? "") ?? "mysql";
   if (!isConnector(connector)) throw new Error(`unsupported connector: ${String(connector)}`);
-  const connectionString = normalizeConnectionString(input.connectionString ?? "", connector);
+  const connectionString = normalizeConnectionString(
+    buildSchemaSourceConnectionString(input, connector),
+    connector,
+  );
   const databaseName = input.databaseName?.trim() || null;
   const schemaName = input.schemaName?.trim() || null;
   const semanticProfile = input.semanticProfile ?? "generic";
@@ -335,9 +344,21 @@ export function updateSchemaSource(
         ? current.connector
         : "mysql");
   if (!isConnector(connector)) throw new Error(`unsupported connector: ${String(connector)}`);
-  const connectionString = input.connectionString?.trim()
-    ? normalizeConnectionString(input.connectionString, connector)
-    : normalizeConnectionString(decryptConfigSecret(current.connection_url_enc), connector);
+  const previousConnectionString = decryptConfigSecret(current.connection_url_enc);
+  const connectionString = normalizeConnectionString(
+    buildSchemaSourceConnectionString(
+      {
+        ...input,
+        databaseName:
+          input.databaseName === undefined
+            ? (current.database_name ?? undefined)
+            : input.databaseName,
+      },
+      connector,
+      previousConnectionString,
+    ),
+    connector,
+  );
   const enabled = input.enabled ?? current.enabled === 1;
   if (!enabled && current.is_default === 1)
     throw new Error("default schema source cannot be disabled");
@@ -352,9 +373,9 @@ export function updateSchemaSource(
     .run(
       name,
       connector,
-      input.connectionString?.trim()
-        ? encryptConfigSecret(connectionString)
-        : current.connection_url_enc,
+      connectionString === previousConnectionString
+        ? current.connection_url_enc
+        : encryptConfigSecret(connectionString),
       input.databaseName === undefined ? current.database_name : input.databaseName?.trim() || null,
       input.schemaName === undefined ? current.schema_name : input.schemaName?.trim() || null,
       input.tableFilter === undefined
@@ -450,15 +471,19 @@ export function updateSchemaSourceSyncState(
     );
 }
 
-export async function probeSchemaSource(input: {
-  connectionString: string;
-  connector?: SchemaSourceConnector;
-  databaseName?: string | null;
-  schemaName?: string | null;
-}): Promise<{ database: string; version: string }> {
+export async function probeSchemaSource(
+  input: SchemaSourceConnectionInput & {
+    connector?: SchemaSourceConnector;
+    schemaName?: string | null;
+  },
+): Promise<{ database: string; version: string }> {
   const connector =
-    input.connector ?? connectorForConnectionString(input.connectionString) ?? "mysql";
-  const connectionString = normalizeConnectionString(input.connectionString, connector);
+    input.connector ?? connectorForConnectionString(input.connectionString ?? "") ?? "mysql";
+  if (!isConnector(connector)) throw new Error(`unsupported connector: ${String(connector)}`);
+  const connectionString = normalizeConnectionString(
+    buildSchemaSourceConnectionString(input, connector),
+    connector,
+  );
   if (connector === "postgresql") {
     const pool = createPostgresPool(connectionString, {
       max: 1,
@@ -510,8 +535,23 @@ export async function probeSchemaSource(input: {
 
 export async function probeStoredSchemaSource(
   id: string,
+  input: Partial<SchemaSourceInput> = {},
 ): Promise<{ database: string; version: string }> {
   const source = getSchemaSource(id);
   if (!source) throw new Error("schema source not found");
-  return probeSchemaSource(source);
+  const connector = input.connector ?? source.connector;
+  return probeSchemaSource({
+    ...input,
+    connector,
+    connectionString: buildSchemaSourceConnectionString(
+      {
+        ...input,
+        databaseName: input.databaseName === undefined ? source.databaseName : input.databaseName,
+      },
+      connector,
+      source.connectionString,
+    ),
+    databaseName: input.databaseName === undefined ? source.databaseName : input.databaseName,
+    schemaName: input.schemaName === undefined ? source.schemaName : input.schemaName,
+  });
 }

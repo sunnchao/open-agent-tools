@@ -10,6 +10,7 @@ import type { ResourceCatalog } from "../resources/api.js";
 import { createEdge, createNode, snapshotGraph } from "./graph.js";
 import { validateWorkflowGraph } from "./model.js";
 import { variableNodes } from "./variables.js";
+import { restoreBranchEdge } from "./condition.js";
 import type { WorkflowSnapshot } from "./types.js";
 
 export const workflowFileSizeLimit = 2 * 1024 * 1024;
@@ -179,11 +180,17 @@ export function parseWorkflowFile(text: string, catalog: ResourceCatalog | null)
   });
   if (JSON.stringify(declarations) !== JSON.stringify(runVariables(variableNodes(nodes))))
     throw new Error("文件入口变量与开始节点声明不一致");
-  const edges = graph.edges.map((edge) => ({
-    ...createEdge(edge.source, edge.target),
-    ...(edge.id ? { id: edge.id } : {}),
-    ...(edge.label ? { label: edge.label } : {}),
-  }));
+  const edges = graph.edges.map((edge) =>
+    restoreBranchEdge(
+      {
+        ...createEdge(edge.source, edge.target),
+        ...(edge.id ? { id: edge.id } : {}),
+        ...(edge.label ? { label: edge.label } : {}),
+        ...(edge.branchId ? { branchId: edge.branchId } : {}),
+      },
+      nodes,
+    ),
+  );
   const issues = validateWorkflowGraph(nodes, edges, catalog).filter(
     (issue) => issue.code !== "http-auth",
   );

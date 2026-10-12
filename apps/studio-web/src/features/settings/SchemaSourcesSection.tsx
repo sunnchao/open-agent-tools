@@ -32,6 +32,10 @@ const emptyDraft = (): SchemaSourceDraft => ({
   name: "",
   connector: "mysql",
   connectionString: "",
+  host: "",
+  port: 3306,
+  username: "",
+  password: "",
   databaseName: "",
   schemaName: "",
   tableFilter: [],
@@ -91,11 +95,16 @@ export function SchemaSourcesSection() {
 
   const edit = (source: SchemaSourceMetadata) => {
     if (source.managedByEnv) return;
+    setError(null);
     setDraft({
       id: source.id,
       name: source.name,
       connector: source.connector,
       connectionString: "",
+      host: source.host,
+      port: source.port,
+      username: source.username,
+      password: "",
       databaseName: source.databaseName ?? "",
       schemaName: source.schemaName ?? "",
       tableFilter: source.tableFilter,
@@ -104,12 +113,11 @@ export function SchemaSourcesSection() {
     });
   };
 
-  const submit = async () => {
-    if (!draft) return;
+  const submit = async (input: SchemaSourceDraft) => {
     setSaving(true);
     setError(null);
     try {
-      await saveSchemaSource(draft);
+      await saveSchemaSource(input);
       setDraft(null);
       setNotice("Schema 源已保存；首次打开时会采集目录并构建关系图。");
       await refresh();
@@ -215,7 +223,10 @@ export function SchemaSourcesSection() {
           <button
             className="studio-button primary"
             type="button"
-            onClick={() => setDraft(emptyDraft())}
+            onClick={() => {
+              setError(null);
+              setDraft(emptyDraft());
+            }}
           >
             <PlusOutlined /> 新建数据源
           </button>
@@ -392,8 +403,9 @@ export function SchemaSourcesSection() {
               draft={draft}
               setDraft={setDraft}
               saving={saving}
+              error={error}
               onCancel={() => setDraft(null)}
-              onSubmit={() => void submit()}
+              onSubmit={(input) => void submit(input)}
             />,
             document.body,
           )
@@ -468,19 +480,51 @@ function SchemaSourceModal({
   draft,
   setDraft,
   saving,
+  error,
   onCancel,
   onSubmit,
 }: {
   draft: SchemaSourceDraft;
   setDraft: (draft: SchemaSourceDraft) => void;
   saving: boolean;
+  error: string | null;
   onCancel: () => void;
-  onSubmit: () => void;
+  onSubmit: (input: SchemaSourceDraft) => void;
 }) {
   const [filterText, setFilterText] = useState(draft.tableFilter.join(", "));
+  const [connectionMode, setConnectionMode] = useState<"fields" | "url">("fields");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ type: "ok" | "error"; text: string } | null>(null);
-  const patch = (value: Partial<SchemaSourceDraft>) => setDraft({ ...draft, ...value });
+  const patch = (value: Partial<SchemaSourceDraft>) => {
+    setTestResult(null);
+    setDraft({ ...draft, ...value });
+  };
+  const { host, port, username, password, connectionString, ...common } = draft;
+  const input: SchemaSourceDraft =
+    connectionMode === "fields"
+      ? { ...common, host, port, username, password }
+      : { ...common, connectionString };
+  const validConnection =
+    connectionMode === "fields"
+      ? Boolean(
+          host?.trim() &&
+          typeof port === "number" &&
+          Number.isInteger(port) &&
+          port >= 1 &&
+          port <= 65535 &&
+          username?.trim() &&
+          draft.databaseName.trim(),
+        )
+      : Boolean(draft.id || connectionString?.trim());
+  const changeConnector = (connector: SchemaSourceConnector) => {
+    const previousDefault = draft.connector === "postgresql" ? 5432 : 3306;
+    const nextDefault = connector === "postgresql" ? 5432 : 3306;
+    patch({
+      connector,
+      port: draft.port === previousDefault ? nextDefault : draft.port,
+      schemaName: connector === "postgresql" ? draft.schemaName : "",
+    });
+  };
   const changeFilters = (value: string) => {
     setFilterText(value);
     patch({
@@ -494,16 +538,7 @@ function SchemaSourceModal({
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await testSchemaSource(
-        draft.connectionString?.trim()
-          ? {
-              connector: draft.connector,
-              connectionString: draft.connectionString,
-              databaseName: draft.databaseName,
-              schemaName: draft.schemaName,
-            }
-          : { id: draft.id, connector: draft.connector },
-      );
+      const result = await testSchemaSource(input);
       setTestResult({
         type: "ok",
         text: `连接成功：${result.database} · ${connectorLabel(draft.connector)} ${result.version}`,
@@ -514,7 +549,7 @@ function SchemaSourceModal({
       setTesting(false);
     }
   };
-  const canSubmit = Boolean(draft.name.trim() && (draft.id || draft.connectionString?.trim()));
+  const canSubmit = Boolean(draft.name.trim() && validConnection);
 
   return (
     <div
@@ -524,11 +559,15 @@ function SchemaSourceModal({
         if (event.target === event.currentTarget) onCancel();
       }}
     >
-      <div
+      <form
         className="settings-modal schema-source-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="schema-source-modal-title"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (canSubmit && !saving && !testing) onSubmit(input);
+        }}
       >
         <div className="settings-modal-head">
           <div>
@@ -543,46 +582,123 @@ function SchemaSourceModal({
           <label className="studio-field">
             <span>名称</span>
             <input
+              required
               value={draft.name}
               onChange={(event) => patch({ name: event.target.value })}
               placeholder="例如 生产运营库"
             />
           </label>
           <label className="studio-field">
-            <span>连接器</span>
+            <span>数据库类型</span>
             <select
               value={draft.connector}
-              onChange={(event) =>
-                patch({
-                  connector: event.target.value as SchemaSourceConnector,
-                  schemaName: event.target.value === "postgresql" ? draft.schemaName : "",
-                })
-              }
+              onChange={(event) => changeConnector(event.target.value as SchemaSourceConnector)}
             >
               <option value="mysql">MySQL</option>
               <option value="postgresql">PostgreSQL</option>
             </select>
           </label>
-          <label className="studio-field schema-source-connection-field">
-            <span>
-              连接串 <small>{draft.id ? "留空保持原凭据" : "请使用只读账号"}</small>
-            </span>
-            <input
-              type="password"
-              value={draft.connectionString ?? ""}
-              onChange={(event) => patch({ connectionString: event.target.value })}
-              placeholder={connectionPlaceholder(draft.connector)}
-              autoComplete="new-password"
-            />
-          </label>
+          <div className="schema-source-connection-mode">
+            <span>连接配置</span>
+            <div role="group" aria-label="连接配置方式">
+              {(
+                [
+                  ["fields", "分项填写"],
+                  ["url", "连接串"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={connectionMode === mode}
+                  onClick={() => {
+                    setConnectionMode(mode);
+                    setTestResult(null);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {connectionMode === "fields" ? (
+            <>
+              <label className="studio-field">
+                <span>IP / 主机名</span>
+                <input
+                  required
+                  value={draft.host ?? ""}
+                  onChange={(event) => patch({ host: event.target.value })}
+                  placeholder="192.168.1.10 或 db.example.com"
+                  autoComplete="off"
+                />
+              </label>
+              <label className="studio-field">
+                <span>端口</span>
+                <input
+                  required
+                  type="number"
+                  min={1}
+                  max={65535}
+                  step={1}
+                  value={draft.port ?? ""}
+                  onChange={(event) =>
+                    patch({
+                      port: event.target.value === "" ? undefined : Number(event.target.value),
+                    })
+                  }
+                  placeholder={draft.connector === "postgresql" ? "5432" : "3306"}
+                />
+              </label>
+              <label className="studio-field">
+                <span>
+                  账户 <small>建议使用只读账号</small>
+                </span>
+                <input
+                  required
+                  value={draft.username ?? ""}
+                  onChange={(event) => patch({ username: event.target.value })}
+                  placeholder="readonly"
+                  autoComplete="off"
+                />
+              </label>
+              <label className="studio-field">
+                <span>
+                  密码 <small>{draft.id ? "留空保持原密码" : "无密码时可留空"}</small>
+                </span>
+                <input
+                  type="password"
+                  value={draft.password ?? ""}
+                  onChange={(event) => patch({ password: event.target.value })}
+                  placeholder={draft.id ? "已保存的密码" : "请输入密码"}
+                  autoComplete="new-password"
+                />
+              </label>
+            </>
+          ) : (
+            <label className="studio-field schema-source-connection-field">
+              <span>
+                连接串 <small>{draft.id ? "留空保持原连接" : "支持附加连接参数"}</small>
+              </span>
+              <input
+                type="password"
+                required={!draft.id}
+                value={draft.connectionString ?? ""}
+                onChange={(event) => patch({ connectionString: event.target.value })}
+                placeholder={connectionPlaceholder(draft.connector)}
+                autoComplete="new-password"
+              />
+            </label>
+          )}
           <label className="studio-field">
             <span>
-              数据库名 <small>可覆盖连接串 path</small>
+              数据库名称 {connectionMode === "url" ? <small>可覆盖连接串中的库名</small> : null}
             </span>
             <input
+              required={connectionMode === "fields"}
               value={draft.databaseName}
               onChange={(event) => patch({ databaseName: event.target.value })}
-              placeholder="可选"
+              placeholder={connectionMode === "fields" ? "例如 analytics" : "可选"}
             />
           </label>
           {draft.connector === "postgresql" ? (
@@ -640,12 +756,17 @@ function SchemaSourceModal({
               {testResult.text}
             </div>
           ) : null}
+          {error ? (
+            <div className="schema-source-test-result is-error" role="alert">
+              {error}
+            </div>
+          ) : null}
         </div>
         <div className="settings-modal-actions schema-source-modal-actions">
           <button
             className="studio-button secondary"
             type="button"
-            disabled={testing || (!draft.id && !draft.connectionString?.trim())}
+            disabled={saving || testing || !validConnection}
             onClick={() => void testConnection()}
           >
             <DatabaseOutlined spin={testing} /> {testing ? "测试中" : "测试连接"}
@@ -656,14 +777,13 @@ function SchemaSourceModal({
           </button>
           <button
             className="studio-button primary"
-            type="button"
-            disabled={saving || !canSubmit}
-            onClick={onSubmit}
+            type="submit"
+            disabled={saving || testing || !canSubmit}
           >
             <SaveOutlined /> {saving ? "保存中" : "保存数据源"}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

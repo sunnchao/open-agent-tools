@@ -68,7 +68,14 @@ import {
   snapshotKey,
 } from "./graph.js";
 import { iconByKind, nodeColor, palette } from "./palette.js";
-import { StudioNode } from "./StudioNode.js";
+import { StudioNode, WorkflowBranchActionsContext } from "./StudioNode.js";
+import {
+  branchIdOf,
+  canConnectTarget,
+  configureBranchEdge,
+  conditionBranches,
+  updateConditionGraph,
+} from "./condition.js";
 import { StudioEdge, WorkflowEdgeActionsContext } from "./StudioEdge.js";
 import { NodePicker } from "./NodePicker.js";
 import { NodeInspector } from "./NodeInspector.js";
@@ -84,7 +91,13 @@ import { cloneSubgraph } from "./subgraph.js";
 import { layoutWorkflow } from "./layout.js";
 import { assertSelectionSources, parseSelection, serializeSelection } from "./clipboard.js";
 import { NodeTestInputDialog } from "./NodeTestInputDialog.js";
-import type { NodePickerState, RunLogEntry, WorkflowNode, WorkflowSnapshot } from "./types.js";
+import type {
+  NodePickerState,
+  RunLogEntry,
+  WorkflowNode,
+  WorkflowSnapshot,
+  WorkflowEdge,
+} from "./types.js";
 import {
   fetchWorkflow,
   publishWorkflow,
@@ -146,7 +159,7 @@ function WorkflowCanvas({
     checkpoint: WorkflowResumeCheckpoint;
   } | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<WorkflowEdge>(initialEdges);
   const [name, setName] = useState("知识库问答工作流");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<WorkflowMobileView>("canvas");
@@ -245,9 +258,13 @@ function WorkflowCanvas({
 
   const applyHistory = useCallback(
     (index: number) => {
-      const snapshot = historyRef.current[index];
-      if (!snapshot) return;
+      const saved = historyRef.current[index];
+      if (!saved) return;
+      const snapshot = hydrateWorkflowSnapshot(saved);
       historyIndexRef.current = index;
+      nameRef.current = snapshot.name;
+      nodesRef.current = snapshot.nodes;
+      edgesRef.current = snapshot.edges;
       setName(snapshot.name);
       setNodes(snapshot.nodes);
       setEdges(snapshot.edges);
@@ -472,12 +489,26 @@ function WorkflowCanvas({
 
   const connect = useCallback(
     (connection: Connection) => {
-      if (!connection.source || !connection.target || connection.source === connection.target)
+      if (
+        !connection.source ||
+        !connection.target ||
+        !canConnectTarget(connection.source, connection.target, nodesRef.current, edgesRef.current)
+      )
         return;
-      setEdges((current) => addEdge(createEdge(connection.source!, connection.target!), current));
-      markEdited();
+      const source = nodesRef.current.find((node) => node.id === connection.source)!;
+      let edge = createEdge(connection.source, connection.target);
+      if (source.data.kind === "condition") {
+        const branchId = connection.sourceHandle?.replace(/^branch:/, "");
+        if (
+          !branchId ||
+          !conditionBranches(source.data.config).some((branch) => branch.id === branchId)
+        )
+          return;
+        edge = configureBranchEdge(edge, source.data.config, branchId);
+      }
+      applyGraphEdit(nodesRef.current, addEdge(edge, edgesRef.current));
     },
-    [markEdited, setEdges],
+    [applyGraphEdit],
   );
 
   const insertNode = useCallback(
@@ -566,6 +597,50 @@ function WorkflowCanvas({
     [screenToFlowPosition],
   );
 
+  const openBranchNodePicker = useCallback(
+    (sourceNodeId: string, branchId: string, anchor: { x: number; y: number }) => {
+      const source = nodesRef.current.find((node) => node.id === sourceNodeId);
+      if (!source || running) return;
+      const index = conditionBranches(source.data.config).findIndex(
+        (branch) => branch.id === branchId,
+      );
+      if (index < 0) return;
+      setNodePicker({
+        anchor,
+        sourceNodeId,
+        branchId,
+        position: {
+          x: source.position.x + (source.measured?.width ?? 260) + 100,
+          y: source.position.y + index * 150,
+        },
+      });
+    },
+    [running],
+  );
+
+  const chooseExistingNode = useCallback(
+    (targetId: string) => {
+      if (!nodePicker?.sourceNodeId || !nodePicker.branchId) return;
+      const source = nodesRef.current.find((node) => node.id === nodePicker.sourceNodeId);
+      if (
+        !source ||
+        !conditionBranches(source.data.config).some(
+          (branch) => branch.id === nodePicker.branchId,
+        ) ||
+        !canConnectTarget(source.id, targetId, nodesRef.current, edgesRef.current)
+      )
+        return;
+      const edge = configureBranchEdge(
+        createEdge(source.id, targetId),
+        source.data.config,
+        nodePicker.branchId,
+      );
+      applyGraphEdit(nodesRef.current, addEdge(edge, edgesRef.current));
+      setNodePicker(null);
+    },
+    [nodePicker, applyGraphEdit],
+  );
+
   const chooseNode = useCallback(
     (kind: NodeKind) => {
       const picker = nodePicker;
@@ -587,31 +662,47 @@ function WorkflowCanvas({
           }
         }
       }
-      setNodes((current) => [
-        ...current.map((node) =>
+      const nextNodes = [
+        ...nodesRef.current.map((node) =>
           shiftFrom !== null && node.position.x >= shiftFrom
             ? { ...node, position: { ...node.position, x: node.position.x + 280 } }
             : node,
         ),
         createNode(id, kind, position),
-      ]);
+      ];
+      let nextEdges = edgesRef.current;
       if (edge) {
-        setEdges((current) => {
-          const before = createEdge(edge.source, id);
-          if (edge.label !== undefined) before.label = edge.label;
-          return [
-            ...current.filter((item) => item.id !== edge.id),
-            before,
-            createEdge(id, edge.target),
-          ];
-        });
+        let before = createEdge(edge.source, id);
+        if (edge.label !== undefined) before.label = edge.label;
+        const source = nodesRef.current.find((node) => node.id === edge.source);
+        if (source?.data.kind === "condition") {
+          const branch = branchIdOf(edge) ?? String(edge.label || "default");
+          before = configureBranchEdge(before, source.data.config, branch);
+        }
+        nextEdges = [
+          ...nextEdges.filter((item) => item.id !== edge.id),
+          before,
+          createEdge(id, edge.target),
+        ];
+      } else if (picker.sourceNodeId && picker.branchId) {
+        const source = nodesRef.current.find((node) => node.id === picker.sourceNodeId);
+        if (
+          !source ||
+          kind === "start" ||
+          !conditionBranches(source.data.config).some((branch) => branch.id === picker.branchId)
+        )
+          return;
+        nextEdges = [
+          ...nextEdges,
+          configureBranchEdge(createEdge(source.id, id), source.data.config, picker.branchId),
+        ];
       }
+      applyGraphEdit(nextNodes, nextEdges);
       setNodePicker(null);
       setSelectedId(id);
       setMobileView("inspector");
-      markEdited();
     },
-    [markEdited, nodePicker, setEdges, setNodes],
+    [nodePicker, applyGraphEdit],
   );
 
   const updateSelected = (patch: Partial<WorkflowNodeData>) => {
@@ -675,11 +766,16 @@ function WorkflowCanvas({
     markEdited();
   };
 
-  const updateEdgeLabel = (edgeId: string, label: string) => {
-    setEdges((current) =>
-      current.map((edge) => (edge.id === edgeId ? { ...edge, label: label || undefined } : edge)),
+  const changeCondition = (config: Record<string, unknown>) => {
+    if (!selectedId) return;
+    const next = updateConditionGraph(nodesRef.current, edgesRef.current, selectedId, config);
+    applyGraphEdit(next.nodes, next.edges);
+  };
+  const removeConnection = (edgeId: string) => {
+    applyGraphEdit(
+      nodesRef.current,
+      edgesRef.current.filter((edge) => edge.id !== edgeId),
     );
-    markEdited();
   };
 
   const duplicateSelected = useCallback(() => {
@@ -1060,6 +1156,7 @@ function WorkflowCanvas({
           source: edge.source,
           target: edge.target,
           ...(typeof edge.label === "string" && edge.label ? { label: edge.label } : {}),
+          ...(branchIdOf(edge) ? { branchId: branchIdOf(edge) } : {}),
         })),
         input,
       },
@@ -1107,8 +1204,36 @@ function WorkflowCanvas({
               attempts: meta.metadata?.attempts,
               cached: meta.metadata?.cached,
               tokenUsage: meta.metadata?.tokenUsage,
+              selectedBranchLabel: meta.metadata?.selectedBranchLabel,
+              warnings: meta.metadata?.warnings,
             },
           ]);
+          if (node?.data.kind === "condition")
+            setNodeTestResults((current) => ({
+              ...current,
+              [nodeId]: {
+                nodeId,
+                status,
+                inputs: meta.inputs ?? {},
+                outputs: meta.outputs ?? {},
+                result: meta.result,
+                error: meta.error,
+                metadata: {
+                  nodeKind: "condition",
+                  startedAt: new Date().toISOString(),
+                  finishedAt: new Date().toISOString(),
+                  durationMs: meta.metadata?.durationMs ?? 0,
+                  tokenUsage: meta.metadata?.tokenUsage ?? {
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    totalTokens: 0,
+                  },
+                  selectedBranchId: meta.metadata?.selectedBranchId,
+                  selectedBranchLabel: meta.metadata?.selectedBranchLabel,
+                  warnings: meta.metadata?.warnings,
+                },
+              },
+            }));
         },
         onDone: (outputs, nodeOutputs) => {
           if (runToken.current !== token) return;
@@ -1460,82 +1585,92 @@ function WorkflowCanvas({
         </Flex>
 
         <div className="flow-canvas" ref={flowCanvasRef}>
-          <WorkflowEdgeActionsContext.Provider value={openEdgeNodePicker}>
-            <ReactFlow<WorkflowNode, Edge>
-              nodes={nodes}
-              edges={decorateRunEdges(edges, edgeRunStates)}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              onNodesChange={(changes) => {
-                onNodesChange(changes);
-                if (
-                  changes.some(
-                    (change) =>
-                      change.type === "remove" ||
-                      (change.type === "position" && change.dragging !== true),
+          <WorkflowBranchActionsContext.Provider value={openBranchNodePicker}>
+            <WorkflowEdgeActionsContext.Provider value={openEdgeNodePicker}>
+              <ReactFlow<WorkflowNode, Edge>
+                nodes={nodes}
+                edges={decorateRunEdges(edges, edgeRunStates)}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                onNodesChange={(changes) => {
+                  onNodesChange(changes);
+                  if (
+                    changes.some(
+                      (change) =>
+                        change.type === "remove" ||
+                        (change.type === "position" && change.dragging !== true),
+                    )
+                  ) {
+                    markEdited();
+                  }
+                }}
+                onEdgesChange={(changes) => {
+                  onEdgesChange(changes);
+                  if (changes.some((change) => change.type !== "select")) markEdited();
+                }}
+                onConnect={connect}
+                isValidConnection={(connection) =>
+                  canConnectTarget(
+                    connection.source,
+                    connection.target,
+                    nodesRef.current,
+                    edgesRef.current,
                   )
-                ) {
-                  markEdited();
                 }
-              }}
-              onEdgesChange={(changes) => {
-                onEdgesChange(changes);
-                if (changes.some((change) => change.type !== "select")) markEdited();
-              }}
-              onConnect={connect}
-              onDrop={dropNode}
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "move";
-              }}
-              onNodeClick={(_, node) => {
-                setInspectorView("current");
-                setSelectedId(node.id);
-                setMobileView("inspector");
-              }}
-              onPaneClick={() => {
-                setSelectedId(null);
-                setShowIssues(false);
-              }}
-              fitView
-              fitViewOptions={{
-                padding: 0.2,
-                minZoom: compactLayout ? 0.25 : 0.5,
-                maxZoom: compactLayout ? 0.7 : 1,
-              }}
-              minZoom={compactLayout ? 0.25 : 0.35}
-              maxZoom={2}
-              onlyRenderVisibleElements
-              selectionOnDrag
-              selectionKeyCode={null}
-              multiSelectionKeyCode={["Shift", "Meta", "Control"]}
-              panOnDrag={true}
-              nodesDraggable={!running}
-              nodesConnectable={!running}
-              onSelectionChange={({ nodes: selected }) => {
-                setSelectedId(selected.length === 1 ? selected[0]!.id : null);
-              }}
-              onBeforeDelete={async ({ nodes: removedNodes, edges: removedEdges }) => {
-                if (!running)
-                  setPendingDelete({
-                    nodes: removedNodes.map((node) => node.id),
-                    edges: removedEdges.map((edge) => edge.id),
-                  });
-                return false;
-              }}
-              deleteKeyCode={running ? null : ["Backspace", "Delete"]}
-              defaultEdgeOptions={{ type: "studio" }}
-            >
-              <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color="#c9cdd3" />
-              <Controls showInteractive={false} />
-              <MiniMap
-                pannable
-                zoomable
-                nodeColor={(node) => nodeColor((node.data as WorkflowNodeData).kind)}
-                maskColor="rgba(246, 247, 249, 0.72)"
-              />
-            </ReactFlow>
-          </WorkflowEdgeActionsContext.Provider>
+                onDrop={dropNode}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onNodeClick={(_, node) => {
+                  setInspectorView("current");
+                  setSelectedId(node.id);
+                  setMobileView("inspector");
+                }}
+                onPaneClick={() => {
+                  setSelectedId(null);
+                  setShowIssues(false);
+                }}
+                fitView
+                fitViewOptions={{
+                  padding: 0.2,
+                  minZoom: compactLayout ? 0.25 : 0.5,
+                  maxZoom: compactLayout ? 0.7 : 1,
+                }}
+                minZoom={compactLayout ? 0.25 : 0.35}
+                maxZoom={2}
+                onlyRenderVisibleElements
+                selectionOnDrag
+                selectionKeyCode={null}
+                multiSelectionKeyCode={["Shift", "Meta", "Control"]}
+                panOnDrag={true}
+                nodesDraggable={!running}
+                nodesConnectable={!running}
+                onSelectionChange={({ nodes: selected }) => {
+                  setSelectedId(selected.length === 1 ? selected[0]!.id : null);
+                }}
+                onBeforeDelete={async ({ nodes: removedNodes, edges: removedEdges }) => {
+                  if (!running)
+                    setPendingDelete({
+                      nodes: removedNodes.map((node) => node.id),
+                      edges: removedEdges.map((edge) => edge.id),
+                    });
+                  return false;
+                }}
+                deleteKeyCode={running ? null : ["Backspace", "Delete"]}
+                defaultEdgeOptions={{ type: "studio" }}
+              >
+                <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color="#c9cdd3" />
+                <Controls showInteractive={false} />
+                <MiniMap
+                  pannable
+                  zoomable
+                  nodeColor={(node) => nodeColor((node.data as WorkflowNodeData).kind)}
+                  maskColor="rgba(246, 247, 249, 0.72)"
+                />
+              </ReactFlow>
+            </WorkflowEdgeActionsContext.Provider>
+          </WorkflowBranchActionsContext.Provider>
           {selectedNodes.length > 1 ? (
             <div className="workflow-selection-toolbar" role="toolbar" aria-label="批量操作">
               <span>已选 {selectedNodes.length} 个节点</span>
@@ -1619,7 +1754,15 @@ function WorkflowCanvas({
               edges={edges}
               providers={providers}
               providerError={providerError}
-              updateEdgeLabel={updateEdgeLabel}
+              onConditionChange={changeCondition}
+              onAddBranch={(branchId, anchor) =>
+                openBranchNodePicker(selectedNode.id, branchId, anchor)
+              }
+              onRemoveConnection={removeConnection}
+              onFocusNode={(nodeId) => {
+                setSelectedId(nodeId);
+                focusRunNode(nodeId);
+              }}
               updateNode={updateSelected}
               updateConfig={updateConfig}
               renameVariable={renameBinding}
@@ -1691,6 +1834,20 @@ function WorkflowCanvas({
               hasStart={nodes.some((node) => node.data.kind === "start")}
               onChoose={chooseNode}
               onClose={() => setNodePicker(null)}
+              existingNodes={
+                nodePicker.sourceNodeId
+                  ? nodes
+                      .filter((node) =>
+                        canConnectTarget(nodePicker.sourceNodeId!, node.id, nodes, edges),
+                      )
+                      .map((node) => ({
+                        id: node.id,
+                        label: node.data.label,
+                        kind: node.data.kind,
+                      }))
+                  : []
+              }
+              onChooseExisting={chooseExistingNode}
             />,
             document.body,
           )

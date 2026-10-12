@@ -2,6 +2,8 @@ import {
   variableIssues,
   workflowGraphSchema,
   effectiveNodeConfig,
+  isVisualCondition,
+  conditionRouteIssues,
 } from "@open-agent-tools/workflow-contracts";
 import type { ResourceCatalog } from "../resources/api.js";
 
@@ -45,6 +47,7 @@ export interface WorkflowGraphEdge {
   source: string;
   target: string;
   label?: unknown;
+  branchId?: string;
 }
 
 export interface WorkflowValidationIssue {
@@ -77,7 +80,13 @@ export function defaultConfig(kind: NodeKind): Record<string, WorkflowConfigValu
     };
   if (kind === "mcp")
     return { serviceSlug: "", toolName: "", arguments: "{}", inputs: [], outputs: [] };
-  if (kind === "condition") return { expression: "true", inputs: [], outputs: [] };
+  if (kind === "condition")
+    return {
+      mode: "visual",
+      cases: [{ id: "if", logicalOperator: "and", rules: [] }],
+      inputs: [],
+      outputs: [],
+    };
   if (kind === "input") {
     return {
       variable: "query",
@@ -110,7 +119,10 @@ function validOutputs(value: unknown): NodeOutputBinding[] {
 }
 
 export function migrateNodeData(data: WorkflowNodeData, nodeId?: string): WorkflowNodeData {
-  const config = { ...defaultConfig(data.kind), ...(data.config ?? {}) };
+  const config =
+    data.kind === "condition"
+      ? effectiveNodeConfig("condition", data.config ?? {})
+      : { ...defaultConfig(data.kind), ...(data.config ?? {}) };
   const legacyOutput = typeof data.config?.output === "string" ? data.config.output.trim() : "";
   if (data.kind === "start" && !Object.hasOwn(data.config ?? {}, "runVariables"))
     delete config.runVariables;
@@ -400,7 +412,14 @@ export function validateWorkflowGraph(
         nodeId: node.id,
       });
     }
-    if (node.data.kind === "condition" && nodeOutgoing.length > 0) {
+    if (node.data.kind === "condition" && isVisualCondition(node.data.config)) {
+      issues.push(
+        ...conditionRouteIssues(node.data.config, nodeOutgoing).map((issue) => ({
+          ...issue,
+          nodeId: node.id,
+        })),
+      );
+    } else if (node.data.kind === "condition" && nodeOutgoing.length > 0) {
       const labels = new Set(nodeOutgoing.map((edge) => edge.label));
       if (!labels.has("true") || !labels.has("false")) {
         issues.push({

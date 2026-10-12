@@ -43,6 +43,8 @@ export function replayWorkflowRun(history: WorkflowRunHistory): {
       attempts: meta.metadata?.attempts,
       cached: meta.metadata?.cached,
       tokenUsage: meta.metadata?.tokenUsage,
+      selectedBranchLabel: meta.metadata?.selectedBranchLabel,
+      warnings: meta.metadata?.warnings,
       incomingEdgeIds: Array.isArray(data.incoming_edge_ids)
         ? data.incoming_edge_ids.filter((id): id is string => typeof id === "string")
         : undefined,

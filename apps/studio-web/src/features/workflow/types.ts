@@ -1,8 +1,10 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { NodeKind, WorkflowNodeData } from "./model.js";
 import type { WorkflowTokenUsage } from "../../lib/api.js";
+import type { ConditionWarning } from "@open-agent-tools/workflow-contracts";
 
 export type WorkflowNode = Node<WorkflowNodeData, "studio">;
+export type WorkflowEdge = Edge & { branchId?: string };
 export type WorkflowMobileView = "palette" | "canvas" | "inspector";
 
 export interface NodeTestDialogState {
@@ -14,12 +16,14 @@ export interface NodePickerState {
   anchor: { x: number; y: number };
   edgeId?: string;
   position: { x: number; y: number };
+  sourceNodeId?: string;
+  branchId?: string;
 }
 
 export interface WorkflowSnapshot {
   name: string;
   nodes: WorkflowNode[];
-  edges: Edge[];
+  edges: WorkflowEdge[];
 }
 
 export interface PaletteItem {
@@ -47,4 +51,6 @@ export interface RunLogEntry {
   cached?: boolean;
   incomingEdgeIds?: string[];
   tokenUsage?: WorkflowTokenUsage;
+  selectedBranchLabel?: string;
+  warnings?: ConditionWarning[];
 }

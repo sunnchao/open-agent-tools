@@ -9,6 +9,12 @@ import {
   interpolateTemplate as interpolate,
   interpolateTemplateValue as interpolateJsonValue,
   collectEndOutputs,
+  isVisualCondition,
+  conditionCases,
+  conditionRouteIssues,
+  selectedConditionEdges,
+  conditionBranchLabel,
+  type ConditionWarning,
   type HttpNodeConfig,
   type WorkflowResumeCheckpoint,
 } from "@open-agent-tools/workflow-contracts";
@@ -24,6 +30,7 @@ import {
 } from "@open-agent-tools/observability";
 import { logDebugDuration, logTrace } from "../trace.js";
 import { evaluateConditionExpression } from "./expression.js";
+import { evaluateConditionCases } from "./condition-rules.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { runHttp } from "./http.js";
 import { workflowRedactor } from "./redaction.js";
@@ -43,6 +50,7 @@ export interface WorkflowEdgeInput {
   source: string;
   target: string;
   label?: string;
+  branchId?: string;
 }
 
 export interface WorkflowRunRequest {
@@ -81,6 +89,9 @@ export interface WorkflowNodeTestResult {
     durationMs: number;
     tokenUsage: WorkflowTokenUsage;
     attempts?: number;
+    selectedBranchId?: string;
+    selectedBranchLabel?: string;
+    warnings?: ConditionWarning[];
   };
 }
 
@@ -105,6 +116,9 @@ export interface WorkflowNodeResultMetadata {
   attempts?: number;
   cached?: boolean;
   incomingEdgeIds?: string[];
+  selectedBranchId?: string;
+  selectedBranchLabel?: string;
+  warnings?: ConditionWarning[];
 }
 
 export interface WorkflowEvent {
@@ -253,7 +267,7 @@ function validateBindings(
 
 export function validateWorkflow(
   request: WorkflowRunRequest,
-  options: { allowMissingHttpAuth?: boolean } = {},
+  options: { allowMissingHttpAuth?: boolean; nodeTest?: boolean } = {},
 ): WorkflowValidation {
   if (!request || !Array.isArray(request.nodes) || request.nodes.length === 0) {
     throw new WorkflowValidationError("nodes must be a non-empty array");
@@ -302,6 +316,17 @@ export function validateWorkflow(
   for (const node of request.nodes) {
     incoming.set(node.id, incoming.get(node.id) ?? []);
     outgoing.set(node.id, outgoing.get(node.id) ?? []);
+  }
+  for (const edge of edges) {
+    if (edge.branchId !== undefined && byId.get(edge.source)?.kind !== "condition")
+      throw new WorkflowValidationError("only condition nodes may have branch connections");
+  }
+  for (const node of request.nodes) {
+    if (node.kind !== "condition") continue;
+    const nodeEdges = outgoing.get(node.id) ?? [];
+    if (options.nodeTest && nodeEdges.length === 0) continue;
+    const issues = conditionRouteIssues(configOf(node), nodeEdges);
+    if (issues.length) throw new WorkflowValidationError(`node ${node.id}: ${issues[0]!.message}`);
   }
   validateBindings(request.nodes, edges, outgoing, options.allowMissingHttpAuth);
   const degrees = new Map(request.nodes.map((node) => [node.id, incoming.get(node.id)!.length]));
@@ -382,6 +407,9 @@ interface NodeExecution {
   prompt?: string;
   /** LLM 节点插值后的系统提示词（system 消息）。 */
   systemPrompt?: string;
+  selectedBranchId?: string;
+  selectedBranchLabel?: string;
+  warnings?: ConditionWarning[];
 }
 const emptyTokenUsage = (): WorkflowTokenUsage => ({
   inputTokens: 0,
@@ -615,6 +643,16 @@ async function runNode(
         ),
       };
     case "condition": {
+      if (isVisualCondition(config)) {
+        const execution = evaluateConditionCases(conditionCases(config), inputs);
+        for (const warning of execution.warnings)
+          logTrace("condition.type-mismatch", { nodeId: node.id, ...warning }, "warn");
+        return {
+          ...execution,
+          selectedBranchId: execution.result,
+          selectedBranchLabel: conditionBranchLabel(config, execution.result),
+        };
+      }
       const expression = interpolate(config.expression ?? "false", inputs, "expression");
       try {
         return { result: evaluateConditionExpression(expression) };
@@ -849,6 +887,14 @@ export async function executeWorkflow(
                 attempts: 0,
                 cached: true,
                 incomingEdgeIds,
+                ...(node.kind === "condition" &&
+                isVisualCondition(configOf(node)) &&
+                typeof cached.result === "string"
+                  ? {
+                      selectedBranchId: cached.result,
+                      selectedBranchLabel: conditionBranchLabel(configOf(node), cached.result),
+                    }
+                  : {}),
               },
             });
           }
@@ -937,14 +983,14 @@ export async function executeWorkflow(
                   durationMs: Date.now() - startedAtMs,
                   tokenUsage: normalizeTokenUsage(execution.tokenUsage),
                   attempts: execution.attempts,
+                  selectedBranchId: execution.selectedBranchId,
+                  selectedBranchLabel: execution.selectedBranchLabel,
+                  warnings: execution.warnings,
                 },
               });
               const outgoing = validation.outgoing.get(nodeId)!;
               if (node.kind === "condition") {
-                const condition = result === true;
-                const selected = outgoing.filter((edge) => edge.label === String(condition));
-                const defaults = outgoing.filter((edge) => !edge.label);
-                for (const edge of selected.length > 0 ? selected : defaults) {
+                for (const edge of selectedConditionEdges(configOf(node), result, outgoing)) {
                   activeEdges.add(edge.id);
                   activeNodes.add(edge.target);
                 }
@@ -1053,11 +1099,15 @@ export async function executeWorkflowNodeTest(
       ...configOf(request.node),
       inputs: bindings.map((binding) => ({
         ...binding,
-        source: { type: "literal", value: request.inputs[binding.name] },
+        // Isolated condition samples have runtime types; the evaluator reports mismatches.
+        source: {
+          type: "literal",
+          value: request.node.kind === "condition" ? undefined : request.inputs[binding.name],
+        },
       })),
     },
   };
-  validateWorkflow({ nodes: [validationNode], edges: [], input: {} });
+  validateWorkflow({ nodes: [validationNode], edges: [], input: {} }, { nodeTest: true });
 
   const inputs: Record<string, unknown> = {};
   for (const binding of bindings) {
@@ -1078,10 +1128,14 @@ export async function executeWorkflowNodeTest(
     value: Omit<WorkflowNodeTestResult, "nodeId" | "inputs" | "metadata"> & {
       tokenUsage?: Partial<WorkflowTokenUsage>;
       attempts?: number;
+      selectedBranchId?: string;
+      selectedBranchLabel?: string;
+      warnings?: ConditionWarning[];
     },
   ): WorkflowNodeTestResult => {
     const finishedAtMs = Date.now();
-    const { tokenUsage, attempts, ...result } = value;
+    const { tokenUsage, attempts, selectedBranchId, selectedBranchLabel, warnings, ...result } =
+      value;
     return {
       nodeId: request.node.id,
       inputs: redactor.redact(inputs),
@@ -1096,6 +1150,9 @@ export async function executeWorkflowNodeTest(
         durationMs: Math.max(0, finishedAtMs - startedAtMs),
         tokenUsage: normalizeTokenUsage(tokenUsage),
         attempts,
+        selectedBranchId,
+        selectedBranchLabel,
+        warnings,
       },
     };
   };
@@ -1141,6 +1198,9 @@ export async function executeWorkflowNodeTest(
         outputs,
         tokenUsage: execution.tokenUsage ?? emptyTokenUsage(),
         attempts: execution.attempts,
+        selectedBranchId: execution.selectedBranchId,
+        selectedBranchLabel: execution.selectedBranchLabel,
+        warnings: execution.warnings,
       });
       span.update({ output: result });
       return result;

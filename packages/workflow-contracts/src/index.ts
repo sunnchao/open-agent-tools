@@ -3,7 +3,14 @@ export * from "./resume.js";
 export * from "./paths.js";
 export * from "./http.js";
 export * from "./outputs.js";
+export * from "./condition.js";
 import { referenceRoot, valuePath } from "./paths.js";
+import {
+  conditionCases,
+  conditionConfigIssues,
+  conditionNeedsValue,
+  isVisualCondition,
+} from "./condition.js";
 import { httpConfigIssues } from "./http.js";
 import type { HttpNodeConfig } from "./graph.js";
 
@@ -27,11 +34,13 @@ export interface VariableIssue {
   suggestions?: string[];
   reference?: string;
   field?: string;
+  caseId?: string;
+  ruleIndex?: number;
 }
 interface InputBinding {
   name: string;
   required?: boolean;
-  source: { type: string; variable?: string; value?: unknown };
+  source: { type: string; variable?: string; value?: unknown; nodeId?: string; output?: string };
 }
 interface OutputBinding {
   name: string;
@@ -128,7 +137,7 @@ export function prepareRunInputs(variables: RunVariable[], values: Record<string
 export function templateFields(kind: string): string[] {
   if (kind === "llm") return ["systemPrompt", "prompt"];
   if (kind === "rag" || kind === "graph" || kind === "sql") return ["query"];
-  if (kind === "condition") return ["expression"];
+  if (kind === "condition") return ["expression", "cases"];
   if (kind === "mcp") return ["arguments"];
   if (kind === "http") return ["url", "params", "headers", "body", "authorization"];
   return [];
@@ -160,6 +169,46 @@ export function resultFields(kind: string): Record<string, VariableType> | null 
   if (kind === "http")
     return { body: "any", status_code: "number", headers: "object", size: "number" };
   return null;
+}
+
+export function inputVariableType(
+  node: VariableNode,
+  name: string,
+  nodes: VariableNode[],
+  seen = new Set<string>(),
+): VariableType {
+  const key = `${node.id}:${name}`;
+  if (seen.has(key)) return "any";
+  seen.add(key);
+  const binding = inputsOf(node).find((item) => item.name === name);
+  if (!binding) return "any";
+  const source = binding.source;
+  if (source.type === "run")
+    return runVariables(nodes).find((item) => item.name === source.variable)?.type ?? "any";
+  if (source.type === "literal") {
+    if (Array.isArray(source.value)) return "array";
+    if (source.value === null || source.value === undefined) return "any";
+    const type = typeof source.value;
+    return types.includes(type as VariableType) ? (type as VariableType) : "any";
+  }
+  const upstream = nodes.find((item) => item.id === source.nodeId);
+  if (!upstream) return "any";
+  const outputs = Array.isArray(upstream.config?.outputs)
+    ? (upstream.config.outputs as OutputBinding[])
+    : [];
+  const selector = outputs.find((item) => item.name === source.output)?.selector;
+  const path = selector ? valuePath(selector) : null;
+  if (!path) return "any";
+  if (path[0] === "$inputs" || (["input", "end"].includes(upstream.kind) && path[0] === "$result"))
+    return path.length === 2 ? inputVariableType(upstream, path[1]!, nodes, seen) : "any";
+  if (path[0] !== "$result") return "any";
+  if (path.length === 1) {
+    if (upstream.kind === "llm") return "string";
+    if (upstream.kind === "condition")
+      return isVisualCondition(upstream.config) ? "string" : "boolean";
+    return ["http", "sql", "rag", "graph"].includes(upstream.kind) ? "object" : "any";
+  }
+  return path.length === 2 ? (resultFields(upstream.kind)?.[path[1]!] ?? "any") : "any";
 }
 export function selectorIssue(node: VariableNode, selector: string): string | null {
   const parts = valuePath(selector);
@@ -227,6 +276,20 @@ export function variableIssues(nodes: VariableNode[]): VariableIssue[] {
       for (const issue of httpConfigIssues((node.config ?? {}) as HttpNodeConfig))
         add(issue.code, issue.message);
     const names = new Set(inputs.map((input) => input?.name));
+    if (node.kind === "condition") {
+      for (const issue of conditionConfigIssues(
+        node.config ?? {},
+        new Map(inputs.map((input) => [input.name, inputVariableType(node, input.name, nodes)])),
+      )) {
+        const suggestions = issue.reference
+          ? similarVariableNames(referenceRoot(issue.reference), [...names]).map(
+              (candidate) =>
+                candidate + issue.reference!.slice(referenceRoot(issue.reference!).length),
+            )
+          : [];
+        issues.push({ ...issue, nodeId: node.id, ...(suggestions.length ? { suggestions } : {}) });
+      }
+    }
     for (const input of inputs) {
       if (typeof input?.name !== "string" || !validVariableName(input.name))
         add("input-identifier", `输入变量名 ${input?.name ?? "（空）"} 无效`);
@@ -245,7 +308,17 @@ export function variableIssues(nodes: VariableNode[]): VariableIssue[] {
       }
     }
     for (const field of templateFields(node.kind)) {
+      if (node.kind === "condition" && (field === "expression") === isVisualCondition(node.config))
+        continue;
       let value = node.config?.[field];
+      if (node.kind === "condition" && field === "cases")
+        value = conditionCases(node.config ?? {}).flatMap((item) =>
+          Array.isArray(item?.rules)
+            ? item.rules
+                .filter((rule) => rule && conditionNeedsValue(rule.operator))
+                .map((rule) => rule.value)
+            : [],
+        );
       if (node.kind === "http" && field === "body") {
         const config = node.config as HttpNodeConfig;
         if (["get", "head"].includes(config.method ?? "get") || config.body?.type === "none")

@@ -9,6 +9,7 @@ import { cloneSubgraph } from "./subgraph.js";
 import { serializeWorkflow, workflowFileSizeLimit } from "./io.js";
 import { nodeInputs, nodeOutputs } from "./model.js";
 import type { WorkflowNode } from "./types.js";
+import { restoreBranchEdge } from "./condition.js";
 
 const format = "open-agent-tools/workflow-selection";
 
@@ -67,10 +68,16 @@ export function parseSelection(text: string): { nodes: WorkflowNode[]; edges: Ed
     created.data.description = node.data.description ?? created.data.description;
     return created;
   });
-  const edges = parsed.data.edges.map((edge) => ({
-    ...createEdge(edge.source, edge.target),
-    ...(edge.label ? { label: edge.label } : {}),
-  }));
+  const edges = parsed.data.edges.map((edge) =>
+    restoreBranchEdge(
+      {
+        ...createEdge(edge.source, edge.target),
+        ...(edge.label ? { label: edge.label } : {}),
+        ...(edge.branchId ? { branchId: edge.branchId } : {}),
+      },
+      nodes,
+    ),
+  );
   // Sanitizing before cloning prevents foreign state and secrets from entering the editor.
   serializeWorkflow(snapshotGraph("selection", nodes, edges));
   return cloneSubgraph(nodes, edges, new Set(nodes.map((node) => node.id)));

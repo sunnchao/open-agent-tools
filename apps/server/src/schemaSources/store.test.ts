@@ -76,6 +76,85 @@ describe("schema source store", () => {
     );
   });
 
+  it("creates encrypted connections from individual fields without returning a password", () => {
+    const source = createSchemaSource({
+      name: "Fields",
+      connector: "postgresql",
+      host: "pg.internal",
+      port: 5433,
+      username: "reader@team",
+      password: "p@ss/#%",
+      databaseName: "analytics",
+      schemaName: "reporting",
+    });
+    assert.equal(source.host, "pg.internal");
+    assert.equal(source.port, 5433);
+    assert.equal(source.username, "reader@team");
+    assert.equal(source.databaseName, "analytics");
+    assert.equal("password" in source, false);
+    assert.equal("connectionString" in source, false);
+    const url = new URL(getSchemaSource(source.id)!.connectionString);
+    assert.equal(decodeURIComponent(url.password), "p@ss/#%");
+  });
+
+  it("prefills legacy URL fields and preserves credentials when editing", () => {
+    const source = createSchemaSource({
+      name: "Legacy",
+      connectionString: "postgres://reader:p%40ss%25@pg.internal/analytics?sslmode=require",
+    });
+    assert.equal(source.host, "pg.internal");
+    assert.equal(source.port, 5432);
+    assert.equal(source.username, "reader");
+    assert.equal(source.databaseName, "analytics");
+    const updated = updateSchemaSource(source.id, {
+      host: "new.internal",
+      port: 5433,
+      username: "reader2",
+      password: "",
+      databaseName: "reports",
+    });
+    assert.equal(updated?.endpoint, "new.internal:5433/reports");
+    const url = new URL(getSchemaSource(source.id)!.connectionString);
+    assert.equal(decodeURIComponent(url.password), "p@ss%");
+    assert.equal(url.searchParams.get("sslmode"), "require");
+    assert.equal(url.pathname, "/reports");
+    assert.equal(url.username, "reader2");
+  });
+
+  it("keeps a separately configured database when partially editing a legacy connection", () => {
+    const source = createSchemaSource({
+      name: "Override",
+      connectionString: "mysql://reader:secret@db.internal/original",
+      databaseName: "override",
+    });
+    updateSchemaSource(source.id, { host: "new.internal" });
+    const stored = getSchemaSource(source.id)!;
+    assert.equal(stored.databaseName, "override");
+    assert.equal(new URL(stored.connectionString).pathname, "/override");
+  });
+
+  it("switches connectors and replaces passwords using the same fields", () => {
+    const source = createSchemaSource({
+      name: "Switch",
+      connectionString: "mysql://reader:old@db.internal:3306/analytics",
+    });
+    updateSchemaSource(source.id, {
+      connector: "postgresql",
+      host: "pg.internal",
+      port: 5432,
+      username: "reader",
+      password: "new@password",
+      databaseName: "analytics",
+      schemaName: "public",
+    });
+    const stored = getSchemaSource(source.id)!;
+    const url = new URL(stored.connectionString);
+    assert.equal(stored.connector, "postgresql");
+    assert.equal(url.protocol, "postgresql:");
+    assert.equal(url.port, "5432");
+    assert.equal(decodeURIComponent(url.password), "new@password");
+  });
+
   it("rejects connector and connection protocol mismatches", () => {
     assert.throws(
       () =>

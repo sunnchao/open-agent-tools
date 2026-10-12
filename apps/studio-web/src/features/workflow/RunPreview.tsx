@@ -1,4 +1,4 @@
-import { Button, Empty, Flex, Typography } from "antd";
+import { Alert, Button, Empty, Flex, Typography } from "antd";
 import { useState } from "react";
 import {
   CheckCircleFilled,
@@ -216,6 +216,17 @@ function RunLogItem({
         ) : null}
         {item.status === "error" ? <CloseCircleFilled /> : <CheckCircleFilled />}
       </Button>
+      {item.selectedBranchLabel && (
+        <span className="condition-run-selected">命中 {item.selectedBranchLabel}</span>
+      )}
+      {!collapsed &&
+        item.warnings?.map((warning, warningIndex) => (
+          <Alert
+            key={warningIndex}
+            type="warning"
+            title={`${warning.caseLabel ?? warning.caseId} 条件 ${warning.ruleIndex + 1}：${warning.message}`}
+          />
+        ))}
       {onResume && item.status === "success" ? (
         <Button
           className="variable-text-button"

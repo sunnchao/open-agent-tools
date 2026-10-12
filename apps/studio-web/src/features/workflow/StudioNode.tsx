@@ -1,11 +1,24 @@
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from "@xyflow/react";
+import { createContext, useContext, useEffect } from "react";
 import { CheckCircleFilled, CloseCircleFilled } from "../../lib/icons.js";
 import { nodeInputs, nodeOutputs } from "./model.js";
 import type { NodeRunStatus, WorkflowNodeData } from "./model.js";
 import { iconByKind } from "./palette.js";
 import type { WorkflowNode } from "./types.js";
+import { conditionBranches, branchHandle } from "./condition.js";
+
+export const WorkflowBranchActionsContext = createContext<
+  ((nodeId: string, branchId: string, anchor: { x: number; y: number }) => void) | null
+>(null);
 
 export function StudioNode({ data, selected }: NodeProps<WorkflowNode>) {
+  const addBranchNode = useContext(WorkflowBranchActionsContext);
+  const updateInternals = useUpdateNodeInternals();
+  const branches = data.kind === "condition" ? conditionBranches(data.config) : [];
+  const signature = branches.map((branch) => branch.id).join(",");
+  useEffect(() => {
+    if (data.kind === "condition") updateInternals(data.id);
+  }, [data.id, data.kind, signature, updateInternals]);
   return (
     <div
       className={`workflow-node kind-${data.kind} status-${data.status}${selected ? " is-selected" : ""}`}
@@ -19,9 +32,43 @@ export function StudioNode({ data, selected }: NodeProps<WorkflowNode>) {
         </span>
         <NodeStatus status={data.status} />
       </header>
-      <div className="node-summary">{nodeSummary(data)}</div>
-      <div className="node-summary">NODE ID: {data.id}</div>
-      {data.kind !== "end" ? <Handle type="source" position={Position.Right} /> : null}
+      {data.kind === "condition" ? (
+        <div className="condition-node-branches">
+          {branches.map((branch) => (
+            <div className="condition-node-branch" key={branch.id}>
+              <span>{branch.caseLabel}</span>
+              <b>{branch.label}</b>
+              <Handle
+                type="source"
+                position={Position.Right}
+                id={branchHandle(branch.id)}
+                className="condition-port-add"
+                role="button"
+                tabIndex={0}
+                aria-label={`${data.label} ${branch.caseLabel} 添加下一节点`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  addBranchNode?.(data.id, branch.id, { x: event.clientX, y: event.clientY });
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  addBranchNode?.(data.id, branch.id, { x: rect.right, y: rect.top });
+                }}
+              >
+                <span>+</span>
+              </Handle>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+          <div className="node-summary">{nodeSummary(data)}</div>
+          <div className="node-summary">NODE ID: {data.id}</div>
+          {data.kind !== "end" ? <Handle type="source" position={Position.Right} /> : null}
+        </>
+      )}
     </div>
   );
 }

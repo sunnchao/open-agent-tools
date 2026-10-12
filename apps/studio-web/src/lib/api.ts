@@ -6,6 +6,7 @@ import type {
   ToolCall,
   UiBlock,
 } from "../types.js";
+import type { ConditionWarning } from "@open-agent-tools/workflow-contracts";
 
 interface StreamCallbacks {
   onDelta: (delta: string) => void;
@@ -218,6 +219,7 @@ export interface WorkflowRunEdge {
   source: string;
   target: string;
   label?: string;
+  branchId?: string;
 }
 
 export interface WorkflowRunRequest {
@@ -250,6 +252,9 @@ export interface WorkflowNodeRunMeta {
     attempts?: number;
     cached?: boolean;
     incomingEdgeIds?: string[];
+    selectedBranchId?: string;
+    selectedBranchLabel?: string;
+    warnings?: ConditionWarning[];
   };
 }
 
@@ -267,6 +272,9 @@ export interface WorkflowNodeTestResult {
     durationMs: number;
     tokenUsage: WorkflowTokenUsage;
     attempts?: number;
+    selectedBranchId?: string;
+    selectedBranchLabel?: string;
+    warnings?: ConditionWarning[];
   };
 }
 
@@ -360,6 +368,13 @@ export function streamWorkflow(
                   tokenUsage: metadata.tokenUsage,
                   ...(metadata.attempts === undefined ? {} : { attempts: metadata.attempts }),
                   ...(metadata.cached === undefined ? {} : { cached: metadata.cached }),
+                  ...(metadata.selectedBranchId
+                    ? { selectedBranchId: metadata.selectedBranchId }
+                    : {}),
+                  ...(metadata.selectedBranchLabel
+                    ? { selectedBranchLabel: metadata.selectedBranchLabel }
+                    : {}),
+                  ...(metadata.warnings?.length ? { warnings: metadata.warnings } : {}),
                   ...(Array.isArray(event.incomingEdgeIds)
                     ? {
                         incomingEdgeIds: event.incomingEdgeIds.filter(
