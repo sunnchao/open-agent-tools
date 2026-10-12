@@ -5,6 +5,9 @@ import {
   fetchObservatoryGraph,
   fetchSchemaCatalog,
   fetchSchemaSources,
+  fetchQueryAudit,
+  fetchQueryAudits,
+  pendingQuerySteps,
   runObservatoryQuery,
   syncSchemaSource,
   walkChain,
@@ -28,6 +31,100 @@ const edges: GraphEdge[] = [
 ];
 
 describe("observatory api", () => {
+  it("streams split UTF-8 events, progress, and the final query result", async () => {
+    const steps = pendingQuerySteps();
+    const step = { ...steps[0]!, status: "succeeded" };
+    const result = { sourceId: "ops", question: "中文问题", auditId: "audit-1", steps };
+    const wire = new TextEncoder().encode(
+      [
+        ": heartbeat\r\n\r\n",
+        `data: ${JSON.stringify({ type: "start", auditId: "audit-1", steps })}\r\n\r\n`,
+        `data: ${JSON.stringify({ type: "step", auditId: "audit-1", step })}\r\n\r\n`,
+        `data: ${JSON.stringify({ type: "result", result })}\r\n\r\n`,
+      ].join(""),
+    );
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (let index = 0; index < wire.length; index += 7) {
+                controller.enqueue(wire.slice(index, index + 7));
+              }
+              controller.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const progress = vi.fn();
+    await expect(runObservatoryQuery("ops", "中文问题", [], progress)).resolves.toEqual(result);
+    expect(progress).toHaveBeenCalledTimes(2);
+    expect(progress).toHaveBeenLastCalledWith({ type: "step", auditId: "audit-1", step });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/observatory/query",
+      expect.objectContaining({
+        headers: { "content-type": "application/json", accept: "text/event-stream" },
+      }),
+    );
+  });
+
+  it("reports incomplete streams and server stream errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(": heartbeat\n\n", {
+            headers: { "content-type": "text/event-stream" },
+          }),
+      ),
+    );
+    await expect(runObservatoryQuery("ops", "问题", [], vi.fn())).rejects.toThrow("连接中断");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(`data: ${JSON.stringify({ type: "error", error: "写入审计失败" })}\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+          }),
+      ),
+    );
+    await expect(runObservatoryQuery("ops", "问题", [], vi.fn())).rejects.toThrow("写入审计失败");
+  });
+
+  it("loads filtered paginated audit summaries and encoded audit details", async () => {
+    const fetchMock = vi.fn(
+      async (url: string) =>
+        new Response(
+          JSON.stringify(
+            url.includes("audits?") ? { records: [], total: 0 } : { record: { id: "a/b" } },
+          ),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      fetchQueryAudits({
+        sourceId: "ops/source",
+        status: "failed",
+        search: "用户",
+        limit: 20,
+        offset: 20,
+      }),
+    ).resolves.toEqual({ records: [], total: 0 });
+    const url = new URL(fetchMock.mock.calls[0]![0], "http://localhost");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      sourceId: "ops/source",
+      status: "failed",
+      search: "用户",
+      limit: "20",
+      offset: "20",
+    });
+    await expect(fetchQueryAudit("a/b")).resolves.toEqual({ id: "a/b" });
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/observatory/audits/a%2Fb", undefined);
+  });
+
   it("loads schema graph from the demo endpoint", async () => {
     const fetchMock = vi.fn(
       async () =>

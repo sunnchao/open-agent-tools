@@ -8,7 +8,7 @@ import {
 import type { WorkflowNodeInput } from "./executor.js";
 
 export function workflowRedactor(nodes: WorkflowNodeInput[], runInputs: Record<string, unknown>) {
-  const enabled = nodes.some((node) => node.kind === "http");
+  const enabled = nodes.some((node) => node.kind === "http" || node.kind === "sql");
   const initialInputs = {
     ...Object.fromEntries(
       runVariables(nodes)

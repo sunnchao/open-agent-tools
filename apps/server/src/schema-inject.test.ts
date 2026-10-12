@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectIntent, loadCatalog, buildSchemaInjection } from "./schema-inject.js";
+import {
+  detectIntent,
+  detectRowLimitIntent,
+  loadCatalog,
+  buildSchemaInjection,
+  rowLimitClarifying,
+} from "./schema-inject.js";
 
 test("loadCatalog 能加载 enriched catalog", () => {
   const catalog = loadCatalog();
@@ -9,6 +15,25 @@ test("loadCatalog 能加载 enriched catalog", () => {
   // 验证字典增强生效：users 表有注释
   const users = catalog.tables.find((t) => t.table.name === "users");
   assert.ok(users?.table.comment?.includes("用户"));
+});
+
+test("detectRowLimitIntent 区分指定条数、查询全部和未指定", () => {
+  assert.deepEqual(detectRowLimitIntent("查询最近10个使用兑换码的用户"), {
+    kind: "limited",
+    limit: 10,
+  });
+  assert.deepEqual(detectRowLimitIntent("看前二十条订单"), { kind: "limited", limit: 20 });
+  assert.deepEqual(detectRowLimitIntent("查询所有使用兑换码的用户"), { kind: "all" });
+  assert.deepEqual(detectRowLimitIntent("查询使用兑换码的用户"), { kind: "unspecified" });
+  assert.deepEqual(detectRowLimitIntent("100"), { kind: "limited", limit: 100 });
+  assert.deepEqual(detectRowLimitIntent("全部"), { kind: "all" });
+  assert.deepEqual(detectRowLimitIntent("查询最近五百个用户"), { kind: "unspecified" });
+  assert.deepEqual(detectRowLimitIntent("查询使用兑换码的用户\n100"), {
+    kind: "limited",
+    limit: 100,
+  });
+  assert.deepEqual(detectRowLimitIntent("查询使用兑换码的用户\n全部"), { kind: "all" });
+  assert.match(rowLimitClarifying(), /默认返回最近 100 条/);
 });
 
 test("detectIntent 识别日志/用户/渠道/订单意图", () => {

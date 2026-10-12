@@ -12,8 +12,51 @@ import {
   type SchemaSourceWithSecret,
 } from "../schemaSources/store.js";
 import { runSchemaText2Sql, type HistoryTurn } from "../oneapiDemo/text2sql.js";
+import {
+  getQueryAudit,
+  listQueryAudits,
+  type QueryAuditStatus,
+} from "../observatory/queryAudit.js";
 
 export const observatoryRouter: Router = Router();
+
+observatoryRouter.get("/api/observatory/audits", (req: Request, res: Response) => {
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  if (status && !["running", "succeeded", "failed", "clarifying"].includes(status)) {
+    res.status(400).json({ error: "无效的审计状态" });
+    return;
+  }
+  const limit = req.query.limit === undefined ? 20 : Number(req.query.limit);
+  const offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
+  if (
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > 100 ||
+    !Number.isInteger(offset) ||
+    offset < 0
+  ) {
+    res.status(400).json({ error: "limit 必须为 1–100，offset 必须为非负整数" });
+    return;
+  }
+  res.json(
+    listQueryAudits({
+      sourceId: requestedSourceId(req),
+      status: status as QueryAuditStatus | undefined,
+      search: typeof req.query.search === "string" ? req.query.search.trim() : undefined,
+      limit,
+      offset,
+    }),
+  );
+});
+
+observatoryRouter.get("/api/observatory/audits/:id", (req: Request, res: Response) => {
+  const record = getQueryAudit(String(req.params.id));
+  if (!record) {
+    res.status(404).json({ error: "审计记录不存在" });
+    return;
+  }
+  res.json({ record });
+});
 
 function requestedSourceId(req: Request): string | undefined {
   if (typeof req.query.sourceId === "string" && req.query.sourceId.trim()) {
@@ -133,11 +176,59 @@ observatoryRouter.post(
           .slice(-8)
       : [];
     try {
-      res.json(await runSchemaText2Sql(requestedSourceId(req), question, history));
+      const streaming =
+        req.accepts(["text/event-stream", "application/json"]) === "text/event-stream" &&
+        req.get("accept")?.includes("text/event-stream");
+      const send = (event: unknown) => {
+        if (!res.destroyed && !res.writableEnded) {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
+      };
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
+      if (streaming) {
+        res.set({
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+        res.flushHeaders();
+        heartbeat = setInterval(() => {
+          if (!res.destroyed && !res.writableEnded) res.write(": heartbeat\n\n");
+        }, 15_000);
+        res.on("close", () => clearInterval(heartbeat));
+      }
+      try {
+        const result = await runSchemaText2Sql(
+          requestedSourceId(req),
+          question,
+          history,
+          streaming ? send : undefined,
+        );
+        if (streaming) {
+          send({ type: "result", result });
+          res.end();
+        } else {
+          const sourceFailed =
+            result.steps.find((step) => step.id === "source")?.status === "failed";
+          res
+            .status(sourceFailed ? (result.error?.includes("not found") ? 404 : 500) : 200)
+            .json(result);
+        }
+      } finally {
+        clearInterval(heartbeat);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logTrace("observatory.query", { error: truncate(message, 200) }, "warn");
-      res.status(message.includes("not found") ? 404 : 500).json({ error: message });
+      if (res.headersSent) {
+        if (!res.destroyed) {
+          res.write(`data: ${JSON.stringify({ type: "error", error: message })}\n\n`);
+          res.end();
+        }
+      } else {
+        res.status(message.includes("not found") ? 404 : 500).json({ error: message });
+      }
     }
   },
 );

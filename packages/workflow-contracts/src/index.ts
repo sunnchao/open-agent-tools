@@ -127,7 +127,7 @@ export function prepareRunInputs(variables: RunVariable[], values: Record<string
 }
 export function templateFields(kind: string): string[] {
   if (kind === "llm") return ["systemPrompt", "prompt"];
-  if (kind === "rag" || kind === "graph") return ["query"];
+  if (kind === "rag" || kind === "graph" || kind === "sql") return ["query"];
   if (kind === "condition") return ["expression"];
   if (kind === "mcp") return ["arguments"];
   if (kind === "http") return ["url", "params", "headers", "body", "authorization"];
@@ -143,6 +143,18 @@ export function templateStrings(value: unknown): string[] {
   return [];
 }
 export function resultFields(kind: string): Record<string, VariableType> | null {
+  if (kind === "sql")
+    return {
+      sql: "string",
+      rows: "array",
+      rowCount: "number",
+      auditId: "string",
+      sourceId: "string",
+      selectedTables: "array",
+      steps: "array",
+      durationMs: "number",
+      truncated: "boolean",
+    };
   if (kind === "graph") return { formatted: "string", seeds: "array" };
   if (kind === "rag") return { formatted: "string", chunks: "array" };
   if (kind === "http")

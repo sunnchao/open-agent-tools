@@ -47,6 +47,8 @@ export interface HistoryTurn {
 }
 
 export interface ObservatoryQueryResult {
+  auditId?: string;
+  steps?: QueryStep[];
   sourceId: string;
   question: string;
   intent?: string;
@@ -58,8 +60,86 @@ export interface ObservatoryQueryResult {
   sql?: string;
   clarifying?: string;
   rows?: Record<string, unknown>[];
+  truncated?: boolean;
   error?: string;
   durationMs: number;
+}
+
+export type QueryAuditStatus = "running" | "succeeded" | "failed" | "clarifying";
+export interface QueryStep {
+  id: string;
+  label: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  startedAt?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  message?: string;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+}
+
+export const QUERY_STEP_LABELS = [
+  ["source", "解析数据源"],
+  ["schema", "加载 Schema"],
+  ["retrieval", "检索相关表"],
+  ["generation", "生成 SQL"],
+  ["validation", "校验 SQL"],
+  ["execution", "执行查询"],
+  ["output", "输出结果"],
+] as const;
+
+export function pendingQuerySteps(): QueryStep[] {
+  return QUERY_STEP_LABELS.map(([id, label]) => ({ id, label, status: "pending" }));
+}
+
+export interface QueryAuditSummary {
+  id: string;
+  sourceId: string | null;
+  sourceName: string | null;
+  question: string;
+  status: QueryAuditStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number;
+  rowCount: number | null;
+  error: string | null;
+}
+
+export interface QueryAuditRecord extends QueryAuditSummary {
+  history: HistoryTurn[];
+  steps: QueryStep[];
+  selectedTables: string[];
+  sql: string | null;
+  clarifying: string | null;
+  providerId: string | null;
+  model: string | null;
+  resultPreview: Record<string, unknown>[];
+}
+
+export type QueryProgressEvent =
+  | { type: "start"; auditId: string; steps: QueryStep[] }
+  | { type: "step"; auditId: string; step: QueryStep };
+
+export function fetchQueryAudits(
+  filters: {
+    sourceId?: string;
+    status?: QueryAuditStatus;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<{ records: QueryAuditSummary[]; total: number }> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  return request(`/api/observatory/audits?${params}`);
+}
+
+export function fetchQueryAudit(id: string): Promise<QueryAuditRecord> {
+  return request<{ record: QueryAuditRecord }>(
+    `/api/observatory/audits/${encodeURIComponent(id)}`,
+  ).then((body) => body.record);
 }
 
 export type SchemaSemanticProfile = "generic" | "oneapi";
@@ -218,16 +298,56 @@ export function rebuildObservatoryGraph(sourceId: string): Promise<{
   });
 }
 
-export function runObservatoryQuery(
+export async function runObservatoryQuery(
   sourceId: string,
   question: string,
   history: HistoryTurn[] = [],
+  onProgress?: (event: QueryProgressEvent) => void,
+  signal?: AbortSignal,
 ): Promise<ObservatoryQueryResult> {
-  return request("/api/observatory/query", {
+  const init: RequestInit = {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(onProgress ? { accept: "text/event-stream" } : {}),
+    },
     body: JSON.stringify({ sourceId, question, history }),
-  });
+    ...(signal ? { signal } : {}),
+  };
+  if (!onProgress) return request("/api/observatory/query", init);
+  const response = await fetch("/api/observatory/query", init);
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `HTTP ${response.status}`);
+  }
+  if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+    return (await response.json()) as ObservatoryQueryResult;
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("查询响应为空");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const parsed = parseSseBuffer(buffer.replace(/\r\n/g, "\n"));
+      buffer = parsed.rest;
+      for (const event of parsed.events) {
+        if (event.type === "start" || event.type === "step") {
+          onProgress(event as QueryProgressEvent);
+        } else if (event.type === "result") {
+          return event.result as ObservatoryQueryResult;
+        } else if (event.type === "error") {
+          throw new Error(String(event.error));
+        }
+      }
+      if (done) throw new Error("查询连接中断，请在审计日志中查看执行状态");
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 export function neighborsOf(edges: GraphEdge[], name: string, nodes: GraphNode[]): string[] {
@@ -279,3 +399,4 @@ export function edgeIdsInSet(
   }
   return ids;
 }
+import { parseSseBuffer } from "../../lib/api.js";

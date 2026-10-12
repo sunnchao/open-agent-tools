@@ -11,7 +11,7 @@ import {
 } from "../function_tools/sqlQueryBuiltin.js";
 import { createLlmClient, type LlmClient } from "../providers/clients/index.js";
 import { getDefaultProvider, getProvider, type ProviderWithKey } from "../providers/store.js";
-import { detectIntent } from "../schema-inject.js";
+import { detectIntent, detectRowLimitIntent, rowLimitClarifying } from "../schema-inject.js";
 import {
   exportQuerySubgraph,
   getSchemaGraph,
@@ -25,6 +25,11 @@ import {
   type SchemaSemanticProfile,
   type SchemaSourceWithSecret,
 } from "../schemaSources/store.js";
+import {
+  createQueryAudit,
+  type QueryProgressEvent,
+  type QueryStep,
+} from "../observatory/queryAudit.js";
 
 const ONEAPI_INTENT_TABLES: Record<string, string[]> = {
   log_query: ["logs"],
@@ -46,6 +51,8 @@ export interface HistoryTurn {
 }
 
 export interface ObservatoryQueryResult {
+  auditId: string;
+  steps: QueryStep[];
   sourceId: string;
   question: string;
   intent?: string;
@@ -57,6 +64,7 @@ export interface ObservatoryQueryResult {
   sql?: string;
   clarifying?: string;
   rows?: Record<string, unknown>[];
+  truncated?: boolean;
   error?: string;
   durationMs: number;
 }
@@ -72,13 +80,14 @@ function resolveSource(sourceId?: string): SchemaSourceWithSecret {
   return source;
 }
 
-function resolveLlm(): { llm: LlmClient; model: string } | null {
+function resolveLlm(): { llm: LlmClient; model: string; provider: ProviderWithKey } | null {
   const providerId = process.env.AI_QUERY_PROVIDER_ID;
   const provider: ProviderWithKey | null = providerId
     ? getProvider(providerId, { requireEnabled: true })
     : getDefaultProvider({ requireEnabled: true });
   if (!provider) return null;
   return {
+    provider,
     llm: createLlmClient({ ...provider, apiKey: provider.apiKey ?? "ollama" }),
     model: process.env.AI_QUERY_MODEL || provider.models[0] || "gpt-4o-mini",
   };
@@ -207,8 +216,9 @@ function systemPrompt(source: SchemaSourceWithSecret): string {
     "规则：\n" +
     `1) ${identifierRule}\n` +
     "2) 只输出单条 SELECT，不要 UNION、注释或多语句；\n" +
-    "3) 聚合列使用清晰的中文别名；不要自行添加 LIMIT，执行器会统一截断；\n" +
-    "4) 缺少必要业务口径时才追问；用户补充后必须继续生成 SQL。\n";
+    "3) 聚合列使用清晰的中文别名；\n" +
+    "4) 条数：用户指定前 N 条、最近 N 条或 TOP N 时必须写 LIMIT N，且 N 不超过 100；用户明确要求全部、所有或全量时不要写 LIMIT；未指定条数时不要猜测，返回 clarifying；\n" +
+    "5) 缺少必要业务口径时才追问；用户补充条数或口径后必须继续生成 SQL。\n";
   const profileRules =
     source.semanticProfile === "oneapi"
       ? "业务同义词：权重=weight，额度=quota，令牌=tokens.key/name，渠道=channels；时间戳通常为 Unix 秒。\n"
@@ -229,6 +239,7 @@ async function generateSql(
   question: string,
   schema: string,
   history: HistoryTurn[],
+  rowLimit: ReturnType<typeof detectRowLimitIntent>,
 ): Promise<{ sql?: string; clarifying?: string }> {
   const historyText = history
     .slice(-6)
@@ -243,6 +254,11 @@ async function generateSql(
         content:
           `${schema}\n\n` +
           (historyText ? `最近对话：\n${historyText}\n\n` : "") +
+          `条数口径：${
+            rowLimit.kind === "limited"
+              ? `用户要求 ${rowLimit.limit} 条，SQL 必须包含 LIMIT ${rowLimit.limit}`
+              : "用户要求查询全部，SQL 不要包含 LIMIT"
+          }\n` +
           `本次问题：${question}`,
       },
     ],
@@ -261,72 +277,158 @@ export async function runSchemaText2Sql(
   sourceId: string | undefined,
   question: string,
   history: HistoryTurn[] = [],
+  onProgress?: (event: QueryProgressEvent) => void,
 ): Promise<ObservatoryQueryResult> {
-  const started = Date.now();
-  const source = resolveSource(sourceId);
-  const catalog = await loadSchemaCatalog(source.id);
-  const graph = await getSchemaGraph(source.id);
-  const lookup = [question, ...history.map((turn) => turn.content)].join("\n");
-  const selectedTables = await selectTables(lookup, catalog, source.semanticProfile, graph);
-  const schemaPrompt = renderSelectedSchema(catalog, selectedTables, source.semanticProfile);
-  const graphView = await exportQuerySubgraph(graph, question, source.semanticProfile);
-  const intent = source.semanticProfile === "oneapi" ? detectIntent(question) : undefined;
-  const base = {
-    sourceId: source.id,
+  const audit = createQueryAudit(sourceId, question, history, onProgress);
+  const result: ObservatoryQueryResult = {
+    auditId: audit.record.id,
+    steps: audit.record.steps,
+    sourceId: sourceId ?? "",
     question,
-    ...(intent ? { intent } : {}),
-    selectedTables,
-    schemaPrompt,
-    graph: graphView.graph,
-    seeds: graphView.seeds.map((seed) => seed.name),
-    formattedGraph: graphView.formatted,
+    selectedTables: [],
+    schemaPrompt: "",
+    graph: { nodes: [], edges: [], stats: { entities: 0, relations: 0 } },
+    seeds: [],
+    formattedGraph: "",
+    durationMs: 0,
   };
-
-  const llmPack = resolveLlm();
-  if (!llmPack) {
-    return {
-      ...base,
-      error: "未配置可用 LLM Provider（Studio 设置里添加并设为默认）",
-      durationMs: Date.now() - started,
-    };
-  }
-
-  const generated = await generateSql(
-    llmPack.llm,
-    llmPack.model,
-    source,
-    question,
-    schemaPrompt,
-    history,
-  );
-  if (generated.clarifying && !generated.sql) {
-    return { ...base, clarifying: generated.clarifying, durationMs: Date.now() - started };
-  }
-  if (!generated.sql) {
-    return { ...base, error: "模型未生成 SQL", durationMs: Date.now() - started };
-  }
-
   try {
+    audit.start("source", { sourceId: sourceId ?? null });
+    const source = resolveSource(sourceId);
+    audit.addSecret(source.connectionString);
+    const password = new URL(source.connectionString).password;
+    audit.addSecret(password);
+    try {
+      audit.addSecret(decodeURIComponent(password));
+    } catch {
+      // The URL parser also accepts passwords containing a literal percent sign.
+    }
+    result.sourceId = source.id;
+    audit.patch({ sourceId: source.id, sourceName: source.name });
+    audit.complete("source", `已选择 ${source.name}`, {
+      sourceId: source.id,
+      name: source.name,
+      connector: source.connector,
+    });
+
+    audit.start("schema", { sourceId: source.id });
+    const catalog = await loadSchemaCatalog(source.id);
+    const graph = await getSchemaGraph(source.id);
+    audit.complete("schema", `已加载 ${catalog.tables.length} 张表`, {
+      database: catalog.database,
+      tableCount: catalog.tables.length,
+    });
+
+    audit.start("retrieval", { question, history });
+    const lookup = [question, ...history.map((turn) => turn.content)].join("\n");
+    result.selectedTables = await selectTables(lookup, catalog, source.semanticProfile, graph);
+    result.schemaPrompt = renderSelectedSchema(
+      catalog,
+      result.selectedTables,
+      source.semanticProfile,
+    );
+    const graphView = await exportQuerySubgraph(graph, question, source.semanticProfile);
+    result.graph = graphView.graph;
+    result.seeds = graphView.seeds.map((seed) => seed.name);
+    result.formattedGraph = graphView.formatted;
+    result.intent = source.semanticProfile === "oneapi" ? detectIntent(question) : undefined;
+    const rowLimit = detectRowLimitIntent(lookup);
+    result.intent = [result.intent, `row_limit:${rowLimit.kind}`].filter(Boolean).join(",");
+    audit.patch({ selectedTables: result.selectedTables, rowLimit });
+    audit.complete("retrieval", `选中 ${result.selectedTables.length} 张相关表`, {
+      selectedTables: result.selectedTables,
+      schemaPrompt: result.schemaPrompt,
+      seeds: result.seeds,
+      rowLimit,
+    });
+    if (rowLimit.kind === "unspecified") {
+      result.clarifying = rowLimitClarifying();
+      audit.patch({ clarifying: result.clarifying, rowLimit });
+      audit.complete("generation", "需要确认查询条数", { clarifying: result.clarifying, rowLimit });
+      const finished = audit.finish("clarifying");
+      return { ...result, steps: finished.steps, durationMs: finished.durationMs };
+    }
+
+    audit.start("generation", { question, history, schemaPrompt: result.schemaPrompt, rowLimit });
+    const llmPack = resolveLlm();
+    if (!llmPack) throw new Error("未配置可用 LLM Provider（Studio 设置里添加并设为默认）");
+    audit.addSecret(llmPack.provider.apiKey ?? "");
+    audit.patch({ providerId: llmPack.provider.id, model: llmPack.model });
+    const generated = await generateSql(
+      llmPack.llm,
+      llmPack.model,
+      source,
+      question,
+      result.schemaPrompt,
+      history,
+      rowLimit,
+    );
+    if (generated.clarifying && !generated.sql) {
+      result.clarifying = generated.clarifying;
+      audit.patch({ clarifying: generated.clarifying });
+      audit.complete("generation", "需要补充查询口径", { clarifying: generated.clarifying });
+      const finished = audit.finish("clarifying");
+      return { ...result, steps: finished.steps, durationMs: finished.durationMs };
+    }
+    if (!generated.sql) throw new Error("模型未生成 SQL");
+    result.sql = generated.sql;
+    audit.patch({ sql: generated.sql });
+    audit.complete("generation", "SQL 已生成", { sql: generated.sql, model: llmPack.model });
+
+    audit.start("validation", { sql: generated.sql });
     validateSchemaSql(generated.sql, catalog);
+    audit.complete("validation", "已通过只读、单语句及 Schema 范围校验");
+
+    audit.start("execution", { sql: generated.sql, sourceId: source.id });
+    const executed = await executeQuerySqlWithConnection(
+      generated.sql,
+      source.connectionString,
+      [],
+      {
+        connector: source.connector,
+        database: source.databaseName ?? undefined,
+        schema: source.schemaName ?? undefined,
+      },
+    );
+    if (!executed.ok) throw new Error(executed.error ?? "SQL 执行失败");
+    const rows = (executed.rows ?? []) as Record<string, unknown>[];
+    const truncated = executed.truncated === true;
+    audit.complete(
+      "execution",
+      truncated ? `查询返回 ${rows.length} 行，已达展示上限` : `查询返回 ${rows.length} 行`,
+      {
+        rowCount: rows.length,
+        truncated,
+        durationMs: executed.durationMs,
+      },
+    );
+
+    audit.start("output", { rowCount: rows.length, truncated });
+    result.rows = rows;
+    result.truncated = truncated;
+    audit.patch({ rowCount: rows.length, resultPreview: rows });
+    audit.complete(
+      "output",
+      rows.length
+        ? truncated
+          ? `已输出前 ${rows.length} 行，结果已截断`
+          : `已输出 ${rows.length} 行结果`
+        : "查询完成，无匹配数据",
+      {
+        rowCount: rows.length,
+        truncated,
+        columns: Object.keys(rows[0] ?? {}),
+      },
+    );
+    const finished = audit.finish("succeeded");
+    return { ...result, steps: finished.steps, durationMs: finished.durationMs };
   } catch (error) {
+    const finished = audit.finish("failed", error instanceof Error ? error.message : String(error));
     return {
-      ...base,
-      sql: generated.sql,
-      error: error instanceof Error ? error.message : String(error),
-      durationMs: Date.now() - started,
+      ...result,
+      steps: finished.steps,
+      error: finished.error ?? "查询失败",
+      durationMs: finished.durationMs,
     };
   }
-
-  const executed = await executeQuerySqlWithConnection(generated.sql, source.connectionString, [], {
-    connector: source.connector,
-    database: source.databaseName ?? undefined,
-    schema: source.schemaName ?? undefined,
-  });
-  return {
-    ...base,
-    sql: generated.sql,
-    rows: executed.ok ? ((executed.rows ?? []) as Record<string, unknown>[]) : undefined,
-    error: executed.ok ? undefined : executed.error,
-    durationMs: Date.now() - started,
-  };
 }

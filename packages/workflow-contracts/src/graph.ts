@@ -5,6 +5,7 @@ export const nodeKindSchema = z.enum([
   "input",
   "rag",
   "graph",
+  "sql",
   "llm",
   "mcp",
   "http",
@@ -61,6 +62,15 @@ export const nodeConfigSchemas = {
     })
     .passthrough(),
   graph: z.object({ ...bindings, ...execution, query: z.string().optional() }).passthrough(),
+  sql: z
+    .object({
+      ...bindings,
+      ...execution,
+      sourceId: z.string().optional(),
+      query: z.string().optional(),
+      maxRows: z.number().int().min(1).max(100).optional(),
+    })
+    .passthrough(),
   llm: z
     .object({
       ...bindings,
@@ -144,6 +154,18 @@ const defaultNodeConfig: Record<NodeKind, Record<string, unknown>> = {
     query: "{{query}}",
     inputs: [],
     outputs: [{ name: "formatted", selector: "$result.formatted" }],
+  },
+  sql: {
+    sourceId: "",
+    query: "{{query}}",
+    maxRows: 100,
+    inputs: [],
+    outputs: [
+      { name: "rows", selector: "$result.rows" },
+      { name: "sql", selector: "$result.sql" },
+      { name: "rowCount", selector: "$result.rowCount" },
+      { name: "auditId", selector: "$result.auditId" },
+    ],
   },
   llm: {
     providerId: "default",

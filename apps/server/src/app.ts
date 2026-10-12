@@ -14,6 +14,7 @@ import { aiQueryRouter } from "./routes/aiQuery.js";
 import { oneapiDemoRouter } from "./routes/oneapiDemo.js";
 import { observatoryRouter } from "./routes/observatory.js";
 import { schemaSourcesRouter } from "./routes/schemaSources.js";
+import { mcpGatewayRouter } from "./routes/mcpGateway.js";
 import { workflowsRouter } from "./routes/workflows.js";
 
 export function createApp(): express.Express {
@@ -54,6 +55,7 @@ export function createApp(): express.Express {
   app.use(imChannelsRouter);
   app.use(aiQueryRouter);
   app.use(schemaSourcesRouter);
+  app.use(mcpGatewayRouter);
   app.use(observatoryRouter);
   app.use(oneapiDemoRouter);
 

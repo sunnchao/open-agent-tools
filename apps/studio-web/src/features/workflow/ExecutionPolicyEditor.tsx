@@ -8,9 +8,10 @@ export function ExecutionPolicyEditor({
   data: WorkflowNodeData;
   updateConfig: (key: string, value: unknown) => void;
 }) {
-  if (!["rag", "graph", "llm", "mcp", "http"].includes(data.kind)) return null;
+  if (!["rag", "graph", "llm", "mcp", "http", "sql"].includes(data.kind)) return null;
   const timeout = Number(
-    data.config.timeoutMs ?? (["rag", "graph"].includes(data.kind) ? 15000 : 30000),
+    data.config.timeoutMs ??
+      (data.kind === "sql" ? 60000 : ["rag", "graph"].includes(data.kind) ? 15000 : 30000),
   );
   const retry = data.config.retry as { maxRetries: number; delayMs?: number } | undefined;
   return (
@@ -43,9 +44,9 @@ export function ExecutionPolicyEditor({
                   }}
                 />
               </Form.Item>
-              {data.kind === "llm" ? (
+              {data.kind === "llm" || data.kind === "sql" ? (
                 <Typography.Paragraph className="field-help">
-                  LLM 失败时不自动重试，避免重复计费。
+                  {data.kind === "sql" ? "SQL 问数" : "LLM"}失败时不自动重试，避免重复调用模型。
                 </Typography.Paragraph>
               ) : (
                 <>

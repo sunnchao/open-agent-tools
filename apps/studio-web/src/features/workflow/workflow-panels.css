@@ -268,3 +268,16 @@
     width: 100%;
   }
 }
+.workflow-layout .palette-item.kind-sql .palette-item-icon,
+.workflow-node.kind-sql .node-icon,
+.node-inspector-content .node-icon.kind-sql,
+.node-picker-list > button.kind-sql > span:first-child {
+  background: #faeeda;
+  color: #9a651f;
+}
+
+.sql-node-resource-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   applyEdgeChanges,
   applyNodeChanges,
@@ -16,11 +16,18 @@ import {
   type OnNodesChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ReloadOutlined, SearchOutlined, SettingOutlined, TableOutlined } from "../../lib/icons.js";
+import {
+  AuditOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  SettingOutlined,
+  TableOutlined,
+} from "../../lib/icons.js";
 import {
   edgeIdsInSet,
   fetchObservatoryGraph,
   fetchSchemaSources,
+  pendingQuerySteps,
   rebuildObservatoryGraph,
   runObservatoryQuery,
   walkChain,
@@ -29,7 +36,10 @@ import {
   type ObservatoryQueryResult,
   type ObservatoryTable,
   type SchemaSourceOption,
+  type QueryStep,
 } from "./api.js";
+import { QueryExecution, formatDuration } from "./QueryExecution.js";
+import { QueryAuditView } from "./QueryAuditView.js";
 import { RelationEdge } from "../graph/RelationEdge.js";
 import {
   parallelCurveOffsets,
@@ -329,6 +339,14 @@ export function ObservatoryWorkspace() {
   const [chainRef, setChainRef] = useState("");
   const [sources, setSources] = useState<SchemaSourceOption[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState("");
+  const [view, setView] = useState<"query" | "audit">("query");
+  const [steps, setSteps] = useState<QueryStep[]>(pendingQuerySteps);
+  const [auditId, setAuditId] = useState<string>();
+  const [liveSql, setLiveSql] = useState("");
+  const [liveSchema, setLiveSchema] = useState("");
+  const queryController = useRef<AbortController | null>(null);
+
+  useEffect(() => () => queryController.current?.abort(), []);
 
   const tables = useMemo(() => {
     const map = new Map<string, ObservatoryTable>();
@@ -388,6 +406,10 @@ export function ObservatoryWorkspace() {
     setPayload(null);
     localStorage.setItem("open-agent-tools.observatory-source", sourceId);
     setResult(null);
+    setSteps(pendingQuerySteps());
+    setAuditId(undefined);
+    setLiveSql("");
+    setLiveSchema("");
     setHistory([]);
     setHotNames(new Set());
     setHotEdgeIds(new Set());
@@ -436,13 +458,66 @@ export function ObservatoryWorkspace() {
 
   const runQuery = async (text: string, fromClarify = false) => {
     const trimmed = text.trim();
-    if (!trimmed || !selectedSourceId) return;
+    if (!trimmed || !selectedSourceId || busy || queryController.current) return;
+    const controller = new AbortController();
+    queryController.current = controller;
     setBusy("query");
     setNotice(null);
+    setResult(null);
+    setSteps(pendingQuerySteps());
+    setAuditId(undefined);
+    setLiveSql("");
+    setLiveSchema("");
+    setHotNames(new Set());
+    setHotEdgeIds(new Set());
+    setSelectedEdgeId(null);
+    setChainTitle("查询执行中");
+    setChainRef("");
     try {
       const nextHistory = fromClarify ? history : [];
-      const next = await runObservatoryQuery(selectedSourceId, trimmed, nextHistory);
+      const next = await runObservatoryQuery(
+        selectedSourceId,
+        trimmed,
+        nextHistory,
+        (event) => {
+          if (controller.signal.aborted) return;
+          setAuditId(event.auditId);
+          if (event.type === "start") {
+            setSteps(event.steps);
+          } else {
+            setSteps((current) =>
+              current.map((step) => (step.id === event.step.id ? event.step : step)),
+            );
+            if (event.step.id === "generation" && typeof event.step.output?.sql === "string") {
+              setLiveSql(event.step.output.sql);
+            }
+            if (event.step.id === "retrieval" && event.step.status === "succeeded") {
+              if (typeof event.step.output?.schemaPrompt === "string") {
+                setLiveSchema(event.step.output.schemaPrompt);
+              }
+              const names = new Set(
+                Array.isArray(event.step.output?.selectedTables)
+                  ? event.step.output.selectedTables.filter(
+                      (name): name is string => typeof name === "string",
+                    )
+                  : [],
+              );
+              setHotNames(names);
+              setHotEdgeIds(
+                payload ? edgeIdsInSet(payload.graph.edges, payload.graph.nodes, names) : new Set(),
+              );
+            }
+          }
+        },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
       setResult(next);
+      if (next.steps) setSteps(next.steps);
+      setAuditId(next.auditId);
+      setChainTitle(
+        next.error ? "查询失败" : next.clarifying ? "等待补充查询口径" : "本次查询相关表",
+      );
       const selected = new Set(next.selectedTables);
       setHotNames(selected);
       setHotEdgeIds(
@@ -461,9 +536,18 @@ export function ObservatoryWorkspace() {
         setClarify("");
       }
     } catch (reason) {
+      if (controller.signal.aborted) return;
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
+      setSteps((current) =>
+        current.map((step) =>
+          step.status === "running" || step.status === "pending"
+            ? { ...step, status: "skipped", message: "连接中断，请通过审计日志确认执行状态" }
+            : step,
+        ),
+      );
     } finally {
-      setBusy(null);
+      queryController.current = null;
+      if (!controller.signal.aborted) setBusy(null);
     }
   };
 
@@ -486,6 +570,7 @@ export function ObservatoryWorkspace() {
   const rows = result?.rows ?? [];
   const schemaText =
     result?.schemaPrompt ||
+    liveSchema ||
     chainNames
       .map((name) => {
         const table = tables.get(name);
@@ -514,7 +599,7 @@ export function ObservatoryWorkspace() {
               aria-label="Schema 数据源"
               value={selectedSourceId}
               onChange={(event) => selectSource(event.target.value)}
-              disabled={sources.length === 0 || busy === "load"}
+              disabled={sources.length === 0 || busy !== null}
             >
               {sources.length === 0 ? <option value="">未配置数据源</option> : null}
               {sources.map((source) => (
@@ -539,7 +624,7 @@ export function ObservatoryWorkspace() {
           <button
             className="studio-button secondary"
             type="button"
-            disabled={!selectedSourceId || busy === "load"}
+            disabled={!selectedSourceId || busy !== null}
             onClick={() => void refresh(selectedSourceId)}
           >
             <ReloadOutlined /> 刷新
@@ -547,7 +632,7 @@ export function ObservatoryWorkspace() {
           <button
             className="studio-button secondary"
             type="button"
-            disabled={!selectedSourceId || busy === "rebuild"}
+            disabled={!selectedSourceId || busy !== null}
             onClick={() => void rebuild()}
           >
             {busy === "rebuild" ? "重建中..." : "重建图谱"}
@@ -561,181 +646,220 @@ export function ObservatoryWorkspace() {
         </div>
       ) : null}
 
-      <div className="graph-layout obs-layout">
-        <aside className="graph-side-panel">
-          <div className="panel-heading">
-            <span>问运营数据</span>
-          </div>
-          <div className="obs-ask">
-            <textarea
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder="例如：最近消费日志最多的模型是哪些？"
-            />
-            <button
-              className="studio-button primary"
-              type="button"
-              disabled={!selectedSourceId || !question.trim() || busy === "query"}
-              onClick={() => void runQuery(question)}
-            >
-              <SearchOutlined /> {busy === "query" ? "生成中..." : "生成并执行 SQL"}
-            </button>
-            {activeSource?.semanticProfile === "oneapi" ? (
-              <div className="obs-chips">
-                {EXAMPLES.map((item) => (
-                  <button
-                    key={item}
-                    className="obs-chip"
-                    type="button"
-                    onClick={() => {
-                      setQuestion(item);
-                      void runQuery(item);
-                    }}
-                  >
-                    {item}
-                  </button>
-                ))}
+      <nav className="obs-view-tabs" aria-label="问数视图">
+        <button
+          type="button"
+          className={view === "query" ? "is-active" : ""}
+          aria-pressed={view === "query"}
+          onClick={() => setView("query")}
+        >
+          <SearchOutlined /> 数据问数
+        </button>
+        <button
+          type="button"
+          className={view === "audit" ? "is-active" : ""}
+          aria-pressed={view === "audit"}
+          onClick={() => setView("audit")}
+        >
+          <AuditOutlined /> 审计日志
+        </button>
+      </nav>
+
+      {view === "audit" ? (
+        <QueryAuditView
+          key={`${selectedSourceId}:${result?.auditId ?? ""}`}
+          sourceId={selectedSourceId}
+        />
+      ) : (
+        <div className="graph-layout obs-layout">
+          <aside className="graph-side-panel">
+            <div className="panel-heading">
+              <span>问运营数据</span>
+            </div>
+            <div className="obs-ask">
+              <textarea
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                placeholder="例如：最近消费日志最多的模型是哪些？"
+              />
+              <button
+                className="studio-button primary"
+                type="button"
+                disabled={!selectedSourceId || !question.trim() || busy !== null}
+                onClick={() => void runQuery(question)}
+              >
+                <SearchOutlined /> {busy === "query" ? "执行中..." : "生成并执行 SQL"}
+              </button>
+              {activeSource?.semanticProfile === "oneapi" ? (
+                <div className="obs-chips">
+                  {EXAMPLES.map((item) => (
+                    <button
+                      key={item}
+                      className="obs-chip"
+                      type="button"
+                      disabled={busy !== null}
+                      onClick={() => {
+                        setQuestion(item);
+                        void runQuery(item);
+                      }}
+                    >
+                      {item}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="obs-stat">
+                {payload ? (
+                  <>
+                    <b>{activeSource?.name ?? payload.database}</b>
+                    <span>
+                      {payload.database} · {payload.tables.length} 张表 ·{" "}
+                      {payload.graph.stats.relations} 条引用
+                    </span>
+                  </>
+                ) : (
+                  <span>{busy === "load" ? "正在加载图谱..." : "未加载"}</span>
+                )}
               </div>
-            ) : null}
-            <div className="obs-stat">
-              {payload ? (
-                <>
-                  <b>{activeSource?.name ?? payload.database}</b>
-                  <span>
-                    {payload.database} · {payload.tables.length} 张表 ·{" "}
-                    {payload.graph.stats.relations} 条引用
-                  </span>
-                </>
-              ) : (
-                <span>{busy === "load" ? "正在加载图谱..." : "未加载"}</span>
-              )}
+              <div className="obs-execution-heading">
+                <strong>执行过程</strong>
+                {result ? <span>{formatDuration(result.durationMs)}</span> : null}
+              </div>
+              <QueryExecution steps={steps} auditId={auditId} />
+              <div className="obs-chain">
+                <strong>{chainTitle}</strong>
+                {chainRef ? <div className="obs-ref">{chainRef}</div> : null}
+                {chainNames.length > 0 ? (
+                  <ul>
+                    {chainNames.map((name) => {
+                      const table = tables.get(name);
+                      return (
+                        <li key={name}>
+                          <b>{name}</b>
+                          {table ? ` · ~${table.rows} 行` : ""}
+                          <div>{formatColumns(table)}</div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p>点击连线高亮 2 跳引用链，并列出相关表字段。</p>
+                )}
+              </div>
             </div>
-            <div className="obs-chain">
-              <strong>{chainTitle}</strong>
-              {chainRef ? <div className="obs-ref">{chainRef}</div> : null}
-              {chainNames.length > 0 ? (
-                <ul>
-                  {chainNames.map((name) => {
-                    const table = tables.get(name);
-                    return (
-                      <li key={name}>
-                        <b>{name}</b>
-                        {table ? ` · ~${table.rows} 行` : ""}
-                        <div>{formatColumns(table)}</div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                <p>点击连线高亮 2 跳引用链，并列出相关表字段。</p>
-              )}
-            </div>
-          </div>
-        </aside>
+          </aside>
 
-        <div className="graph-canvas-panel">
-          <div className="graph-canvas-heading">
-            <span>
-              <TableOutlined /> schema 图
-            </span>
-            <span className="graph-legend">
-              <span className="graph-legend-item">
-                <span className="graph-legend-dot" style={{ background: "#d9822b" }} />
-                当前链
+          <div className="graph-canvas-panel">
+            <div className="graph-canvas-heading">
+              <span>
+                <TableOutlined /> schema 图
               </span>
-            </span>
+              <span className="graph-legend">
+                <span className="graph-legend-item">
+                  <span className="graph-legend-dot" style={{ background: "#d9822b" }} />
+                  当前链
+                </span>
+              </span>
+            </div>
+            <SchemaCanvas
+              data={payload?.graph ?? null}
+              hotNames={hotNames}
+              hotEdgeIds={hotEdgeIds}
+              selectedEdgeId={selectedEdgeId}
+              onNodeClick={selectNode}
+              onEdgeClick={selectEdge}
+              onPaneClick={clearSelection}
+            />
+            <div className="graph-canvas-hint">
+              点击连线高亮引用链；点击空白取消；拖拽节点调整布局。
+            </div>
           </div>
-          <SchemaCanvas
-            data={payload?.graph ?? null}
-            hotNames={hotNames}
-            hotEdgeIds={hotEdgeIds}
-            selectedEdgeId={selectedEdgeId}
-            onNodeClick={selectNode}
-            onEdgeClick={selectEdge}
-            onPaneClick={clearSelection}
-          />
-          <div className="graph-canvas-hint">
-            点击连线高亮引用链；点击空白取消；拖拽节点调整布局。
-          </div>
-        </div>
 
-        <aside className="graph-inspector obs-inspector">
-          <div className="panel-heading">
-            <span>Selected schema</span>
-          </div>
-          <pre className="obs-pre">{schemaText || "提问或点选引用链后显示相关表字段"}</pre>
-          <div className="panel-heading">
-            <span>SQL</span>
-          </div>
-          <pre className="obs-pre obs-sql">
-            {result?.sql ?? result?.clarifying ?? result?.error ?? "等待生成"}
-          </pre>
-          <div className="panel-heading">
-            <span>Result</span>
-          </div>
-          <div className="obs-result">
-            {result?.error ? <div className="workspace-notice error">{result.error}</div> : null}
-            {result?.clarifying ? <p>{result.clarifying}</p> : null}
-            {rows.length > 0 ? (
-              <div className="obs-table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      {Object.keys(rows[0] ?? {}).map((key) => (
-                        <th key={key}>{key}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.slice(0, 100).map((row, index) => (
-                      <tr key={index}>
+          <aside className="graph-inspector obs-inspector">
+            <div className="panel-heading">
+              <span>Selected schema</span>
+            </div>
+            <pre className="obs-pre">{schemaText || "提问或点选引用链后显示相关表字段"}</pre>
+            <div className="panel-heading">
+              <span>SQL</span>
+            </div>
+            <pre className="obs-pre obs-sql">
+              {result?.sql ?? (liveSql || result?.clarifying || result?.error || "等待生成")}
+            </pre>
+            <div className="panel-heading">
+              <span>Result</span>
+            </div>
+            <div className="obs-result">
+              {result?.error ? <div className="workspace-notice error">{result.error}</div> : null}
+              {result?.clarifying ? <p>{result.clarifying}</p> : null}
+              {result?.truncated ? (
+                <p className="panel-state">仅展示前 {rows.length} 条，已达安全上限。可缩小范围后重试。</p>
+              ) : null}
+              {rows.length > 0 ? (
+                <div className="obs-table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
                         {Object.keys(rows[0] ?? {}).map((key) => (
-                          <td key={key}>{String(row[key] ?? "")}</td>
+                          <th key={key}>{key}</th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-            {!result ? <p className="panel-state">最多展示 100 行</p> : null}
-            {result?.clarifying ? (
-              <div className="obs-clarify">
-                <label htmlFor="obs-clarify">回答追问后继续生成 SQL</label>
-                <textarea
-                  id="obs-clarify"
-                  value={clarify}
-                  onChange={(event) => setClarify(event.target.value)}
-                  placeholder="例如：渠道表的 weight 字段"
-                />
-                <div className="obs-clarify-actions">
-                  <button
-                    className="studio-button primary"
-                    type="button"
-                    disabled={!clarify.trim() || busy === "query"}
-                    onClick={() => void runQuery(clarify, true)}
-                  >
-                    继续查询
-                  </button>
-                  <button
-                    className="studio-button secondary"
-                    type="button"
-                    onClick={() => {
-                      setHistory([]);
-                      setClarify("");
-                    }}
-                  >
-                    新问题
-                  </button>
+                    </thead>
+                    <tbody>
+                      {rows.map((row, index) => (
+                        <tr key={index}>
+                          {Object.keys(rows[0] ?? {}).map((key) => (
+                            <td key={key}>{String(row[key] ?? "")}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              </div>
-            ) : null}
-            {result && rows.length === 0 && !result.clarifying && !result.error ? (
-              <p className="panel-state">无数据</p>
-            ) : null}
-          </div>
-        </aside>
-      </div>
+              ) : null}
+              {!result ? (
+                <p className="panel-state">
+                  {busy === "query" ? "查询执行中，完成后显示结果" : "指定条数后返回对应结果；未指定时会先确认"}
+                </p>
+              ) : null}
+              {result?.clarifying ? (
+                <div className="obs-clarify">
+                  <label htmlFor="obs-clarify">回答追问后继续生成 SQL</label>
+                  <textarea
+                    id="obs-clarify"
+                    value={clarify}
+                    onChange={(event) => setClarify(event.target.value)}
+                    placeholder="例如：渠道表的 weight 字段"
+                  />
+                  <div className="obs-clarify-actions">
+                    <button
+                      className="studio-button primary"
+                      type="button"
+                      disabled={!clarify.trim() || busy !== null}
+                      onClick={() => void runQuery(clarify, true)}
+                    >
+                      继续查询
+                    </button>
+                    <button
+                      className="studio-button secondary"
+                      type="button"
+                      onClick={() => {
+                        setHistory([]);
+                        setClarify("");
+                      }}
+                    >
+                      新问题
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {result && rows.length === 0 && !result.clarifying && !result.error ? (
+                <p className="panel-state">无数据</p>
+              ) : null}
+            </div>
+          </aside>
+        </div>
+      )}
     </section>
   );
 }

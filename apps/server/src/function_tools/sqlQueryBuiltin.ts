@@ -4,7 +4,7 @@
  * 背景：MCP Worker 容器 network:"none" + 无 env，工具容器无法连库。
  * 方案 C = server（Agent）持有 REPORT_DATABASE_URL，直连 MySQL 执行 LLM 生成的只读 SQL。
  *
- * 安全：护栏（黑名单/单语句/SELECT 限定）+ SELECT 外层包 LIMIT + 只读账号建议。
+ * 安全：护栏（黑名单/单语句/SELECT 限定）+ 最多返回 100 行 + 只读账号建议。
  */
 import { createMysqlPool, type MysqlPool } from "@open-agent-tools/database/mysql";
 import { createPostgresPool } from "@open-agent-tools/database/postgres";
@@ -34,6 +34,9 @@ export const QUERY_SQL_TOOL = {
 const BLOCKED =
   /\b(drop|truncate|delete|update|insert|alter|create|grant|revoke|copy|vacuum|rename|replace|load_file|outfile|dumpfile|sleep|benchmark|shutdown)\b/i;
 
+/** 问数结果硬上限。用户要求更少时保留其 LIMIT；未写或超过上限时钳到此值。 */
+export const QUERY_ROW_CAP = 100;
+
 let pool: MysqlPool | null = null;
 
 function getPool(): MysqlPool {
@@ -60,17 +63,45 @@ export function validateQuerySql(sql: string): void {
   }
 }
 
+/**
+ * 把显式 LIMIT 钳到 QUERY_ROW_CAP。
+ * 未写 LIMIT 表示用户已确认查询全部，不再补默认上限。
+ * 已有 LIMIT 时直接改写该数字：MySQL 不允许派生表里再带 LIMIT，不能再外包一层。
+ */
+export function capQuerySql(sql: string, cap = QUERY_ROW_CAP): string {
+  const body = sql.replace(/;\s*$/, "").trim();
+  const limited = body.match(/\blimit\s+(\d+)\s*$/i);
+  if (!limited || limited.index === undefined) return body;
+  const requested = Number(limited[1]);
+  const next = Number.isFinite(requested) ? Math.min(Math.max(requested, 0), cap) : cap;
+  return `${body.slice(0, limited.index)}LIMIT ${next}`;
+}
+
+export interface QuerySqlResult {
+  ok: boolean;
+  rows?: unknown[];
+  /** 原 SQL 的 LIMIT 超过安全上限，执行前已被钳制。 */
+  truncated?: boolean;
+  error?: string;
+  durationMs: number;
+}
+
 /** 执行只读 SQL，返回行数组或错误。params 用于权限 IN 列表绑定，禁止把授权值拼进 SQL。 */
 export async function executeQuerySql(
   sql: string,
   params: unknown[] = [],
-): Promise<{ ok: boolean; rows?: unknown[]; error?: string; durationMs: number }> {
+): Promise<QuerySqlResult> {
   const started = Date.now();
   try {
     validateQuerySql(sql);
-    const wrapped = `SELECT * FROM (${sql.replace(/;\s*$/, "")}) _q LIMIT 100`;
+    const wrapped = capQuerySql(sql);
     const [rows] = await getPool().pool.query({ sql: wrapped, timeout: 10_000, values: params });
-    return { ok: true, rows: (rows as unknown[]).slice(0, 100), durationMs: Date.now() - started };
+    return {
+      ok: true,
+      rows: (rows as unknown[]).slice(0, QUERY_ROW_CAP),
+      truncated: wrapped !== sql.replace(/;\s*$/, "").trim(),
+      durationMs: Date.now() - started,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -90,7 +121,7 @@ export async function executeQuerySqlWithConnection(
     database?: string;
     schema?: string;
   },
-): Promise<{ ok: boolean; rows?: unknown[]; error?: string; durationMs: number }> {
+): Promise<QuerySqlResult> {
   const started = Date.now();
   if (options?.connector === "postgresql") {
     let sourcePool: ReturnType<typeof createPostgresPool> | null = null;
@@ -107,9 +138,14 @@ export async function executeQuerySqlWithConnection(
         if (options.schema) {
           await client.query(`SET LOCAL search_path TO ${quotePostgresIdentifier(options.schema)}`);
         }
-        const wrapped = `SELECT * FROM (${sql.replace(/;\s*$/, "")}) AS _q LIMIT 100`;
+        const wrapped = capQuerySql(sql);
         const result = await client.query(wrapped, params);
-        return { ok: true, rows: result.rows.slice(0, 100), durationMs: Date.now() - started };
+        return {
+          ok: true,
+          rows: result.rows.slice(0, QUERY_ROW_CAP),
+          truncated: wrapped !== sql.replace(/;\s*$/, "").trim(),
+          durationMs: Date.now() - started,
+        };
       } finally {
         await client.query("ROLLBACK").catch(() => undefined);
         client.release();
@@ -131,9 +167,14 @@ export async function executeQuerySqlWithConnection(
       connectionLimit: 1,
       ...(options?.database ? { database: options.database } : {}),
     });
-    const wrapped = `SELECT * FROM (${sql.replace(/;\s*$/, "")}) _q LIMIT 100`;
+    const wrapped = capQuerySql(sql);
     const [rows] = await sourcePool.pool.query({ sql: wrapped, timeout: 10_000, values: params });
-    return { ok: true, rows: (rows as unknown[]).slice(0, 100), durationMs: Date.now() - started };
+    return {
+      ok: true,
+      rows: (rows as unknown[]).slice(0, QUERY_ROW_CAP),
+      truncated: wrapped !== sql.replace(/;\s*$/, "").trim(),
+      durationMs: Date.now() - started,
+    };
   } catch (err) {
     return {
       ok: false,

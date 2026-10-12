@@ -57,7 +57,7 @@ export interface WorkflowValidationIssue {
 }
 
 export function defaultConfig(kind: NodeKind): Record<string, WorkflowConfigValue> {
-  if (kind === "http") return structuredClone(effectiveNodeConfig("http"));
+  if (kind === "http" || kind === "sql") return structuredClone(effectiveNodeConfig(kind));
   if (kind === "rag") return { sources: [], topK: 5, query: "{{query}}", inputs: [], outputs: [] };
   if (kind === "graph")
     return {
@@ -196,6 +196,19 @@ export function validateNodeResources(
   data: WorkflowNodeData,
   catalog: ResourceCatalog | null,
 ): string | null {
+  if (data.kind === "sql") {
+    if (!String(data.config.query ?? "").trim()) return "请配置 SQL 问数问题";
+    if (!catalog) return "资源目录尚未加载，无法校验 SQL 数据源";
+    if (catalog.sql?.error) return `SQL 数据源加载失败：${catalog.sql.error}`;
+    const sourceId = String(data.config.sourceId ?? "").trim();
+    const source = sourceId
+      ? catalog.sql?.sources.find((item) => item.id === sourceId)
+      : catalog.sql?.sources.find((item) => item.isDefault);
+    if (!source)
+      return sourceId
+        ? `SQL 数据源已失效或停用：${sourceId}`
+        : "暂无默认 SQL 数据源，请选择数据源或在设置中配置";
+  }
   if (data.kind === "rag") {
     const sources = Array.isArray(data.config.sources) ? data.config.sources : [];
     if (sources.length === 0) return "至少挂载一个 RAG 文档";

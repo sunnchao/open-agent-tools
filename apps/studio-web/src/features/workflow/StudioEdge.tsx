@@ -48,20 +48,24 @@ export function StudioEdge({
             {String(label)}
           </span>
         ) : null}
-        <button
-          className={`workflow-edge-add nodrag nopan${selected ? " is-selected" : ""}`}
-          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-          type="button"
-          title="在连接中插入节点"
-          aria-label="在连接中插入节点"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            openNodePicker?.(id, { x: event.clientX, y: event.clientY });
-          }}
+        <div
+          className="workflow-edge-add-anchor nodrag nopan"
+          style={{ transform: `translate(${labelX}px, ${labelY}px)` }}
         >
-          <PlusOutlined />
-        </button>
+          <button
+            className={`workflow-edge-add nodrag nopan${selected ? " is-selected" : ""}`}
+            type="button"
+            title="在连接中插入节点"
+            aria-label="在连接中插入节点"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              openNodePicker?.(id, { x: event.clientX, y: event.clientY });
+            }}
+          >
+            <PlusOutlined />
+          </button>
+        </div>
       </EdgeLabelRenderer>
     </>
   );

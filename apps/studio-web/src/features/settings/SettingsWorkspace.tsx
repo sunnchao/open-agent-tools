@@ -23,18 +23,22 @@ import {
 import { PROVIDER_FORMATS, PROVIDER_FORMAT_LABELS } from "../providers/api.js";
 import { ImChannelsSection } from "../im/ImChannelsWorkspace.js";
 import { SchemaSourcesSection } from "./SchemaSourcesSection.js";
+import { McpGatewaySection } from "./McpGatewaySection.js";
 
-type SettingsSection = "providers" | "schema-sources" | "im";
+type SettingsSection = "providers" | "schema-sources" | "mcp-gateway" | "im";
 
 const sectionCopy: Record<SettingsSection, { title: string; subtitle: string }> = {
   providers: { title: "模型 Provider", subtitle: "集中管理模型服务、接入协议和路由。" },
   "schema-sources": { title: "Schema 数据源", subtitle: "管理问数数据库、采集范围与默认路由。" },
+  "mcp-gateway": { title: "MCP Gateway", subtitle: "配置工作流和对话使用的 Gateway 地址与 API Key。" },
   im: { title: "IM 渠道", subtitle: "接入飞书 / 钉钉机器人，配置知识库绑定与群聊响应规则。" },
 };
 
 function initialSection(): SettingsSection {
   const stored = sessionStorage.getItem("open-agent-tools.settings-section");
-  return stored === "schema-sources" || stored === "im" ? stored : "providers";
+  return stored === "schema-sources" || stored === "mcp-gateway" || stored === "im"
+    ? stored
+    : "providers";
 }
 
 type Draft = {
@@ -186,11 +190,21 @@ export function SettingsWorkspace() {
           </button>
           <button
             type="button"
+            className={`settings-section${activeSection === "mcp-gateway" ? " is-active" : ""}`}
+            aria-current={activeSection === "mcp-gateway" ? "page" : undefined}
+            onClick={() => selectSection("mcp-gateway")}
+          >
+            <span>03</span>
+            <b>MCP Gateway</b>
+            <small>地址与 API Key</small>
+          </button>
+          <button
+            type="button"
             className={`settings-section${activeSection === "im" ? " is-active" : ""}`}
             aria-current={activeSection === "im" ? "page" : undefined}
             onClick={() => selectSection("im")}
           >
-            <span>03</span>
+            <span>04</span>
             <b>IM 渠道</b>
             <small>飞书 / 钉钉机器人</small>
           </button>
@@ -319,6 +333,8 @@ export function SettingsWorkspace() {
           </main>
         ) : activeSection === "schema-sources" ? (
           <SchemaSourcesSection />
+        ) : activeSection === "mcp-gateway" ? (
+          <McpGatewaySection />
         ) : (
           <ImChannelsSection />
         )}

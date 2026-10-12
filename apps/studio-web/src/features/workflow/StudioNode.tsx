@@ -43,6 +43,7 @@ function nodeSummary(data: WorkflowNodeData): string {
   if (data.kind === "graph") {
     return String(data.config.query ?? "{{query}}");
   }
+  if (data.kind === "sql") return String(data.config.query || "配置问数问题");
   if (data.kind === "llm") return `MODEL: ${String(data.config.model)}`;
   if (data.kind === "mcp")
     return data.config.toolName

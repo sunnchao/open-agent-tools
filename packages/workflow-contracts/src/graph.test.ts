@@ -3,7 +3,7 @@ import { it } from "node:test";
 import { nodeKindSchema, nodeConfigSchemas, workflowGraphSchema } from "./graph.js";
 
 it("provides one kind/config contract and enforces execution bounds", () => {
-  assert.equal(nodeKindSchema.options.length, 9);
+  assert.equal(nodeKindSchema.options.length, 10);
   assert.equal(nodeKindSchema.safeParse("unknown").success, false);
   assert.equal(nodeConfigSchemas.llm.safeParse({ timeoutMs: 999 }).success, false);
   assert.equal(nodeConfigSchemas.mcp.safeParse({ retry: { maxRetries: 4 } }).success, false);
@@ -16,6 +16,30 @@ it("provides one kind/config contract and enforces execution bounds", () => {
   assert.equal(
     (nodeConfigSchemas.mcp.parse({ service: "legacy" }) as { service?: string }).service,
     "legacy",
+  );
+});
+it("validates SQL query nodes and their result limits", () => {
+  assert.equal(
+    nodeConfigSchemas.sql.safeParse({
+      sourceId: "ops",
+      query: "{{question}}",
+      maxRows: 20,
+      timeoutMs: 60000,
+    }).success,
+    true,
+  );
+  for (const maxRows of [0, 101, 1.5, "10"]) {
+    assert.equal(nodeConfigSchemas.sql.safeParse({ maxRows }).success, false);
+  }
+  assert.equal(
+    workflowGraphSchema.safeParse({
+      name: "SQL workflow",
+      nodes: [
+        { id: "sql", data: { id: "sql", kind: "sql", config: { query: "查询前 10 个用户" } } },
+      ],
+      edges: [],
+    }).success,
+    true,
   );
 });
 it("rejects unknown kinds and inconsistent node identities when saving a draft", () => {

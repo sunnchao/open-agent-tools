@@ -20,6 +20,15 @@ export interface RagSourceResource {
 export interface ResourceCatalog {
   mcp: { configured: boolean; services: McpServiceResource[]; error?: string };
   rag: { sources: RagSourceResource[]; error?: string };
+  sql?: {
+    sources: Array<{
+      id: string;
+      name: string;
+      connector: "mysql" | "postgresql";
+      isDefault: boolean;
+    }>;
+    error?: string;
+  };
 }
 
 export async function fetchResourceCatalog(): Promise<ResourceCatalog> {

@@ -27,6 +27,7 @@ import { evaluateConditionExpression } from "./expression.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { runHttp } from "./http.js";
 import { workflowRedactor } from "./redaction.js";
+import { runWorkflowSqlQuery, WorkflowSqlError } from "./sqlQuery.js";
 
 export type WorkflowNodeKind = import("@open-agent-tools/workflow-contracts").NodeKind;
 
@@ -127,6 +128,7 @@ export interface WorkflowEvent {
 }
 
 export interface WorkflowDependencies {
+  sqlQuery?: typeof runWorkflowSqlQuery;
   retrieveRag?: typeof retrieveRag;
   retrieveRagGraph?: typeof retrieveRagGraph;
   callMcpTool?: typeof callMcpTool;
@@ -136,7 +138,7 @@ export interface WorkflowDependencies {
     provider: ProviderWithKey,
     input: { model: string; systemPrompt?: string; prompt: string; temperature?: number },
   ) => Promise<string | WorkflowLlmCompletion>;
-  timeoutMs?: Partial<Record<"rag" | "llm" | "mcp" | "graph" | "http", number>>;
+  timeoutMs?: Partial<Record<"rag" | "llm" | "mcp" | "graph" | "http" | "sql", number>>;
   fetchFn?: typeof fetch;
   signal?: AbortSignal;
   resume?: WorkflowResumeCheckpoint;
@@ -406,7 +408,12 @@ function resolvedDependencies(
 ): Required<
   Pick<
     WorkflowDependencies,
-    "retrieveRag" | "retrieveRagGraph" | "callMcpTool" | "getProvider" | "getDefaultProvider"
+    | "retrieveRag"
+    | "retrieveRagGraph"
+    | "callMcpTool"
+    | "getProvider"
+    | "getDefaultProvider"
+    | "sqlQuery"
   >
 > &
   WorkflowDependencies {
@@ -416,6 +423,7 @@ function resolvedDependencies(
     callMcpTool,
     getProvider,
     getDefaultProvider,
+    sqlQuery: runWorkflowSqlQuery,
     ...dependencies,
   };
 }
@@ -469,6 +477,23 @@ async function runNode(
           formatted: result.formatted,
           seeds: result.seeds,
         },
+      };
+    }
+    case "sql": {
+      const query = interpolate(config.query ?? inputs.query ?? "", inputs, "text").trim();
+      if (!query) throw new Error("SQL 问数节点需要配置问题或绑定 query 输入变量");
+      const sourceId = typeof config.sourceId === "string" ? config.sourceId.trim() : "";
+      return {
+        result: await withTimeout(
+          deps.sqlQuery({
+            sourceId: sourceId || undefined,
+            query,
+            maxRows: typeof config.maxRows === "number" ? config.maxRows : 100,
+            signal: deps.signal,
+          }),
+          configuredTimeout ?? deps.timeoutMs?.sql ?? 60_000,
+          deps.signal,
+        ),
       };
     }
     case "llm": {
@@ -705,6 +730,7 @@ function nodeKindAsType(kind: WorkflowNodeKind): ObservationKind {
       return "retriever";
     case "mcp":
     case "http":
+    case "sql":
       return "tool";
     default:
       return "span";
@@ -946,6 +972,11 @@ export async function executeWorkflow(
                 type: "node_result",
                 nodeId,
                 status: "error",
+                ...(error instanceof WorkflowSqlError
+                  ? {
+                      result: slimValue(error.result, EVENT_SLIM_MAX_STRING, EVENT_SLIM_MAX_ITEMS),
+                    }
+                  : {}),
                 inputs: resolvedInputs
                   ? (slimValue(
                       resolvedInputs,
@@ -1118,7 +1149,7 @@ export async function executeWorkflowNodeTest(
       nodeObservation.update({ level: "ERROR", statusMessage: message });
       const result = finish({
         status: "error",
-        result: null,
+        result: error instanceof WorkflowSqlError ? error.result : null,
         outputs: {},
         error: message,
         attempts: (error as { attempts?: number })?.attempts ?? 1,

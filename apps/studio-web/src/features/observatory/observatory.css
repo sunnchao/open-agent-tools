@@ -1,0 +1,379 @@
+.obs-view-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 20px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--studio-line);
+}
+
+.obs-view-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 11px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--studio-muted);
+  cursor: pointer;
+}
+
+.obs-view-tabs button.is-active {
+  border-bottom-color: #d9822b;
+  color: var(--studio-text);
+}
+
+.obs-execution-heading {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--studio-line);
+  font-size: 12px;
+}
+
+.obs-execution-heading span,
+.obs-request-id {
+  color: var(--studio-muted);
+  font-family: var(--studio-mono);
+  font-size: 10px;
+}
+
+.obs-request-id {
+  margin: 0 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.obs-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.obs-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  position: relative;
+  padding-bottom: 14px;
+  font-size: 11px;
+}
+
+.obs-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 23px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--studio-line);
+}
+
+.obs-step-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 21px;
+  height: 21px;
+  border: 1px solid var(--studio-line);
+  border-radius: 50%;
+  color: var(--studio-muted);
+  font-family: var(--studio-mono);
+  font-size: 10px;
+}
+
+.obs-step-mark .studio-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.obs-step.is-running .obs-step-mark {
+  border-color: #d9822b;
+  background: #faeeda;
+  color: #854f0b;
+}
+
+.obs-step.is-succeeded .obs-step-mark {
+  border-color: #a9cbbb;
+  background: #eaf4ef;
+  color: #326852;
+}
+
+.obs-step.is-failed .obs-step-mark {
+  border-color: #e7b4ae;
+  background: #fcf0ed;
+  color: #b44b40;
+}
+
+.obs-step.is-skipped {
+  opacity: 0.65;
+}
+
+.obs-step-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.obs-step-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 21px;
+}
+
+.obs-step-heading strong {
+  flex: 1;
+  font-weight: 600;
+}
+
+.obs-step-heading span,
+.obs-step-heading time,
+.obs-step-content p {
+  color: var(--studio-muted);
+}
+
+.obs-step-heading time {
+  font-family: var(--studio-mono);
+  font-size: 10px;
+}
+
+.obs-step-content p {
+  margin: 3px 0 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.obs-step.is-failed .obs-step-content p {
+  color: #b44b40;
+}
+
+.obs-audit-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 20px 24px;
+  gap: 16px;
+  overflow: auto;
+}
+
+.obs-audit-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.obs-audit-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 190px;
+  max-width: 460px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  background: var(--studio-surface-subtle);
+  color: var(--studio-muted);
+}
+
+.obs-audit-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--studio-text);
+}
+
+.obs-audit-toolbar select {
+  height: 36px;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--studio-surface-subtle);
+  color: var(--studio-text);
+}
+
+.obs-audit-count,
+.obs-audit-pagination {
+  color: var(--studio-muted);
+  font-size: 12px;
+}
+
+.obs-audit-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr);
+  align-items: start;
+  gap: 18px;
+  min-height: 0;
+}
+
+.obs-audit-list,
+.obs-audit-detail {
+  min-width: 0;
+  border: 1px solid var(--studio-line);
+  border-radius: 10px;
+  background: var(--studio-surface);
+}
+
+.obs-audit-list .obs-table-wrap {
+  max-height: none;
+}
+
+.obs-audit-list th,
+.obs-audit-list td {
+  padding: 12px;
+}
+
+.obs-audit-list td {
+  max-width: none;
+  vertical-align: top;
+}
+
+.obs-audit-list small {
+  display: block;
+  margin-top: 5px;
+  color: var(--studio-muted);
+  font-size: 10px;
+}
+
+.obs-audit-list tr.is-selected td {
+  background: #faeeda;
+}
+
+.obs-audit-question {
+  display: block;
+  max-width: 300px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--studio-text);
+  font-size: 12px;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.obs-audit-question:hover {
+  color: #854f0b;
+  text-decoration: underline;
+}
+
+.obs-status {
+  display: inline-block;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--studio-surface-subtle);
+  color: var(--studio-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.obs-status.is-succeeded {
+  background: #eaf4ef;
+  color: #326852;
+}
+
+.obs-status.is-failed {
+  background: #fcf0ed;
+  color: #b44b40;
+}
+
+.obs-status.is-running,
+.obs-status.is-clarifying {
+  background: #faeeda;
+  color: #854f0b;
+}
+
+.obs-audit-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px;
+}
+
+.obs-audit-detail {
+  overflow: hidden;
+}
+
+.obs-audit-metadata,
+.obs-audit-detail .obs-execution,
+.obs-audit-preview {
+  padding: 14px;
+}
+
+.obs-audit-metadata > strong {
+  display: block;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+
+.obs-audit-metadata dl {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+}
+
+.obs-audit-metadata dt {
+  color: var(--studio-muted);
+}
+
+.obs-audit-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.obs-step-payload,
+.obs-audit-preview,
+.obs-audit-metadata details {
+  font-size: 11px;
+}
+
+.obs-step-payload summary,
+.obs-audit-preview summary,
+.obs-audit-metadata summary {
+  margin: 6px 0;
+  color: #854f0b;
+  cursor: pointer;
+}
+
+.obs-step-payload pre,
+.obs-audit-preview pre {
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--studio-surface-subtle);
+  color: var(--studio-muted);
+  font-family: var(--studio-mono);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1100px) {
+  .obs-audit-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .obs-view-tabs {
+    padding: 0 14px;
+  }
+
+  .obs-audit-view {
+    padding: 14px;
+  }
+
+  .observatory-workspace .obs-layout .graph-side-panel {
+    max-height: none;
+  }
+}

@@ -20,10 +20,12 @@ import { RunVariablesEditor } from "./RunVariablesEditor.js";
 import { TemplateField } from "./TemplateField.js";
 import { ExecutionPolicyEditor } from "./ExecutionPolicyEditor.js";
 import { HttpNodeEditor } from "./HttpNodeEditor.js";
+import { SqlQueryNodeEditor } from "./SqlQueryNodeEditor.js";
 import { nodeInputs } from "./model.js";
 import { useEffect, useState } from "react";
 import { PlayCircleOutlined, ReloadOutlined } from "../../lib/icons.js";
 import type { ProviderMetadata } from "../../features/providers/api.js";
+import { openMcpGatewaySettings } from "../../features/settings/mcpGateway.js";
 import type { ResourceCatalog } from "../../features/resources/api.js";
 import type { WorkflowNodeTestResult } from "../../lib/api.js";
 import type { WorkflowConfigValue } from "./model.js";
@@ -181,6 +183,15 @@ export function NodeInspector({
             />
           )}
           {data.kind === "http" ? <HttpNodeEditor data={data} updateConfig={updateConfig} /> : null}
+          {data.kind === "sql" ? (
+            <SqlQueryNodeEditor
+              data={data}
+              catalog={catalog}
+              loading={loading}
+              refreshResources={refreshResources}
+              updateConfig={updateConfig}
+            />
+          ) : null}
           {variableIssues(variableNodes(nodes))
             .filter((issue) => issue.nodeId === node.id)
             .map((issue, index) => (
@@ -210,14 +221,19 @@ export function NodeInspector({
           {providerError && data.kind === "llm" ? (
             <Alert className="node-resource-alert" type="error" title={providerError} showIcon />
           ) : null}
-          {resourceError && (data.kind === "rag" || data.kind === "mcp") ? (
+          {resourceError && (data.kind === "rag" || data.kind === "mcp" || data.kind === "sql") ? (
             <Alert className="node-resource-alert" type="error" title={resourceError} showIcon />
           ) : null}
           {data.kind === "mcp" && catalog && !catalog.mcp.configured ? (
             <Alert
               className="node-resource-alert"
               type="error"
-              title="Agent Server 尚未配置 MCP Gateway API Key"
+              title="尚未配置 MCP Gateway"
+              description={
+                <Button type="link" htmlType="button" onClick={openMcpGatewaySettings}>
+                  前往设置配置
+                </Button>
+              }
               showIcon
             />
           ) : null}

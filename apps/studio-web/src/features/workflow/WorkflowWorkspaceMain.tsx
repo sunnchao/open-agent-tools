@@ -1509,7 +1509,7 @@ function WorkflowCanvas({
               selectionOnDrag
               selectionKeyCode={null}
               multiSelectionKeyCode={["Shift", "Meta", "Control"]}
-              panOnDrag={[1, 2]}
+              panOnDrag={true}
               nodesDraggable={!running}
               nodesConnectable={!running}
               onSelectionChange={({ nodes: selected }) => {

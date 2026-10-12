@@ -3,6 +3,8 @@ import { CopyOutlined, PlayCircleOutlined } from "../../lib/icons.js";
 import { formatWorkflowRunOutput } from "./runOutput.js";
 import type { WorkflowNodeTestResult } from "../../lib/api.js";
 import { formatNodeTestDuration, formatNodeTestTime } from "./format.js";
+import { QueryExecution } from "../observatory/QueryExecution.js";
+import type { QueryStep } from "../observatory/api.js";
 
 export function NodeTestResultPanel({
   result,
@@ -41,6 +43,10 @@ export function NodeTestResultPanel({
   }
 
   const usage = result.metadata.tokenUsage;
+  const queryResult =
+    result.metadata.nodeKind === "sql" && result.result
+      ? (result.result as { steps?: QueryStep[]; auditId?: string })
+      : null;
   return (
     <Flex vertical className="node-test-result">
       <Flex vertical className={`node-test-summary is-${result.status}`}>
@@ -63,6 +69,9 @@ export function NodeTestResultPanel({
       </Flex>
       {result.error ? (
         <Alert className="node-test-error" type="error" title={result.error} showIcon />
+      ) : null}
+      {Array.isArray(queryResult?.steps) ? (
+        <QueryExecution steps={queryResult.steps} auditId={queryResult.auditId} details />
       ) : null}
       <NodeTestDataBlock title="输入" value={result.inputs} />
       <NodeTestDataBlock title="数据处理" value={result.result} />

@@ -117,6 +117,13 @@ export function openDb(path = getDbPath()): DatabaseSync {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_schema_sources_default
       ON schema_sources(is_default) WHERE is_default = 1;
+
+    CREATE TABLE IF NOT EXISTS mcp_gateway_config (
+      id TEXT PRIMARY KEY,
+      gateway_url TEXT NOT NULL,
+      api_key_enc TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   migrateMessagesTable(db);

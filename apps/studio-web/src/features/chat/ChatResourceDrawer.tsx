@@ -2,6 +2,7 @@ import { ApiOutlined, DatabaseOutlined, ReloadOutlined } from "../../lib/icons.j
 import { Alert, Button, Checkbox, Drawer, Empty, Slider, Spin } from "antd";
 import type { ChatResourceBinding, McpToolBinding } from "../../types.js";
 import type { ResourceCatalog } from "../resources/api.js";
+import { openMcpGatewaySettings } from "../settings/mcpGateway.js";
 
 interface ChatResourceDrawerProps {
   open: boolean;
@@ -144,7 +145,16 @@ export function ChatResourceDrawer({
               <strong>{resources.mcpTools.length}</strong>
             </header>
             {!catalog?.mcp.configured ? (
-              <Alert type="info" showIcon title="Agent Server 尚未配置 MCP Gateway API Key" />
+              <Alert
+                type="info"
+                showIcon
+                title="尚未配置 MCP Gateway"
+                action={
+                  <Button size="small" onClick={openMcpGatewaySettings}>
+                    前往设置
+                  </Button>
+                }
+              />
             ) : null}
             {catalog?.mcp.error ? (
               <Alert type="warning" showIcon title={catalog.mcp.error} />

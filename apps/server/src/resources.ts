@@ -2,6 +2,15 @@ import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ChatCompletionFunctionTool } from "openai/resources/chat/completions/completions";
+import { getMcpGatewayCredentials } from "./mcpGateway/store.js";
+import { listSchemaSources } from "./schemaSources/store.js";
+
+export interface SqlSourceResource {
+  id: string;
+  name: string;
+  connector: "mysql" | "postgresql";
+  isDefault: boolean;
+}
 
 export interface McpToolResource {
   serviceSlug: string;
@@ -25,6 +34,7 @@ export interface RagSourceResource {
 export interface ResourceCatalog {
   mcp: { configured: boolean; services: McpServiceResource[]; error?: string };
   rag: { sources: RagSourceResource[]; error?: string };
+  sql?: { sources: SqlSourceResource[]; error?: string };
 }
 
 export interface McpToolBinding {
@@ -94,9 +104,10 @@ export function normalizeResourceBindings(value?: ResourceBindingsInput): Resour
 }
 
 function resourceConfig() {
+  const gateway = getMcpGatewayCredentials();
   return {
-    gatewayUrl: (process.env.MCP_GATEWAY_URL ?? "http://localhost:4100").replace(/\/$/, ""),
-    gatewayApiKey: process.env.MCP_GATEWAY_API_KEY?.trim() ?? "",
+    gatewayUrl: gateway.gatewayUrl,
+    gatewayApiKey: gateway.gatewayApiKey,
     ragApiUrl: (process.env.RAG_API_URL ?? "http://localhost:4001/api").replace(/\/$/, ""),
   };
 }
@@ -174,7 +185,21 @@ async function listRagSources(): Promise<RagSourceResource[]> {
 export async function loadResourceCatalog(): Promise<ResourceCatalog> {
   const { gatewayApiKey } = resourceConfig();
   const [mcp, rag] = await Promise.allSettled([listMcpResources(), listRagSources()]);
+  let sql: NonNullable<ResourceCatalog["sql"]>;
+  try {
+    sql = {
+      sources: listSchemaSources().map(({ id, name, connector, isDefault }) => ({
+        id,
+        name,
+        connector,
+        isDefault,
+      })),
+    };
+  } catch (error) {
+    sql = { sources: [], error: error instanceof Error ? error.message : String(error) };
+  }
   return {
+    sql,
     mcp:
       mcp.status === "fulfilled"
         ? { configured: Boolean(gatewayApiKey), services: mcp.value }

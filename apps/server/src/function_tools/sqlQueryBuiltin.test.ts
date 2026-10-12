@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateQuerySql, executeQuerySql } from "./sqlQueryBuiltin.js";
+import { capQuerySql, validateQuerySql, executeQuerySql } from "./sqlQueryBuiltin.js";
 
 test("validateQuerySql 通过合法只读 SQL", () => {
   assert.doesNotThrow(() =>
@@ -27,6 +27,28 @@ test("validateQuerySql 拒绝非 SELECT", () => {
 
 test("validateQuerySql 拒绝空 SQL", () => {
   assert.throws(() => validateQuerySql("  "), /不能为空/);
+});
+
+test("capQuerySql 保留用户要求的条数，并把超出上限的 LIMIT 钳到 100", () => {
+  assert.equal(
+    capQuerySql("SELECT id FROM `users` ORDER BY id DESC LIMIT 10"),
+    "SELECT id FROM `users` ORDER BY id DESC LIMIT 10",
+  );
+  assert.equal(
+    capQuerySql("SELECT id FROM `users` ORDER BY id DESC LIMIT 500;"),
+    "SELECT id FROM `users` ORDER BY id DESC LIMIT 100",
+  );
+});
+
+test("capQuerySql 未写 LIMIT 时保持查询全部", () => {
+  assert.equal(
+    capQuerySql("SELECT id FROM `users` ORDER BY id DESC"),
+    "SELECT id FROM `users` ORDER BY id DESC",
+  );
+  assert.equal(
+    capQuerySql("SELECT id FROM `users` WHERE note = 'limit 5'"),
+    "SELECT id FROM `users` WHERE note = 'limit 5'",
+  );
 });
 
 test("executeQuerySql 无 REPORT_DATABASE_URL 时返回错误而非崩溃", async () => {

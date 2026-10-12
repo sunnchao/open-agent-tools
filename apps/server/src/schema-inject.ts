@@ -72,6 +72,82 @@ export function loadCatalog(): SchemaCatalog | null {
   }
 }
 
+export type RowLimitIntent =
+  | { kind: "limited"; limit: number }
+  | { kind: "all" }
+  | { kind: "unspecified" };
+
+const ROW_LIMIT_CAP = 100;
+const CN_DIGIT: Record<string, number> = {
+  零: 0,
+  一: 1,
+  二: 2,
+  两: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+
+/** 解析「10 / 十 / 二十 / 一百」这类条数。无法解析时返回 undefined。 */
+function parseCount(raw: string): number | undefined {
+  const text = raw.trim();
+  if (/^\d+$/.test(text)) return Number(text);
+  if (text === "十") return 10;
+  if (text === "百" || text === "一百") return 100;
+  const tens = text.match(/^([一二两三四五六七八九])?十([一二两三四五六七八九])?$/);
+  if (tens) return (tens[1] ? CN_DIGIT[tens[1]]! : 1) * 10 + (tens[2] ? CN_DIGIT[tens[2]]! : 0);
+  return CN_DIGIT[text];
+}
+
+/**
+ * 识别结果条数口径，与业务表意图独立。
+ * limited：用户给出了条数；all：明确要全部；unspecified：两者都没说，需要确认。
+ */
+export function detectRowLimitIntent(query: string): RowLimitIntent {
+  const turns = query
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const turn of [...turns].reverse()) {
+    const intent = detectSingleRowLimitIntent(turn);
+    if (intent.kind !== "unspecified") return intent;
+  }
+  return { kind: "unspecified" };
+}
+
+function detectSingleRowLimitIntent(query: string): RowLimitIntent {
+  const trimmed = query.trim();
+  if (/^(?:全部|所有|全量)$/.test(trimmed)) return { kind: "all" };
+  const bareCount = trimmed.match(/^([0-9]+|[一二两三四五六七八九十百]+)\s*(?:条|个|名|位|行|笔)?$/);
+  const bareLimit = bareCount ? parseCount(bareCount[1]!) : undefined;
+  if (bareLimit !== undefined && bareLimit > 0) {
+    return { kind: "limited", limit: Math.min(bareLimit, ROW_LIMIT_CAP) };
+  }
+
+  const all =
+    /(?:查询|列出|导出|返回|显示|看看)?\s*(?:全部|所有|全量)(?:数据|记录|结果|用户|订单|日志)?/;
+  if (all.test(query) && !/(?:不是|不要|除了)\s*(?:全部|所有)/.test(query)) return { kind: "all" };
+
+  const counted = query.match(
+    /(?:前|最近|最新|最后|top|limit)\s*([0-9]+|[一二两三四五六七八九十百]+)\s*(?:条|个|名|位|行|笔)?|(?:^|[^0-9一二两三四五六七八九十百])([0-9]+|[一二两三四五六七八九十百]+)\s*(?:条|个|名|位|行|笔)/i,
+  );
+  const raw = counted?.[1] ?? counted?.[2];
+  const limit = raw ? parseCount(raw) : undefined;
+  if (limit !== undefined && limit > 0) {
+    return { kind: "limited", limit: Math.min(limit, ROW_LIMIT_CAP) };
+  }
+  return { kind: "unspecified" };
+}
+
+/** 未指定条数时的确认话术。默认建议 100，用户仍可改口要全部或其它条数。 */
+export function rowLimitClarifying(): string {
+  return `请确认需要查询多少条？默认返回最近 ${ROW_LIMIT_CAP} 条；也可以回复「全部」或指定其它条数。`;
+}
+
 /** 根据查询文本匹配意图（关键词启发式，可被 query-resolver 替换）。 */
 export function detectIntent(query: string): string | undefined {
   const q = query.toLowerCase();

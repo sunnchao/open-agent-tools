@@ -5518,6 +5518,24 @@ select:focus-visible {
 }
 
 /* ── 设置 / 表格（亮色） ── */
+.mcp-gateway-form {
+  display: grid;
+  gap: 16px;
+  max-width: 640px;
+  padding: 20px;
+  background: var(--studio-surface);
+  border: 1px solid var(--studio-line);
+}
+.mcp-gateway-note {
+  margin: 0;
+  color: var(--studio-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.mcp-gateway-actions {
+  display: flex;
+  gap: 8px;
+}
 .settings-sections {
   background: #eceae4;
 }
@@ -7181,9 +7199,18 @@ select:focus-visible {
   height: 30px;
 }
 
-.workflow-edge-add {
+.workflow-edge-add-anchor {
   position: absolute;
   z-index: 6;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.workflow-edge-add {
+  position: absolute;
+  top: 0;
+  left: 0;
   display: grid;
   width: 24px;
   height: 24px;
@@ -7197,13 +7224,15 @@ select:focus-visible {
   opacity: 0.78;
   pointer-events: all;
   cursor: pointer;
+  transform: translate(-50%, -50%) scale(1);
+  transform-origin: center;
   transition:
     color 140ms ease,
     background 140ms ease,
     border-color 140ms ease,
     box-shadow 140ms ease,
     opacity 140ms ease,
-    scale 140ms ease;
+    transform 140ms ease;
 }
 
 .workflow-edge-add:hover,
@@ -7213,7 +7242,7 @@ select:focus-visible {
   border-color: var(--studio-accent-deep);
   box-shadow: 0 5px 15px rgba(125, 156, 31, 0.28);
   opacity: 1;
-  scale: 1.08;
+  transform: translate(-50%, -50%) scale(1.08);
 }
 
 .workflow-edge-add .studio-icon {
@@ -7323,10 +7352,25 @@ select:focus-visible {
     transform 140ms ease;
 }
 
+.workflow-node .react-flow__handle-left {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.workflow-node .react-flow__handle-right {
+  transform: translate(50%, -50%) scale(1);
+}
+
 .workflow-node .react-flow__handle:hover {
   background: var(--studio-accent);
   border-color: var(--studio-accent-deep);
-  transform: scale(1.2);
+}
+
+.workflow-node .react-flow__handle-left:hover {
+  transform: translate(-50%, -50%) scale(1.2);
+}
+
+.workflow-node .react-flow__handle-right:hover {
+  transform: translate(50%, -50%) scale(1.2);
 }
 
 .workflow-inspector {
