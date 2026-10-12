@@ -5,6 +5,11 @@ import {
   variableIssues,
   nodeKindSchema,
   nodeConfigSchemas,
+  valuePath,
+  interpolateTemplate as interpolate,
+  interpolateTemplateValue as interpolateJsonValue,
+  collectEndOutputs,
+  type HttpNodeConfig,
   type WorkflowResumeCheckpoint,
 } from "@open-agent-tools/workflow-contracts";
 import { callMcpTool, retrieveRag, retrieveRagGraph, type McpToolBinding } from "../resources.js";
@@ -20,6 +25,8 @@ import {
 import { logDebugDuration, logTrace } from "../trace.js";
 import { evaluateConditionExpression } from "./expression.js";
 import { setTimeout as delay } from "node:timers/promises";
+import { runHttp } from "./http.js";
+import { workflowRedactor } from "./redaction.js";
 
 export type WorkflowNodeKind = import("@open-agent-tools/workflow-contracts").NodeKind;
 
@@ -108,6 +115,7 @@ export interface WorkflowEvent {
   status?: "success" | "error";
   inputs?: Record<string, unknown>;
   outputs?: Record<string, unknown>;
+  nodeOutputs?: Record<string, Record<string, unknown>>;
   result?: unknown;
   output?: unknown;
   /** LLM 节点插值后的最终请求内容（user 消息）。 */
@@ -128,7 +136,8 @@ export interface WorkflowDependencies {
     provider: ProviderWithKey,
     input: { model: string; systemPrompt?: string; prompt: string; temperature?: number },
   ) => Promise<string | WorkflowLlmCompletion>;
-  timeoutMs?: Partial<Record<"rag" | "llm" | "mcp" | "graph", number>>;
+  timeoutMs?: Partial<Record<"rag" | "llm" | "mcp" | "graph" | "http", number>>;
+  fetchFn?: typeof fetch;
   signal?: AbortSignal;
   resume?: WorkflowResumeCheckpoint;
 }
@@ -182,8 +191,11 @@ function validateBindings(
   nodes: WorkflowNodeInput[],
   edges: Array<WorkflowEdgeInput & { id: string }>,
   outgoing: Map<string, Array<WorkflowEdgeInput & { id: string }>>,
+  allowMissingHttpAuth = false,
 ): void {
-  const issues = variableIssues(nodes);
+  const issues = variableIssues(nodes).filter(
+    (issue) => !allowMissingHttpAuth || issue.code !== "http-auth",
+  );
   if (issues.length)
     throw new WorkflowValidationError(`node ${issues[0]!.nodeId}: ${issues[0]!.message}`);
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -225,7 +237,10 @@ function validateBindings(
       if (outputNames.has(output.name))
         throw new WorkflowValidationError(`node ${node.id}: duplicate output ${output.name}`);
       outputNames.add(output.name);
-      if (!/^\$(result|inputs)(\.[A-Za-z_$][\w$]*)*$/.test(output.selector)) {
+      if (
+        !valuePath(output.selector) ||
+        !["$result", "$inputs"].includes(valuePath(output.selector)![0]!)
+      ) {
         throw new WorkflowValidationError(
           `node ${node.id}: invalid output selector ${output.selector}`,
         );
@@ -234,7 +249,10 @@ function validateBindings(
   }
 }
 
-export function validateWorkflow(request: WorkflowRunRequest): WorkflowValidation {
+export function validateWorkflow(
+  request: WorkflowRunRequest,
+  options: { allowMissingHttpAuth?: boolean } = {},
+): WorkflowValidation {
   if (!request || !Array.isArray(request.nodes) || request.nodes.length === 0) {
     throw new WorkflowValidationError("nodes must be a non-empty array");
   }
@@ -283,7 +301,7 @@ export function validateWorkflow(request: WorkflowRunRequest): WorkflowValidatio
     incoming.set(node.id, incoming.get(node.id) ?? []);
     outgoing.set(node.id, outgoing.get(node.id) ?? []);
   }
-  validateBindings(request.nodes, edges, outgoing);
+  validateBindings(request.nodes, edges, outgoing, options.allowMissingHttpAuth);
   const degrees = new Map(request.nodes.map((node) => [node.id, incoming.get(node.id)!.length]));
   const queue = request.nodes.filter((node) => degrees.get(node.id) === 0).map((node) => node.id);
   const order: string[] = [];
@@ -301,21 +319,6 @@ export function validateWorkflow(request: WorkflowRunRequest): WorkflowValidatio
   return { nodes: request.nodes, edges, byId, incoming, outgoing, order };
 }
 
-function interpolate(
-  value: unknown,
-  inputs: Record<string, unknown>,
-  mode: "text" | "expression",
-): string {
-  const text = String(value ?? "");
-  return text.replace(/\{\{\s*([A-Za-z_$][\w$.-]*)\s*\}\}/g, (_match, name: string) => {
-    if (!Object.hasOwn(inputs, name)) throw new Error(`未绑定变量 ${name}`);
-    const resolved = inputs[name];
-    if (resolved === undefined) return mode === "expression" ? "undefined" : "";
-    if (mode === "expression") return JSON.stringify(resolved);
-    return typeof resolved === "string" ? resolved : JSON.stringify(resolved);
-  });
-}
-
 /** 将 LLM 节点解析后的输入变量拼接为 user 消息文本（当未配置 prompt 模板时自动生成）。 */
 function formatInputsAsUserMessage(inputs: Record<string, unknown>): string {
   const entries = Object.entries(inputs);
@@ -328,24 +331,8 @@ function formatInputsAsUserMessage(inputs: Record<string, unknown>): string {
     .join("\n\n");
 }
 
-function interpolateJsonValue(value: unknown, inputs: Record<string, unknown>): unknown {
-  if (Array.isArray(value)) return value.map((item) => interpolateJsonValue(item, inputs));
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, interpolateJsonValue(item, inputs)]),
-    );
-  }
-  if (typeof value !== "string") return value;
-  const exact = value.match(/^\{\{\s*([A-Za-z_$][\w$.-]*)\s*\}\}$/);
-  if (exact) {
-    if (!Object.hasOwn(inputs, exact[1]!)) throw new Error(`未绑定变量 ${exact[1]}`);
-    return inputs[exact[1]!];
-  }
-  return interpolate(value, inputs, "text");
-}
-
 function selectValue(selector: string, result: unknown, inputs: Record<string, unknown>): unknown {
-  const [root, ...path] = selector.split(".");
+  const [root, ...path] = valuePath(selector)!;
   let value: unknown = root === "$result" ? result : inputs;
   for (const key of path) {
     // An explicitly bound optional input can be absent. Unknown result paths are errors.
@@ -436,20 +423,17 @@ function resolvedDependencies(
 async function runNode(
   node: WorkflowNodeInput,
   inputs: Record<string, unknown>,
-  deps: Required<
-    Pick<
-      WorkflowDependencies,
-      "retrieveRag" | "retrieveRagGraph" | "callMcpTool" | "getProvider" | "getDefaultProvider"
-    >
-  > &
-    WorkflowDependencies,
+  deps: ReturnType<typeof resolvedDependencies> & { redactor: ReturnType<typeof workflowRedactor> },
 ): Promise<NodeExecution> {
   const config = configOf(node);
   const configuredTimeout = typeof config.timeoutMs === "number" ? config.timeoutMs : undefined;
-  logTrace("workflow.node.start", {
-    node,
-    inputs,
-  });
+  logTrace(
+    "workflow.node.start",
+    deps.redactor.redact({
+      node,
+      inputs,
+    }),
+  );
   switch (node.kind) {
     case "start":
       return { result: null };
@@ -597,6 +581,14 @@ async function runNode(
       );
       return { result };
     }
+    case "http":
+      return {
+        result: await withTimeout(
+          runHttp(config as HttpNodeConfig, inputs, deps.signal, deps.fetchFn),
+          configuredTimeout ?? deps.timeoutMs?.http ?? 30_000,
+          deps.signal,
+        ),
+      };
     case "condition": {
       const expression = interpolate(config.expression ?? "false", inputs, "expression");
       try {
@@ -621,7 +613,8 @@ function transientFailure(error: unknown): boolean {
     statusCode?: number;
   };
   const status =
-    failure?.status ?? failure?.statusCode ??
+    failure?.status ??
+    failure?.statusCode ??
     (typeof failure?.code === "number" ? failure.code : undefined);
   if (status !== undefined) return status === 408 || status === 429 || status >= 500;
   const code = failure?.code ?? failure?.cause?.code;
@@ -648,7 +641,9 @@ async function runNodeWithPolicy(
   deps: Parameters<typeof runNode>[2],
 ): Promise<NodeExecution> {
   const policy = configOf(node).retry as { maxRetries?: number; delayMs?: number } | undefined;
-  const retries = ["rag", "graph", "mcp"].includes(node.kind) ? (policy?.maxRetries ?? 0) : 0;
+  const retries = ["rag", "graph", "mcp", "http"].includes(node.kind)
+    ? (policy?.maxRetries ?? 0)
+    : 0;
   for (let attempt = 1; ; attempt++) {
     if (deps.signal?.aborted) throw new Error("workflow run cancelled");
     const controller = new AbortController();
@@ -675,14 +670,15 @@ function resolveInputs(
   node: WorkflowNodeInput,
   request: WorkflowRunRequest,
   outputContext: Map<string, Record<string, unknown>>,
+  redact: ReturnType<typeof workflowRedactor>["redact"],
 ): Record<string, unknown> {
   logTrace(
     "resolveInputs",
-    {
+    redact({
       node,
       request,
       outputContext,
-    },
+    }),
     "info",
   );
   const values: Record<string, unknown> = {};
@@ -708,6 +704,7 @@ function nodeKindAsType(kind: WorkflowNodeKind): ObservationKind {
     case "graph":
       return "retriever";
     case "mcp":
+    case "http":
       return "tool";
     default:
       return "span";
@@ -739,7 +736,28 @@ export async function executeWorkflow(
     if (prepared.errors.length) throw new WorkflowValidationError(prepared.errors.join("; "));
     request = { ...request, input: prepared.input };
   }
-  const deps = resolvedDependencies(dependencies);
+  const redactor = workflowRedactor(request.nodes, request.input);
+  const deps = { ...resolvedDependencies(dependencies), redactor };
+  const safeEmit = (event: WorkflowEvent) =>
+    emit({
+      ...event,
+      inputs: redactor.redact(event.inputs),
+      outputs: redactor.redact(event.outputs),
+      result: redactor.redact(event.result),
+      error: redactor.redact(event.error),
+      prompt: redactor.redact(event.prompt),
+      systemPrompt: redactor.redact(event.systemPrompt),
+      ...(event.nodeOutputs
+        ? {
+            nodeOutputs: Object.fromEntries(
+              Object.entries(event.nodeOutputs).map(([id, values]) => [
+                id,
+                redactor.redact(values),
+              ]),
+            ),
+          }
+        : {}),
+    });
   const activeNodes = new Set(
     validation.nodes
       .filter((node) => validation.incoming.get(node.id)!.length === 0)
@@ -766,7 +784,7 @@ export async function executeWorkflow(
 
   return runTraced("workflow-run", async (span) => {
     span.update({
-      input: slimValue(request.input),
+      input: redactor.redact(slimValue(request.input)),
       metadata: {
         nodeCount: String(validation.nodes.length),
         edgeCount: String(validation.edges.length),
@@ -789,7 +807,7 @@ export async function executeWorkflow(
               .get(id)!
               .filter((edge) => deps.resume?.activeEdgeIds.includes(edge.id))
               .map((edge) => edge.id);
-            emit({
+            safeEmit({
               type: "node_cached",
               nodeId: id,
               kind: node.kind,
@@ -819,7 +837,7 @@ export async function executeWorkflow(
             if (incoming.some((edge) => statuses.get(edge.source) !== "success")) continue;
             if (nodeId && !request.input)
               throw new WorkflowNodeError(nodeId, "workflow input is required");
-            emit({
+            safeEmit({
               type: "node_start",
               nodeId,
               incomingEdgeIds: incoming.map((edge) => edge.id),
@@ -834,8 +852,9 @@ export async function executeWorkflow(
             const startedAtMs = Date.now();
             let resolvedInputs: Record<string, unknown> | undefined;
             try {
-              const inputs = resolveInputs(node, request, outputContext);
+              const inputs = resolveInputs(node, request, outputContext, redactor.redact);
               resolvedInputs = inputs;
+              redactor.add(node, inputs);
               const execution = await runNodeWithPolicy(node, inputs, deps);
               logDebugDuration("workflow.node.done", startedAtMs, {
                 nodeId,
@@ -844,8 +863,8 @@ export async function executeWorkflow(
               });
               const result = execution.result;
               nodeObservation.update({
-                input: slimValue(inputs),
-                output: slimValue(result),
+                input: redactor.redact(slimValue(inputs)),
+                output: redactor.redact(slimValue(result)),
                 ...(execution.tokenUsage
                   ? {
                       usageDetails: {
@@ -860,7 +879,7 @@ export async function executeWorkflow(
                 nodeOutputs[output.name] = selectValue(output.selector, result, inputs);
               outputContext.set(nodeId, nodeOutputs);
               statuses.set(nodeId, "success");
-              emit({
+              safeEmit({
                 type: "node_result",
                 nodeId,
                 status: "success",
@@ -910,7 +929,9 @@ export async function executeWorkflow(
                 }
               }
             } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
+              const message = redactor.redact(
+                error instanceof Error ? error.message : String(error),
+              );
               logDebugDuration("workflow.node.done", startedAtMs, {
                 nodeId,
                 kind: node.kind,
@@ -921,7 +942,7 @@ export async function executeWorkflow(
               statuses.set(nodeId, "error");
               const failedPrompt = (error as { prompt?: unknown })?.prompt;
               const failedSystemPrompt = (error as { systemPrompt?: unknown })?.systemPrompt;
-              emit({
+              safeEmit({
                 type: "node_result",
                 nodeId,
                 status: "error",
@@ -967,13 +988,14 @@ export async function executeWorkflow(
       const outputs = Object.fromEntries(
         [...outputContext.entries()].map(([nodeId, values]) => [nodeId, values]),
       );
-      span.update({ output: outputs });
-      emit({ type: "run_done", outputs });
+      const finalOutputs = collectEndOutputs(validation.nodes, outputs, validation.order);
+      span.update({ output: redactor.redact(finalOutputs) });
+      safeEmit({ type: "run_done", outputs: finalOutputs, nodeOutputs: outputs });
       return outputs;
     } catch (error) {
       span.update({
         level: "ERROR",
-        statusMessage: error instanceof Error ? error.message : String(error),
+        statusMessage: redactor.redact(error instanceof Error ? error.message : String(error)),
       });
       throw error;
     }
@@ -1019,6 +1041,8 @@ export async function executeWorkflowNodeTest(
 
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
+  const redactor = workflowRedactor([request.node], {});
+  redactor.add(request.node, inputs);
   const finish = (
     value: Omit<WorkflowNodeTestResult, "nodeId" | "inputs" | "metadata"> & {
       tokenUsage?: Partial<WorkflowTokenUsage>;
@@ -1029,8 +1053,11 @@ export async function executeWorkflowNodeTest(
     const { tokenUsage, attempts, ...result } = value;
     return {
       nodeId: request.node.id,
-      inputs,
+      inputs: redactor.redact(inputs),
       ...result,
+      result: redactor.redact(result.result),
+      outputs: redactor.redact(result.outputs),
+      ...(result.error ? { error: redactor.redact(result.error) } : {}),
       metadata: {
         nodeKind: request.node.kind,
         startedAt,
@@ -1044,7 +1071,7 @@ export async function executeWorkflowNodeTest(
 
   return runTraced("workflow-node-test", async (span) => {
     span.update({
-      input: request.inputs,
+      input: redactor.redact(request.inputs),
       metadata: { nodeId: request.node.id, kind: request.node.kind },
     });
     const nodeObservation = startObservation(
@@ -1058,17 +1085,16 @@ export async function executeWorkflowNodeTest(
           throw new WorkflowNodeError(request.node.id, `required input ${binding.name} is missing`);
         }
       }
-      const execution = await runNodeWithPolicy(
-        request.node,
-        inputs,
-        resolvedDependencies(dependencies),
-      );
+      const execution = await runNodeWithPolicy(request.node, inputs, {
+        ...resolvedDependencies(dependencies),
+        redactor,
+      });
       const outputs: Record<string, unknown> = {};
       for (const output of outputsOf(request.node)) {
         outputs[output.name] = selectValue(output.selector, execution.result, inputs);
       }
       nodeObservation.update({
-        output: slimValue(execution.result),
+        output: redactor.redact(slimValue(execution.result)),
         ...(execution.tokenUsage
           ? {
               usageDetails: {
@@ -1088,7 +1114,7 @@ export async function executeWorkflowNodeTest(
       span.update({ output: result });
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = redactor.redact(error instanceof Error ? error.message : String(error));
       nodeObservation.update({ level: "ERROR", statusMessage: message });
       const result = finish({
         status: "error",

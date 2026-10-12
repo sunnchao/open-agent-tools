@@ -12,7 +12,7 @@ const history: WorkflowRunHistory = {
     source: "studio",
     status: "succeeded",
     inputs: {},
-    outputs: {},
+    outputs: { answer: "ok" },
     error: null,
     totalSteps: 1,
     totalTokens: 3,
@@ -65,7 +65,8 @@ describe("persisted workflow replay", () => {
       inputs: { query: "hello" },
       outputs: { answer: "ok" },
     });
-    expect(result.outputs).toEqual({ llm: { answer: "ok" } });
+    expect(result.outputs).toEqual({ answer: "ok" });
+    expect(result.nodeOutputs).toEqual({ llm: { answer: "ok" } });
   });
   it("orders and deduplicates sequence records without changing the source", () => {
     const events = [history.events[1]!, history.events[0]!, history.events[1]!];

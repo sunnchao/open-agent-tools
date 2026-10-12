@@ -4,6 +4,7 @@ import {
   templateFields,
   type VariableIssue,
   type VariableNode,
+  referenceRoot,
 } from "@open-agent-tools/workflow-contracts";
 import { nodeInputs, nodeOutputs, type NodeInputBinding } from "./model.js";
 import type { WorkflowNode } from "./types.js";
@@ -178,12 +179,31 @@ export function repairVariableReference(
   if (issue.code !== "template-reference" || !issue.field) return nodes;
   if (!templateFields(target.data.kind).includes(issue.field)) return nodes;
   const names = new Set(nodeInputs(target.data).map((input) => input.name));
-  if (!names.has(replacement)) return nodes;
+  if (!names.has(referenceRoot(replacement))) return nodes;
   const current = target.data.config[issue.field];
-  if (typeof current !== "string") return nodes;
-  const json = issue.field === "arguments";
-  const next = replaceTemplateReference(current, issue.reference, replacement, json);
-  if (next === current) return nodes;
+  const before = issue.reference;
+  const replace = (value: unknown): unknown => {
+    if (typeof value === "string")
+      return replaceTemplateReference(value, before, replacement, issue.field === "arguments");
+    if (Array.isArray(value)) return value.map(replace);
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.entries(record).map(([key, child]) => [
+          key,
+          issue.field === "body" &&
+          record.type === "json" &&
+          key === "data" &&
+          typeof child === "string"
+            ? replaceTemplateReference(child, before, replacement, true)
+            : replace(child),
+        ]),
+      );
+    }
+    return value;
+  };
+  const next = replace(current);
+  if (JSON.stringify(next) === JSON.stringify(current)) return nodes;
   return nodes.map((node) =>
     node.id === target.id
       ? { ...node, data: { ...node.data, config: { ...node.data.config, [issue.field!]: next } } }
@@ -221,18 +241,34 @@ export function renameVariable(
       const replace = (value: unknown): unknown => {
         if (typeof value === "string")
           return value.replace(/\{\{\s*([^{}]*?)\s*\}\}/g, (match, name: string) =>
-            name.trim() === before ? `{{${after}}}` : match,
+            referenceRoot(name.trim()) === before
+              ? `{{${after}${name.trim().slice(before.length)}}}`
+              : match,
           );
         if (Array.isArray(value)) return value.map(replace);
-        if (value && typeof value === "object")
+        if (value && typeof value === "object") {
+          const record = value as Record<string, unknown>;
           return Object.fromEntries(
-            Object.entries(value).map(([key, item]) => [key, replace(item)]),
+            Object.entries(record).map(([key, item]) => {
+              if (record.type === "json" && key === "data" && typeof item === "string") {
+                try {
+                  return [key, JSON.stringify(replace(JSON.parse(item)), null, 2)];
+                } catch {
+                  return [key, item];
+                }
+              }
+              return [key, replace(item)];
+            }),
           );
+        }
         return value;
       };
       for (const field of templateFields(node.data.kind)) {
         const value = config[field];
-        if (typeof value !== "string") continue;
+        if (typeof value !== "string") {
+          config[field] = replace(value);
+          continue;
+        }
         if (field === "arguments") {
           try {
             config[field] = JSON.stringify(replace(JSON.parse(value)), null, 2);
@@ -249,7 +285,11 @@ export function renameVariable(
         let selector = output.selector;
         for (const root of roots) {
           const prefix = `${root}.${before}`;
-          if (selector === prefix || selector.startsWith(`${prefix}.`))
+          if (
+            selector === prefix ||
+            selector.startsWith(`${prefix}.`) ||
+            selector.startsWith(`${prefix}[`)
+          )
             selector = `${root}.${after}${selector.slice(prefix.length)}`;
         }
         return { ...output, selector };

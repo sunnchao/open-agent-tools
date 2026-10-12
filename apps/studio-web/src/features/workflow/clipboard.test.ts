@@ -41,18 +41,47 @@ it("round trips a subgraph across workflows with fresh ids, internal edges and z
 
 it("accepts remapped internal sources and checks external sources against the destination", () => {
   const upstream = createNode("source", "input", { x: 0, y: 0 });
-  const downstream = createNode("end", "end", { x: 280, y: 0 }, {
-    inputs: [{ name: "result", source: { type: "node", nodeId: "source", output: "query" } }],
-  });
+  const downstream = createNode(
+    "end",
+    "end",
+    { x: 280, y: 0 },
+    {
+      inputs: [{ name: "result", source: { type: "node", nodeId: "source", output: "query" } }],
+    },
+  );
   const copied = parseSelection(
-    serializeSelection([upstream, downstream], [createEdge("source", "end")], new Set(["source", "end"])),
+    serializeSelection(
+      [upstream, downstream],
+      [createEdge("source", "end")],
+      new Set(["source", "end"]),
+    ),
   );
   expect(() => assertSelectionSources(copied.nodes, [])).not.toThrow();
-  const external = parseSelection(
-    serializeSelection([upstream, downstream], [], new Set(["end"])),
-  );
+  const external = parseSelection(serializeSelection([upstream, downstream], [], new Set(["end"])));
   expect(() => assertSelectionSources(external.nodes, [])).toThrow("上游节点");
   expect(() => assertSelectionSources(external.nodes, [upstream])).not.toThrow();
   upstream.data.config.outputs = [{ name: "renamed", selector: "$inputs.query" }];
   expect(() => assertSelectionSources(external.nodes, [upstream])).toThrow("上游节点");
+});
+
+it("removes fixed HTTP credentials from copied and externally pasted selections", () => {
+  const node = createNode(
+    "h",
+    "http",
+    { x: 0, y: 0 },
+    {
+      url: "https://example.com",
+      authorization: { type: "bearer", config: { token: "private-clipboard" } },
+    },
+  );
+  const text = serializeSelection([node], [], new Set(["h"]));
+  expect(text).not.toContain("private-clipboard");
+  const incoming = JSON.parse(text);
+  incoming.graph.nodes[0].data.config.authorization.config.token = "private-incoming";
+  const pasted = parseSelection(JSON.stringify(incoming));
+  expect(JSON.stringify(pasted)).not.toContain("private-incoming");
+  expect(node.data.config.authorization).toEqual({
+    type: "bearer",
+    config: { token: "private-clipboard" },
+  });
 });

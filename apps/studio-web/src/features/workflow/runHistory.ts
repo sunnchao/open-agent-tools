@@ -5,7 +5,8 @@ import type { RunLogEntry } from "./types.js";
 /** Persisted public events use snake_case; reconstruct the same log shape as Studio SSE. */
 export function replayWorkflowRun(history: WorkflowRunHistory): {
   log: RunLogEntry[];
-  outputs: Record<string, Record<string, unknown>> | null;
+  outputs: Record<string, unknown> | null;
+  nodeOutputs: Record<string, Record<string, unknown>>;
 } {
   const graphNodes = new Map(history.graph.nodes.map((node) => [node.id, node]));
   const starts = new Map<string, { label: string; kind?: string }>();
@@ -57,5 +58,9 @@ export function replayWorkflowRun(history: WorkflowRunHistory): {
       detail: history.run.error,
     });
   }
-  return { log, outputs: history.run.status === "succeeded" ? outputs : null };
+  return {
+    log,
+    outputs: history.run.status === "succeeded" ? (history.run.outputs ?? {}) : null,
+    nodeOutputs: outputs,
+  };
 }

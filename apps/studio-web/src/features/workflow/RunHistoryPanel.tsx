@@ -1,3 +1,4 @@
+import { Alert, Button, Collapse, Empty, Flex, Select, Spin, Typography } from "antd";
 import { useEffect, useState } from "react";
 import {
   fetchWorkflowRunEvents,
@@ -110,87 +111,96 @@ export function RunHistoryPanel({
         )
       : new Map<string, string | null>();
   return (
-    <div className="workflow-run-history">
-      <div className="workflow-run-history-tools">
-        <label>
-          状态
-          <select
+    <Flex vertical className="workflow-run-history">
+      <Flex className="workflow-run-history-tools">
+        <Flex align="center" gap={8} className="workflow-run-history-filter">
+          <Typography.Text>状态</Typography.Text>
+          <Select
             aria-label="运行历史状态"
             value={filter}
-            onChange={(event) => setFilter(event.target.value as typeof filter)}
-          >
-            <option value="all">全部</option>
-            {Object.entries(statusLabels).map(([status, label]) => (
-              <option key={status} value={status}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
+            onChange={setFilter}
+            options={[
+              { value: "all", label: "全部" },
+              ...Object.entries(statusLabels).map(([value, label]) => ({ value, label })),
+            ]}
+          />
+        </Flex>
+        <Button
           className="studio-button secondary"
-          type="button"
+          type="text"
+          htmlType="button"
           disabled={loading || detailLoading}
           onClick={() => setRevision((value) => value + 1)}
         >
           刷新
-        </button>
-      </div>
-      {loading ? <p role="status">正在加载运行历史…</p> : null}
-      {error ? (
-        <p className="field-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+        </Button>
+      </Flex>
+      {loading ? <Spin aria-label="正在加载运行历史" /> : null}
+      {error ? <Alert type="error" title={error} showIcon /> : null}
       {!loading && !error && !shown.length ? (
-        <div className="run-empty">
-          {runs.length
-            ? "没有符合筛选条件的运行"
-            : "尚无运行记录，调试运行与公开 API 调用会保存到这里。"}
-        </div>
+        <Empty
+          className="run-empty"
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={
+            runs.length
+              ? "没有符合筛选条件的运行"
+              : "尚无运行记录，调试运行与公开 API 调用会保存到这里。"
+          }
+        />
       ) : null}
-      <div className="workflow-run-history-list">
+      <Flex vertical className="workflow-run-history-list">
         {shown.map((run) => (
-          <button
+          <Button
             key={run.id}
-            type="button"
+            type="text"
+            htmlType="button"
             aria-pressed={selectedId === run.id}
-            className={selectedId === run.id ? "is-active" : undefined}
+            className={`workflow-run-history-item${selectedId === run.id ? " is-active" : ""}`}
             onClick={() => setSelectedId(run.id)}
           >
-            <span>
-              <b>{statusLabels[run.status]}</b>
-              <time dateTime={run.createdAt}>
+            <Flex className="workflow-run-history-heading" justify="space-between" gap={8}>
+              <Typography.Text strong>{statusLabels[run.status]}</Typography.Text>
+              <Typography.Text type="secondary">
                 {new Date(run.createdAt).toLocaleString("zh-CN")}
-              </time>
-            </span>
-            <small>
+              </Typography.Text>
+            </Flex>
+            <Typography.Text type="secondary" className="workflow-run-history-meta">
               {run.source === "studio" ? "编辑器调试" : "公开 API"} · {run.user} ·{" "}
               {run.elapsedTime === null ? "—" : `${run.elapsedTime.toFixed(2)}s`} ·{" "}
               {run.totalTokens} tok
-            </small>
-            <code>{run.id}</code>
-          </button>
+            </Typography.Text>
+            <Typography.Text code>{run.id}</Typography.Text>
+          </Button>
         ))}
-      </div>
-      {runs.length >= 50 ? <p className="field-help">当前展示最近 50 次运行。</p> : null}
-      {detailLoading ? <p role="status">正在加载历史轨迹…</p> : null}
-      {detailError ? (
-        <p className="field-error" role="alert">
-          {detailError}
-        </p>
+      </Flex>
+      {runs.length >= 50 ? (
+        <Typography.Paragraph className="field-help">当前展示最近 50 次运行。</Typography.Paragraph>
       ) : null}
+      {detailLoading ? <Spin aria-label="正在加载历史轨迹" /> : null}
+      {detailError ? <Alert type="error" title={detailError} showIcon /> : null}
       {history && replay ? (
-        <div className="workflow-run-history-detail">
-          <h3>运行详情 · {statusLabels[history.run.status]}</h3>
-          <p className="field-help">
+        <Flex vertical className="workflow-run-history-detail">
+          <Typography.Title level={5}>
+            运行详情 · {statusLabels[history.run.status]}
+          </Typography.Title>
+          <Typography.Paragraph className="field-help">
             {history.run.versionId ? "已发布版本快照" : "当次调试快照"} · {history.run.totalSteps}{" "}
             步 · {history.run.totalTokens} tok
-          </p>
-          <details>
-            <summary>入口输入</summary>
-            <pre>{JSON.stringify(history.run.inputs, null, 2)}</pre>
-          </details>
+          </Typography.Paragraph>
+          <Collapse
+            ghost
+            items={[
+              {
+                key: "inputs",
+                label: "入口输入",
+                children: (
+                  <Typography.Paragraph className="workflow-code-block">
+                    {JSON.stringify(history.run.inputs, null, 2)}
+                  </Typography.Paragraph>
+                ),
+              },
+            ]}
+          />
           <RunPreview
             key={history.run.id}
             nodes={history.graph.nodes}
@@ -212,8 +222,8 @@ export function RunHistoryPanel({
               return resumeIssues.get(nodeId) ?? null;
             }}
           />
-        </div>
+        </Flex>
       ) : null}
-    </div>
+    </Flex>
   );
 }

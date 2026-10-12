@@ -7,6 +7,7 @@ export const nodeKindSchema = z.enum([
   "graph",
   "llm",
   "mcp",
+  "http",
   "condition",
   "end",
 ]);
@@ -82,6 +83,48 @@ export const nodeConfigSchemas = {
       arguments: z.string().optional(),
     })
     .passthrough(),
+  http: z
+    .object({
+      ...bindings,
+      ...execution,
+      method: z.enum(["get", "head", "post", "put", "patch", "delete"]).optional(),
+      url: z.string().optional(),
+      params: z.string().optional(),
+      headers: z.string().optional(),
+      body: z
+        .object({
+          type: z.enum(["none", "json", "form-data", "raw"]).optional(),
+          data: z
+            .union([
+              z.string(),
+              z.array(
+                z.object({
+                  key: z.string(),
+                  type: z.literal("text").optional(),
+                  value: z.string(),
+                }),
+              ),
+            ])
+            .optional(),
+        })
+        .optional(),
+      authorization: z
+        .object({
+          type: z.enum(["no-auth", "basic", "bearer", "custom"]).optional(),
+          config: z
+            .object({
+              username: z.string().optional(),
+              password: z.string().optional(),
+              token: z.string().optional(),
+              header: z.string().optional(),
+              value: z.string().optional(),
+            })
+            .optional(),
+        })
+        .optional(),
+      sslVerify: z.boolean().optional(),
+    })
+    .passthrough(),
   condition: z.object({ ...bindings, expression: z.string().optional() }).passthrough(),
   end: z.object(bindings).passthrough(),
 } satisfies Record<NodeKind, z.ZodType>;
@@ -112,9 +155,26 @@ const defaultNodeConfig: Record<NodeKind, Record<string, unknown>> = {
     outputs: [{ name: "answer", selector: "$result" }],
   },
   mcp: { serviceSlug: "", toolName: "", arguments: "{}", inputs: [], outputs: [] },
+  http: {
+    method: "get",
+    url: "",
+    params: "",
+    headers: "",
+    body: { type: "none", data: "" },
+    authorization: { type: "no-auth", config: {} },
+    sslVerify: true,
+    inputs: [],
+    outputs: [
+      { name: "body", selector: "$result.body" },
+      { name: "status_code", selector: "$result.status_code" },
+      { name: "headers", selector: "$result.headers" },
+      { name: "size", selector: "$result.size" },
+    ],
+  },
   condition: { expression: "true", inputs: [], outputs: [] },
   end: { inputs: [], outputs: [] },
 };
+export type HttpNodeConfig = z.infer<typeof nodeConfigSchemas.http>;
 
 /** Fill editor defaults before comparing a legacy snapshot with the hydrated draft. */
 export function effectiveNodeConfig(

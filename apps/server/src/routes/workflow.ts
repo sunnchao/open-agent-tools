@@ -10,6 +10,7 @@ import {
   type WorkflowRunRequest,
 } from "../workflow/executor.js";
 import { logTrace } from "../trace.js";
+import { workflowRedactor } from "../workflow/redaction.js";
 import {
   getWorkflow,
   getWorkflowRun,
@@ -45,7 +46,12 @@ workflowRouter.post("/api/workflow/run", async (req: Request, res: Response) => 
       return;
     }
   }
-  logTrace("workflow.run", { request });
+  logTrace(
+    "workflow.run",
+    workflowRedactor(Array.isArray(request.nodes) ? request.nodes : [], request.input ?? {}).redact(
+      { request },
+    ),
+  );
   let resume: WorkflowResumeCheckpoint | undefined;
   let resumeRunId: string | undefined;
   try {

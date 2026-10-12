@@ -1,4 +1,8 @@
-import { variableIssues, workflowGraphSchema } from "@open-agent-tools/workflow-contracts";
+import {
+  variableIssues,
+  workflowGraphSchema,
+  effectiveNodeConfig,
+} from "@open-agent-tools/workflow-contracts";
 import type { ResourceCatalog } from "../resources/api.js";
 
 export type { NodeKind } from "@open-agent-tools/workflow-contracts";
@@ -53,6 +57,7 @@ export interface WorkflowValidationIssue {
 }
 
 export function defaultConfig(kind: NodeKind): Record<string, WorkflowConfigValue> {
+  if (kind === "http") return structuredClone(effectiveNodeConfig("http"));
   if (kind === "rag") return { sources: [], topK: 5, query: "{{query}}", inputs: [], outputs: [] };
   if (kind === "graph")
     return {

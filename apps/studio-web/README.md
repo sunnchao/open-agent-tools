@@ -104,3 +104,15 @@ pnpm --filter @open-agent-tools/studio-web build
 - 变量改名会更新结构化绑定及相关模板；删除保留失效引用供修复。无效引用可保存草稿，但不能运行或发布。
 - 旧工作流首次加载会从现有运行输入引用提取入口声明，保留 `any` 类型；相似名称会提示核对。已发布旧版本继续兼容原入口推导方式。
 - 前端和后端共用 `@open-agent-tools/workflow-contracts` 校验。安装后先运行根目录的 `pnpm build:deps`，再启动 Studio 和 Server。
+
+### HTTP 请求与最终输出
+
+- 节点库中的“HTTP 请求”支持 GET、HEAD、POST、PUT、PATCH、DELETE；GET/HEAD 不发送请求体。其他方法可配置 JSON、原始文本或文本 multipart 表单。文件变量与 HTTP 响应逐段转发暂不支持。
+- URL、查询参数、请求头、请求体和认证值支持已绑定变量及深度路径，例如 `{{response.items[0].id}}`。查询参数按 `key:value` 分行或用 `&` 分隔，值会自动编码。JSON 中完整的占位符保留数字、布尔和对象类型。
+- 响应输出为 `body/status_code/headers/size`；JSON MIME 的 body 解析为 JSON 值，其他响应保留文本，size 为响应字节数。输出选择器支持 `$result.body.items[0].id`。响应上限为 5 MB，最多跟随 5 次重定向，跨来源不转发认证头。
+- Basic、Bearer 和自定义头认证可填写固定值或使用变量。请求日志、节点事件、回显结果及历史入口输入视图脱敏；内部执行数据继续供下游使用。导出和剪贴板复制移除固定凭据及用于认证的固定输入/入口默认值。导入后可以保存草稿，补齐认证才能运行或发布。
+- “高级执行设置”配置 1–120 秒超时与 0–3 次重试；超时覆盖响应体读取并取消请求。408、429、5xx 与暂时性网络错误可重试；其他 4xx 不自动重试。TLS 验证默认开启，关闭只作用于当前节点请求。
+- 服务端可设置 `WORKFLOW_HTTP_ALLOWLIST=api.example.com,internal.example.com`，使用精确 hostname 匹配并逐次检查重定向目标；未配置时允许 HTTP/HTTPS。Host、Content-Length、Connection、Transfer-Encoding 由传输层管理。
+- 所有执行到的结束节点输出合并为扁平对象，同名变量由后执行的节点覆盖；未执行分支不贡献结果。Studio `run_done.outputs`、公开 API 与历史最终输出使用同一口径；逐节点快照保存在 `run_done.nodeOutputs`，节点事件继续保留输入输出。
+
+工作流草稿、发布版本、执行快照和用于续跑的内部入口输入沿用现有受信管理存储边界；本次没有引入工作流密钥库或配置加密。含凭据的运行数据不能从脱敏后的历史观测中还原，必要时应重新执行提供凭据的上游节点。

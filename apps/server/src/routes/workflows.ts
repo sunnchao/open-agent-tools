@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { validateWorkflow, WorkflowValidationError } from "../workflow/executor.js";
+import { workflowRedactor } from "../workflow/redaction.js";
 import { authorizeWorkflowRequest, createWorkflowApiKey } from "../workflows/auth.js";
 import { startPublishedWorkflow, stopPublishedWorkflow } from "../workflows/runtime.js";
 import {
@@ -37,6 +38,21 @@ import { workflowGraphSchema } from "@open-agent-tools/workflow-contracts";
 
 export const workflowsRouter: ReturnType<typeof Router> = Router();
 
+function observedRun(run: WorkflowRunRecord, graph?: WorkflowGraph): WorkflowRunRecord {
+  const snapshot =
+    graph ??
+    getWorkflowRunSnapshot(run.id) ??
+    (run.versionId ? getWorkflowVersion(run.versionId)?.graph : undefined);
+  if (!snapshot) return run;
+  const redact = workflowRedactor(graphToRunNodes(snapshot), run.inputs).redact;
+  return {
+    ...run,
+    inputs: redact(run.inputs),
+    outputs: redact(run.outputs),
+    error: redact(run.error),
+  };
+}
+
 function sendError(res: Response, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof WorkflowNotFoundError) {
@@ -57,7 +73,9 @@ function sendError(res: Response, error: unknown): void {
 function graphFromBody(value: unknown): WorkflowGraph {
   const parsed = workflowGraphSchema.safeParse(value);
   if (!parsed.success)
-    throw new WorkflowValidationError(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
+    throw new WorkflowValidationError(
+      parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "),
+    );
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new WorkflowValidationError("workflow graph is required");
   }
@@ -83,8 +101,11 @@ function graphFromBody(value: unknown): WorkflowGraph {
   return graph as WorkflowGraph;
 }
 
-function validateGraph(graph: WorkflowGraph): void {
-  validateWorkflow({ nodes: graphToRunNodes(graph), edges: graph.edges, input: {} });
+function validateGraph(graph: WorkflowGraph, allowMissingHttpAuth = false): void {
+  validateWorkflow(
+    { nodes: graphToRunNodes(graph), edges: graph.edges, input: {} },
+    { allowMissingHttpAuth },
+  );
 }
 
 function publicOrigin(req: Request): string {
@@ -169,7 +190,7 @@ workflowsRouter.post("/api/workflows", (req, res) => {
   try {
     const name = typeof req.body?.name === "string" ? req.body.name : "未命名工作流";
     const graph = req.body?.graph === undefined ? undefined : graphFromBody(req.body.graph);
-    if (graph) validateGraph(graph);
+    if (graph) validateGraph(graph, true);
     const workflow = createWorkflow({
       name,
       description: typeof req.body?.description === "string" ? req.body.description : "",
@@ -326,7 +347,11 @@ workflowsRouter.get("/api/workflows/:workflowId/runs", (req, res) => {
     res.status(404).json({ error: "workflow not found" });
     return;
   }
-  res.json({ runs: listWorkflowRuns(workflow.app.id, Number(req.query.limit) || 50) });
+  res.json({
+    runs: listWorkflowRuns(workflow.app.id, Number(req.query.limit) || 50).map((run) =>
+      observedRun(run),
+    ),
+  });
 });
 workflowsRouter.get("/api/workflows/:workflowId/runs/:runId/events", (req, res) => {
   const workflow = getWorkflow(String(req.params.workflowId));
@@ -348,7 +373,7 @@ workflowsRouter.get("/api/workflows/:workflowId/runs/:runId/events", (req, res) 
     res.status(404).json({ error: "workflow run graph not found" });
     return;
   }
-  res.json({ run, events: listWorkflowEvents(run.id, after), graph });
+  res.json({ run: observedRun(run, graph), events: listWorkflowEvents(run.id, after), graph });
 });
 
 workflowsRouter.post("/v1/workflows/:slug/run", async (req, res) => {
@@ -483,7 +508,7 @@ workflowsRouter.get("/v1/workflow-runs/:runId", async (req, res) => {
     return;
   }
   if (!(await authorize(req, res, run.workflowId))) return;
-  res.json(run);
+  res.json(observedRun(run));
 });
 
 workflowsRouter.get("/v1/workflow-runs/:runId/events", async (req, res) => {

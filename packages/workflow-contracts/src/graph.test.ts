@@ -3,7 +3,7 @@ import { it } from "node:test";
 import { nodeKindSchema, nodeConfigSchemas, workflowGraphSchema } from "./graph.js";
 
 it("provides one kind/config contract and enforces execution bounds", () => {
-  assert.equal(nodeKindSchema.options.length, 8);
+  assert.equal(nodeKindSchema.options.length, 9);
   assert.equal(nodeKindSchema.safeParse("unknown").success, false);
   assert.equal(nodeConfigSchemas.llm.safeParse({ timeoutMs: 999 }).success, false);
   assert.equal(nodeConfigSchemas.mcp.safeParse({ retry: { maxRetries: 4 } }).success, false);

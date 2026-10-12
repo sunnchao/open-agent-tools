@@ -9,10 +9,13 @@ and this project adheres to Semantic Versioning.
 
 ### Added
 
+- Added HTTP workflow nodes with six methods, structured JSON and text bodies, text multipart forms, Basic/Bearer/custom header authentication, per-node TLS verification, timeout and transient retries. Deep object and array references are supported in templates and output selectors.
+- Redact HTTP credentials in request traces, node observations, final outputs and history input views. Remove fixed credentials and credential entry defaults from portable JSON and clipboard definitions; imported drafts can be edited before credentials are re-entered.
 - Expanded the workflow editor with persistent run history, invalid-reference repair, runtime edge highlighting, release notes, validated JSON import/export, multi-select editing, node execution policies, shared graph contracts, checkpoint resume, automatic layout, and system clipboard subgraph copy/paste.
 
 ### Fixed
 
+- Merge final end-node variables in execution order, including duplicate-name overrides, across Studio SSE, public blocking/SSE APIs and run history. Keep full node snapshots in `run_done.nodeOutputs`.
 - Validate pasted node bindings against both the existing workflow and the newly pasted subgraph, preserving valid internal references after node IDs are regenerated.
 - Retry transient MCP SDK HTTP errors whose status is stored in the numeric `code` field; keep HTTP 400/401 failures non-retryable.
 - Clear the canvas selection after confirming a checkpoint resume so the editor displays the current run preview.

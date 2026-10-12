@@ -29,6 +29,7 @@ import {
   Flag,
   FlaskConical,
   GitBranch,
+  Globe,
   Hammer,
   KeyRound,
   Loader2,
@@ -123,6 +124,7 @@ export const DislikeOutlined = adapt(ThumbsDown);
 
 // ── 领域 / 业务 ──
 export const ApiOutlined = adapt(Webhook);
+export const GlobeOutlined = adapt(Globe);
 export const ApartmentOutlined = adapt(Boxes);
 export const BranchesOutlined = adapt(GitBranch);
 export const MessageOutlined = adapt(MessageSquare);

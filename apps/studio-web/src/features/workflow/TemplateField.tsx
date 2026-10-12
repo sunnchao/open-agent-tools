@@ -1,8 +1,12 @@
+import { Button, Flex, Form, Input, Typography } from "antd";
 import { useId, useRef, useState } from "react";
+import type { TextAreaRef } from "antd/es/input/TextArea";
 import {
   similarVariableNames,
   templateReferences,
   templateStrings,
+  referenceRoot,
+  valuePath,
 } from "@open-agent-tools/workflow-contracts";
 import { replaceTemplateReference } from "./variables.js";
 import type { NodeInputBinding } from "./model.js";
@@ -26,7 +30,7 @@ export function TemplateField({
   json?: boolean;
 }) {
   const id = useId();
-  const textarea = useRef<HTMLTextAreaElement>(null);
+  const textarea = useRef<TextAreaRef>(null);
   const selection = useRef({ start: value.length, end: value.length });
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -42,7 +46,11 @@ export function TemplateField({
     }
   }
   const missing = [
-    ...new Set(strings.flatMap(templateReferences).filter((name) => !names.includes(name))),
+    ...new Set(
+      strings
+        .flatMap(templateReferences)
+        .filter((name) => !valuePath(name) || !names.includes(referenceRoot(name))),
+    ),
   ];
   const insert = (name: string) => {
     const { start, end } = selection.current;
@@ -55,17 +63,20 @@ export function TemplateField({
     setOpen(false);
     requestAnimationFrame(() => {
       textarea.current?.focus();
-      textarea.current?.setSelectionRange(from + token.length, from + token.length);
+      textarea.current?.resizableTextArea?.textArea.setSelectionRange(
+        from + token.length,
+        from + token.length,
+      );
     });
   };
   return (
-    <div className="studio-field workflow-template-field">
-      <label htmlFor={id}>{label}</label>
-      <textarea
+    <Form.Item className="workflow-template-field" label={label} htmlFor={id}>
+      <Input.TextArea
         id={id}
         ref={textarea}
         rows={rows}
         value={value}
+        status={missing.length > 0 ? "error" : undefined}
         aria-invalid={missing.length > 0}
         aria-describedby={missing.length ? `${id}-error` : undefined}
         aria-controls={open ? `${id}-suggestions` : undefined}
@@ -110,23 +121,24 @@ export function TemplateField({
         }}
       />
       {open && (
-        <div className="variable-suggestions" id={`${id}-suggestions`}>
+        <Flex vertical className="variable-suggestions" id={`${id}-suggestions`}>
           {matches.length ? (
             matches.map((name, index) => (
-              <button
+              <Button
                 key={name}
-                type="button"
+                type="text"
+                htmlType="button"
                 className={active === index ? "is-active" : ""}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => insert(name)}
               >
                 {name}
-              </button>
+              </Button>
             ))
           ) : (
-            <small>没有匹配的已绑定变量</small>
+            <Typography.Text>没有匹配的已绑定变量</Typography.Text>
           )}
-        </div>
+        </Flex>
       )}
       <VariableSelect
         label={`${label}插入变量`}
@@ -135,23 +147,28 @@ export function TemplateField({
         onChange={insert}
       />
       {missing.length > 0 && (
-        <div className="field-error" id={`${id}-error`}>
-          <small>未绑定变量：{missing.join("、")}。请从“插入变量”中选择。</small>
+        <Flex vertical className="field-error" id={`${id}-error`}>
+          <Typography.Text>
+            未绑定变量：{missing.join("、")}。请从“插入变量”中选择。
+          </Typography.Text>
           {missing.flatMap((name) =>
-            similarVariableNames(name, names).map((suggestion) => (
-              <button
-                key={`${name}-${suggestion}`}
-                type="button"
-                className="variable-text-button"
-                onClick={() => onChange(replaceTemplateReference(value, name, suggestion, json))}
-              >
-                改为 {suggestion}
-              </button>
-            )),
+            similarVariableNames(referenceRoot(name), names)
+              .map((root) => root + name.slice(referenceRoot(name).length))
+              .map((suggestion) => (
+                <Button
+                  key={`${name}-${suggestion}`}
+                  type="text"
+                  htmlType="button"
+                  className="variable-text-button"
+                  onClick={() => onChange(replaceTemplateReference(value, name, suggestion, json))}
+                >
+                  改为 {suggestion}
+                </Button>
+              )),
           )}
-        </div>
+        </Flex>
       )}
-      {hint && <small className="field-help">{hint}</small>}
-    </div>
+      {hint && <Typography.Text className="field-help">{hint}</Typography.Text>}
+    </Form.Item>
   );
 }

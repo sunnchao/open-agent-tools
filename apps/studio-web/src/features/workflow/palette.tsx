@@ -4,6 +4,7 @@ import {
   DatabaseOutlined,
   ExperimentOutlined,
   FlagOutlined,
+  GlobeOutlined,
   NodeIndexOutlined,
   PlayCircleFilled,
   UserOutlined,
@@ -18,6 +19,7 @@ export const palette: PaletteItem[] = [
   { kind: "graph", label: "图谱检索", description: "子图多跳扩展", group: "知识与模型" },
   { kind: "llm", label: "LLM", description: "生成或理解文本", group: "知识与模型" },
   { kind: "mcp", label: "MCP Tool", description: "调用 MCP 工具", group: "工具与逻辑" },
+  { kind: "http", label: "HTTP 请求", description: "调用外部 API", group: "工具与逻辑" },
   { kind: "condition", label: "条件分支", description: "按表达式分流", group: "工具与逻辑" },
   { kind: "end", label: "结束", description: "定义最终输出", group: "输出" },
 ];
@@ -29,6 +31,7 @@ export const iconByKind: Record<NodeKind, React.ReactNode> = {
   graph: <NodeIndexOutlined />,
   llm: <ExperimentOutlined />,
   mcp: <ApiOutlined />,
+  http: <GlobeOutlined />,
   condition: <BranchesOutlined />,
   end: <FlagOutlined />,
 };
@@ -37,6 +40,7 @@ export function nodeColor(kind: NodeKind): string {
   if (kind === "rag") return "#c77921";
   if (kind === "graph") return "#534AB7";
   if (kind === "mcp") return "#16806a";
+  if (kind === "http") return "#b46438";
   if (kind === "condition") return "#7a5da6";
   if (kind === "llm") return "#356bc4";
   return "#69717d";

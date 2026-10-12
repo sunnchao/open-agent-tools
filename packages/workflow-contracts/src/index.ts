@@ -1,5 +1,11 @@
 export * from "./graph.js";
 export * from "./resume.js";
+export * from "./paths.js";
+export * from "./http.js";
+export * from "./outputs.js";
+import { referenceRoot, valuePath } from "./paths.js";
+import { httpConfigIssues } from "./http.js";
+import type { HttpNodeConfig } from "./graph.js";
 
 /** Shared by the editor, published API and executor. Declarations live on the start node. */
 export type VariableType = "any" | "string" | "number" | "boolean" | "object" | "array";
@@ -124,6 +130,7 @@ export function templateFields(kind: string): string[] {
   if (kind === "rag" || kind === "graph") return ["query"];
   if (kind === "condition") return ["expression"];
   if (kind === "mcp") return ["arguments"];
+  if (kind === "http") return ["url", "params", "headers", "body", "authorization"];
   return [];
 }
 export function templateReferences(text: string): string[] {
@@ -138,12 +145,15 @@ export function templateStrings(value: unknown): string[] {
 export function resultFields(kind: string): Record<string, VariableType> | null {
   if (kind === "graph") return { formatted: "string", seeds: "array" };
   if (kind === "rag") return { formatted: "string", chunks: "array" };
+  if (kind === "http")
+    return { body: "any", status_code: "number", headers: "object", size: "number" };
   return null;
 }
 export function selectorIssue(node: VariableNode, selector: string): string | null {
-  if (!/^\$(result|inputs)(\.[A-Za-z_$][\w$]*)*$/.test(selector))
+  const parts = valuePath(selector);
+  if (!parts || !["$result", "$inputs"].includes(parts[0]!))
     return `输出路径 ${selector || "（空）"} 格式无效`;
-  const [root, ...path] = selector.split(".");
+  const [root, ...path] = parts;
   if (path.some((key) => reservedNames.has(key))) return `输出路径 ${selector} 包含保留字段`;
   if (!path.length) return null;
   if (root === "$inputs" || node.kind === "input" || node.kind === "end") {
@@ -201,6 +211,9 @@ export function variableIssues(nodes: VariableNode[]): VariableIssue[] {
       }
     }
     const inputs = inputsOf(node);
+    if (node.kind === "http")
+      for (const issue of httpConfigIssues((node.config ?? {}) as HttpNodeConfig))
+        add(issue.code, issue.message);
     const names = new Set(inputs.map((input) => input?.name));
     for (const input of inputs) {
       if (typeof input?.name !== "string" || !validVariableName(input.name))
@@ -221,6 +234,18 @@ export function variableIssues(nodes: VariableNode[]): VariableIssue[] {
     }
     for (const field of templateFields(node.kind)) {
       let value = node.config?.[field];
+      if (node.kind === "http" && field === "body") {
+        const config = node.config as HttpNodeConfig;
+        if (["get", "head"].includes(config.method ?? "get") || config.body?.type === "none")
+          continue;
+        if (config.body?.type === "json" && typeof config.body.data === "string") {
+          try {
+            value = JSON.parse(config.body.data || "{}");
+          } catch {
+            continue;
+          }
+        }
+      }
       if (field === "arguments" && typeof value === "string") {
         try {
           value = JSON.parse(value);
@@ -230,11 +255,12 @@ export function variableIssues(nodes: VariableNode[]): VariableIssue[] {
       }
       for (const text of templateStrings(value))
         for (const name of templateReferences(text)) {
-          if (!names.has(name)) {
+          const root = referenceRoot(name);
+          if (!valuePath(name) || !names.has(root)) {
             const similar = similarVariableNames(
-              name,
+              root,
               [...names].filter((item): item is string => typeof item === "string"),
-            );
+            ).map((candidate) => candidate + name.slice(root.length));
             add(
               "template-reference",
               `${field} 引用了未绑定变量 ${name || "（空）"}；${similar.length ? `可修复为 ${similar.join("、")}` : "请通过“插入变量”选择"}`,

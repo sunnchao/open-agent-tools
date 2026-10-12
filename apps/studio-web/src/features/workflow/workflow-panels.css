@@ -1,0 +1,270 @@
+.workflow-layout .node-palette > *,
+.workflow-inspector > * {
+  flex-shrink: 0;
+}
+
+.workflow-layout .palette-search.ant-input-affix-wrapper {
+  width: calc(100% - 20px);
+  flex-shrink: 0;
+}
+
+.workflow-layout .palette-count .ant-badge-count {
+  color: var(--studio-accent-deep);
+  font-family: var(--studio-mono);
+  background: var(--studio-accent-soft);
+  box-shadow: none;
+}
+
+.workflow-layout .palette-item.ant-btn {
+  height: auto;
+  justify-content: flex-start;
+  white-space: normal;
+}
+
+.workflow-layout .palette-item-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  color: var(--studio-blue);
+  background: var(--studio-blue-soft);
+  border-radius: 6px;
+}
+
+.workflow-layout .palette-item-copy {
+  align-items: flex-start;
+  text-align: left;
+}
+
+.workflow-layout .palette-group-label {
+  display: block;
+}
+
+.workflow-layout .palette-empty .ant-empty-description,
+.workflow-inspector .ant-empty-description {
+  color: var(--studio-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.workflow-inspector .workflow-panel-switcher {
+  min-width: 0;
+  margin: 8px 14px 14px;
+}
+
+.node-inspector-content .workflow-panel-switcher {
+  margin: 0 0 16px;
+}
+
+.workflow-inspector .ant-form-item {
+  margin-bottom: 12px;
+}
+
+.workflow-inspector .ant-form-item-label {
+  padding-bottom: 6px;
+}
+
+.workflow-inspector .ant-form-item-label > label {
+  height: auto;
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
+.workflow-inspector .ant-form-item .ant-select,
+.workflow-inspector .ant-form-item .ant-input-number {
+  width: 100%;
+}
+
+.workflow-inspector .inspector-title-copy .ant-typography {
+  margin: 0;
+}
+
+.workflow-inspector .inspector-title-copy h4 {
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-inspector .inspector-title-copy > .ant-typography:not(h4) {
+  margin-top: 2px;
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
+.workflow-inspector .ant-btn.variable-text-button,
+.workflow-inspector .ant-btn.resource-refresh-link {
+  height: auto;
+  justify-content: flex-start;
+  white-space: normal;
+}
+
+.workflow-inspector .variable-card .ant-form-item {
+  margin: 0;
+}
+
+.workflow-inspector .variable-name-field,
+.workflow-inspector .variable-type-field {
+  min-width: 0;
+  flex: 1;
+}
+
+.workflow-inspector .variable-type-field .ant-typography {
+  font-size: 11px;
+}
+
+.workflow-inspector .variable-delete.ant-btn {
+  padding-inline: 5px;
+}
+
+.workflow-inspector .variable-required .ant-checkbox-input {
+  width: 100%;
+  min-height: 0;
+}
+
+.workflow-inspector .workflow-template-field .ant-input {
+  font-family: var(--studio-mono);
+  font-size: 12px;
+}
+
+.workflow-inspector .workflow-template-field .workflow-variable-select {
+  margin-top: 6px;
+}
+
+.workflow-inspector .field-help {
+  color: var(--studio-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.workflow-inspector .field-error {
+  color: var(--studio-danger);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.workflow-inspector .workflow-execution-policy .ant-collapse-header {
+  padding: 0 0 12px;
+  color: var(--studio-blue);
+  font-size: 12px;
+}
+
+.workflow-inspector .workflow-execution-policy .ant-collapse-body {
+  padding: 0;
+}
+
+.workflow-inspector .workflow-resource-options .ant-checkbox-wrapper {
+  width: 100%;
+  margin: 0;
+  align-items: flex-start;
+}
+
+.workflow-inspector .workflow-resource-options .ant-checkbox {
+  margin-top: 2px;
+}
+
+.workflow-inspector .workflow-resource-options .ant-checkbox-input {
+  width: 100%;
+  margin: 0;
+}
+
+.workflow-inspector .workflow-resource-options .ant-checkbox-label {
+  min-width: 0;
+}
+
+.workflow-inspector .workflow-resource-copy .ant-typography {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.workflow-inspector .node-resource-alert {
+  margin-bottom: 10px;
+  font-size: 11px;
+}
+
+.workflow-inspector .condition-route {
+  padding: 6px 8px;
+  background: var(--studio-surface-subtle);
+  border: 1px solid var(--studio-line);
+}
+
+.workflow-inspector .condition-route > .ant-typography {
+  min-width: 0;
+  flex: 1;
+}
+
+.workflow-inspector .condition-route .ant-select {
+  width: 88px;
+  flex-shrink: 0;
+}
+
+.workflow-inspector .run-summary,
+.workflow-inspector .node-test-summary {
+  display: grid;
+}
+
+.workflow-inspector .run-summary > .ant-typography > .ant-typography {
+  color: var(--studio-text);
+}
+
+.workflow-inspector .node-test-data-heading strong {
+  font-size: 11px;
+}
+
+.workflow-inspector .workflow-code-block {
+  margin: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: var(--studio-mono);
+}
+
+.workflow-inspector .run-log-toggle.ant-btn {
+  height: auto;
+  justify-content: flex-start;
+}
+
+.workflow-inspector .run-log-copy {
+  text-align: left;
+}
+
+.workflow-inspector .node-test-metadata .ant-descriptions-item-label,
+.workflow-inspector .node-test-metadata .ant-descriptions-item-content {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.workflow-inspector .workflow-run-history-filter .ant-select {
+  min-width: 90px;
+}
+
+.workflow-inspector .workflow-run-history-item.ant-btn {
+  height: auto;
+  white-space: normal;
+}
+
+.workflow-inspector .workflow-run-history-item.is-active {
+  border-color: var(--studio-blue);
+}
+
+.workflow-inspector .workflow-run-history-heading {
+  width: 100%;
+}
+
+.workflow-inspector .workflow-run-history-heading .ant-typography,
+.workflow-inspector .workflow-run-history-meta {
+  font-size: 11px;
+}
+
+@media (max-width: 1024px) {
+  .workflow-layout .palette-group {
+    display: grid;
+  }
+
+  .workflow-layout .palette-search.ant-input-affix-wrapper {
+    width: 100%;
+  }
+}

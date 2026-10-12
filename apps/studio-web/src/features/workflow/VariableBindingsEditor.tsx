@@ -1,9 +1,11 @@
+import { Button, Checkbox, Flex, Input, Typography } from "antd";
 import { useState } from "react";
 import {
   runVariables,
   selectorIssue,
   similarVariableNames,
   validVariableName,
+  valuePath,
 } from "@open-agent-tools/workflow-contracts";
 import { DeleteOutlined, PlusOutlined } from "../../lib/icons.js";
 import { nodeInputs, nodeOutputs, type NodeInputBinding, type NodeOutputBinding } from "./model.js";
@@ -31,7 +33,7 @@ function BindingName({
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   return (
-    <input
+    <Input
       title="名称须唯一，仅使用字母、数字、下划线或 $，不能以数字开头。无效名称不会保存。"
       className="variable-name"
       value={draft ?? name}
@@ -66,7 +68,7 @@ function OutputSelector({
   const unknown = !options.some((item) => item.value === output.selector);
   const error = selectorIssue(variableNodes([node])[0]!, output.selector);
   return (
-    <div className="variable-selector">
+    <Flex vertical className="variable-selector">
       <VariableSelect
         label="输出取值"
         value={output.selector}
@@ -78,19 +80,24 @@ function OutputSelector({
         onChange={onChange}
         placeholder="选择输出字段"
       />
-      <button type="button" className="variable-text-button" onClick={() => setAdvanced(!advanced)}>
+      <Button
+        type="text"
+        htmlType="button"
+        className="variable-text-button"
+        onClick={() => setAdvanced(!advanced)}
+      >
         {advanced ? "收起路径编辑" : "高级：编辑路径"}
-      </button>
+      </Button>
       {(advanced || unknown) && (
-        <input
+        <Input
           className="mono-input"
           value={output.selector}
           aria-label="输出选择器"
           onChange={(event) => onChange(event.target.value)}
         />
       )}
-      {error && <small className="field-error">{error}</small>}
-    </div>
+      {error && <Typography.Text className="field-error">{error}</Typography.Text>}
+    </Flex>
   );
 }
 export function VariableBindingsEditor({
@@ -139,7 +146,10 @@ export function VariableBindingsEditor({
                 )
                   ? nextVariableName(
                       outputs.filter((_, j) => j !== index).map((other) => other.name),
-                      selector.split(".").at(-1)!.replace(/^\$/, ""),
+                      valuePath(selector)
+                        ?.filter((part) => !/^\d+$/.test(part))
+                        .at(-1)
+                        ?.replace(/^\$/, "") ?? "output",
                     )
                   : item.name,
             }
@@ -147,11 +157,12 @@ export function VariableBindingsEditor({
       ),
     );
   return (
-    <div className="variable-bindings">
-      <div className="variable-group-head">
-        <span>输入变量</span>
-        <button
-          type="button"
+    <Flex vertical className="variable-bindings">
+      <Flex className="variable-group-head">
+        <Typography.Text>输入变量</Typography.Text>
+        <Button
+          type="text"
+          htmlType="button"
           onClick={() =>
             updateConfig("inputs", [
               ...inputs,
@@ -167,15 +178,20 @@ export function VariableBindingsEditor({
           }
         >
           <PlusOutlined /> 添加
-        </button>
-      </div>
-      <button type="button" className="variable-text-button" onClick={onManageVariables}>
+        </Button>
+      </Flex>
+      <Button
+        type="text"
+        htmlType="button"
+        className="variable-text-button"
+        onClick={onManageVariables}
+      >
         管理 / 创建入口变量
-      </button>
+      </Button>
       {!inputs.length && (
-        <small className="variable-empty">
+        <Typography.Text className="variable-empty">
           添加输入，再选择入口变量、固定值或直接前置节点输出。
-        </small>
+        </Typography.Text>
       )}
       {inputs.map((input, index) => {
         const value = sourceKey(input.source);
@@ -202,24 +218,24 @@ export function VariableBindingsEditor({
             : [];
         const duplicate = inputs.some((item, i) => i !== index && item.name === input.name);
         return (
-          <div className="variable-card" key={`${node.id}-input-${index}`}>
-            <div className="variable-card-heading">
+          <Flex vertical className="variable-card" key={`${node.id}-input-${index}`}>
+            <Flex className="variable-card-heading">
               <BindingName
                 name={input.name}
                 taken={inputs.filter((_, i) => i !== index).map((item) => item.name)}
                 label="输入变量名"
                 rename={(name) => rename("inputs", index, name)}
               />
-              <label className="variable-required">
-                <input
-                  type="checkbox"
-                  checked={input.required !== false}
-                  onChange={(event) => updateInput(index, { required: event.target.checked })}
-                />
+              <Checkbox
+                className="variable-required"
+                checked={input.required !== false}
+                onChange={(event) => updateInput(index, { required: event.target.checked })}
+              >
                 必填
-              </label>
-              <button
-                type="button"
+              </Checkbox>
+              <Button
+                type="text"
+                htmlType="button"
                 className="variable-delete"
                 aria-label="删除输入"
                 onClick={() =>
@@ -230,8 +246,8 @@ export function VariableBindingsEditor({
                 }
               >
                 <DeleteOutlined />
-              </button>
-            </div>
+              </Button>
+            </Flex>
             <VariableSelect
               label="输入来源"
               value={input.source.type === "run" && !input.source.variable ? undefined : value}
@@ -268,7 +284,7 @@ export function VariableBindingsEditor({
               }}
             />
             {input.source.type === "literal" && (
-              <input
+              <Input
                 value={String(input.source.value ?? "")}
                 aria-label="固定值"
                 placeholder="输入固定文本"
@@ -278,24 +294,26 @@ export function VariableBindingsEditor({
               />
             )}
             {missing && (
-              <div className="field-error">
-                <small>请选择有效来源；失效引用需要重新绑定。</small>
+              <Flex vertical className="field-error">
+                <Typography.Text>请选择有效来源；失效引用需要重新绑定。</Typography.Text>
                 {runSuggestions.map((suggestion) => (
-                  <button
+                  <Button
                     key={suggestion}
-                    type="button"
+                    type="text"
+                    htmlType="button"
                     className="variable-text-button"
                     onClick={() =>
                       updateInput(index, { source: { type: "run", variable: suggestion } })
                     }
                   >
                     重绑为 {suggestion}
-                  </button>
+                  </Button>
                 ))}
                 {nodeSuggestions.map((option) => (
-                  <button
+                  <Button
                     key={option.value}
-                    type="button"
+                    type="text"
+                    htmlType="button"
                     className="variable-text-button"
                     onClick={() =>
                       updateInput(index, {
@@ -304,20 +322,21 @@ export function VariableBindingsEditor({
                     }
                   >
                     重绑为 {option.label}
-                  </button>
+                  </Button>
                 ))}
-              </div>
+              </Flex>
             )}
             {(!validVariableName(input.name) || duplicate) && (
-              <small className="field-error">变量名称无效或重复。</small>
+              <Typography.Text className="field-error">变量名称无效或重复。</Typography.Text>
             )}
-          </div>
+          </Flex>
         );
       })}
-      <div className="variable-group-head">
-        <span>输出变量</span>
-        <button
-          type="button"
+      <Flex className="variable-group-head">
+        <Typography.Text>输出变量</Typography.Text>
+        <Button
+          type="text"
+          htmlType="button"
           onClick={() =>
             updateConfig("outputs", [
               ...outputs,
@@ -332,10 +351,12 @@ export function VariableBindingsEditor({
           }
         >
           <PlusOutlined /> 添加
-        </button>
-      </div>
+        </Button>
+      </Flex>
       {!outputs.length && (
-        <small className="variable-empty">选择结果或输入作为输出，供下游节点使用。</small>
+        <Typography.Text className="variable-empty">
+          选择结果或输入作为输出，供下游节点使用。
+        </Typography.Text>
       )}
       {outputs.map((output, index) => {
         const uses = nodes.filter((item) =>
@@ -347,16 +368,17 @@ export function VariableBindingsEditor({
           ),
         );
         return (
-          <div className="variable-card" key={`${node.id}-output-${index}`}>
-            <div className="variable-card-heading">
+          <Flex vertical className="variable-card" key={`${node.id}-output-${index}`}>
+            <Flex className="variable-card-heading">
               <BindingName
                 name={output.name}
                 taken={outputs.filter((_, i) => i !== index).map((item) => item.name)}
                 label="输出变量名"
                 rename={(name) => rename("outputs", index, name)}
               />
-              <button
-                type="button"
+              <Button
+                type="text"
+                htmlType="button"
                 className="variable-delete"
                 aria-label="删除输出"
                 onClick={() =>
@@ -367,8 +389,8 @@ export function VariableBindingsEditor({
                 }
               >
                 <DeleteOutlined />
-              </button>
-            </div>
+              </Button>
+            </Flex>
             <OutputSelector
               node={node}
               output={output}
@@ -377,17 +399,17 @@ export function VariableBindingsEditor({
             />
             {(!validVariableName(output.name) ||
               outputs.some((item, i) => i !== index && item.name === output.name)) && (
-              <small className="field-error">变量名称无效或重复。</small>
+              <Typography.Text className="field-error">变量名称无效或重复。</Typography.Text>
             )}
             {uses.length > 0 && (
-              <small className="variable-help">
+              <Typography.Text className="variable-help">
                 被 {uses.length} 个节点引用：{uses.map((item) => item.data.label).join("、")}
                 。删除后引用将标记为失效。
-              </small>
+              </Typography.Text>
             )}
-          </div>
+          </Flex>
         );
       })}
-    </div>
+    </Flex>
   );
 }

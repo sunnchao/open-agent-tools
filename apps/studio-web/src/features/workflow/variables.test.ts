@@ -203,3 +203,55 @@ describe("定向修复失效引用", () => {
     expect(startNode.data.config.runVariables).toEqual([{ name: "query", type: "string" }]);
   });
 });
+
+it("renames and repairs nested HTTP body and authentication templates without rewriting JSON keys", () => {
+  const node = createNode(
+    "h",
+    "http",
+    { x: 0, y: 0 },
+    {
+      url: "https://example.com/{{response.items[0].id}}",
+      inputs: [{ name: "response", source: { type: "literal", value: {} } }],
+      method: "post",
+      body: { type: "json", data: '{"{{response}}":"{{response.items[0]}}"}' },
+      authorization: { type: "bearer", config: { token: "{{response.token}}" } },
+      outputs: [{ name: "out", selector: "$inputs.response.items[0].id" }],
+    },
+  );
+  const renamed = renameVariable([node], "h", "inputs", "response", "reply")[0]!;
+  expect(renamed.data.config.url).toBe("https://example.com/{{reply.items[0].id}}");
+  expect(renamed.data.config.authorization).toEqual({
+    type: "bearer",
+    config: { token: "{{reply.token}}" },
+  });
+  expect(JSON.parse((renamed.data.config.body as { data: string }).data)).toEqual({
+    "{{response}}": "{{reply.items[0]}}",
+  });
+  expect(nodeOutputs(renamed.data)[0]?.selector).toBe("$inputs.reply.items[0].id");
+  renamed.data.config.inputs = [{ name: "reply", source: { type: "literal", value: {} } }];
+  const broken = {
+    ...renamed,
+    data: {
+      ...renamed.data,
+      config: {
+        ...renamed.data.config,
+        authorization: { type: "bearer", config: { token: "{{replly.token}}" } },
+      },
+    },
+  };
+  const repaired = repairVariableReference(
+    [broken],
+    {
+      code: "template-reference",
+      message: "",
+      nodeId: "h",
+      field: "authorization",
+      reference: "replly.token",
+    },
+    "reply.token",
+  );
+  expect(repaired[0]!.data.config.authorization).toEqual({
+    type: "bearer",
+    config: { token: "{{reply.token}}" },
+  });
+});

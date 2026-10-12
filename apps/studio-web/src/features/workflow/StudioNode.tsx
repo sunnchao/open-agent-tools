@@ -48,6 +48,8 @@ function nodeSummary(data: WorkflowNodeData): string {
     return data.config.toolName
       ? `${data.config.serviceSlug} / ${data.config.toolName}`
       : "选择 MCP Tool";
+  if (data.kind === "http")
+    return `${String(data.config.method ?? "get").toUpperCase()} · ${String(data.config.url ?? "").split("?")[0] || "配置目标 URL"}`;
   if (data.kind === "condition") return String(data.config.expression);
   if (data.kind === "input")
     return `输入 ${nodeInputs(data).length} · 输出 ${nodeOutputs(data).length}`;

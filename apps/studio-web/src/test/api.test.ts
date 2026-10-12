@@ -114,15 +114,11 @@ describe("parseSseBuffer", () => {
 
     const deltas: string[] = [];
     await new Promise<void>((resolve, reject) => {
-      streamChat(
-        [{ role: "user", content: "hi" }],
-        undefined,
-        {
-          onDelta: (value) => deltas.push(value),
-          onDone: () => resolve(),
-          onError: reject,
-        },
-      );
+      streamChat([{ role: "user", content: "hi" }], undefined, {
+        onDelta: (value) => deltas.push(value),
+        onDone: () => resolve(),
+        onError: reject,
+      });
     });
     expect(deltas).toEqual(["hello"]);
   });
@@ -145,18 +141,14 @@ describe("parseSseBuffer", () => {
 
     let doneCalls = 0;
     await new Promise<void>((resolve, reject) => {
-      streamChat(
-        [{ role: "user", content: "hi" }],
-        undefined,
-        {
-          onDelta: () => undefined,
-          onDone: () => {
-            doneCalls += 1;
-            resolve();
-          },
-          onError: reject,
+      streamChat([{ role: "user", content: "hi" }], undefined, {
+        onDelta: () => undefined,
+        onDone: () => {
+          doneCalls += 1;
+          resolve();
         },
-      );
+        onError: reject,
+      });
     });
     expect(doneCalls).toBe(1);
   });
@@ -179,7 +171,9 @@ describe("parseSseBuffer", () => {
                 ),
               );
               controller.enqueue(
-                encoder.encode('data: {"type":"run_done","outputs":{"a":{"value":"ok"}}}\n\n'),
+                encoder.encode(
+                  'data: {"type":"run_done","outputs":{"value":"ok"},"nodeOutputs":{"a":{"value":"ok"}}}\n\n',
+                ),
               );
               controller.close();
             },
@@ -196,8 +190,9 @@ describe("parseSseBuffer", () => {
         {
           onNodeStart: (id, _label, kind) => starts.push([id, kind]),
           onNodeResult: (id, status, meta) => results.push({ id, status, meta }),
-          onDone: (outputs) => {
-            expect(outputs.a?.value).toBe("ok");
+          onDone: (outputs, nodeOutputs) => {
+            expect(outputs.value).toBe("ok");
+            expect(nodeOutputs.a?.value).toBe("ok");
             resolve();
           },
           onError: reject,

@@ -99,7 +99,9 @@ describe("workflow executor", () => {
     });
     assert.ok(
       events.some(
-        (event) => JSON.stringify(event) === JSON.stringify({ type: "run_done", outputs: result }),
+        (event) =>
+          JSON.stringify(event) ===
+          JSON.stringify({ type: "run_done", outputs: { answer: "hello" }, nodeOutputs: result }),
       ),
     );
     assert.ok(

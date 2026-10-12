@@ -1,3 +1,4 @@
+import { Button, Empty, Flex, Typography } from "antd";
 import { useState } from "react";
 import {
   CheckCircleFilled,
@@ -7,7 +8,6 @@ import {
   PauseCircleOutlined,
   PlayCircleOutlined,
 } from "../../lib/icons.js";
-import { nodeOutputs } from "./model.js";
 import { formatWorkflowRunOutput } from "./runOutput.js";
 import { formatNodeTestDuration } from "./format.js";
 import type { RunLogEntry, WorkflowNode } from "./types.js";
@@ -31,14 +31,13 @@ export function RunPreview({
   running: boolean;
   runDisabled: boolean;
   log: RunLogEntry[];
-  outputs: Record<string, Record<string, unknown>> | null;
+  outputs: Record<string, unknown> | null;
   onRun: () => void;
   onStop: () => void;
   readOnly?: boolean;
   onResume?: (nodeId: string) => void;
   resumeIssue?: (nodeId: string) => string | null;
 }) {
-  const endNodes = nodes.filter((node) => node.data.kind === "end");
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const toggleLogEntry = (id: string) =>
     setCollapsedIds((current) => {
@@ -60,48 +59,49 @@ export function RunPreview({
       item.tokenUsage !== undefined,
   );
   return (
-    <div className="inspector-content run-preview">
-      <div className="run-summary">
-        <span>
-          <b>{nodes.length}</b> 节点
-        </span>
-        <span>
-          <b>{edges.length}</b> 连接
-        </span>
-      </div>
-      <p className="muted-copy">
+    <Flex vertical className="inspector-content run-preview">
+      <Flex className="run-summary">
+        <Typography.Text>
+          <Typography.Text strong>{nodes.length}</Typography.Text> 节点
+        </Typography.Text>
+        <Typography.Text>
+          <Typography.Text strong>{edges.length}</Typography.Text> 连接
+        </Typography.Text>
+      </Flex>
+      <Typography.Paragraph className="muted-copy">
         {readOnly
           ? "历史轨迹来自当次运行快照，仅供查看。"
           : "运行会在服务端按拓扑顺序执行节点，并实时回传节点状态。"}
-      </p>
+      </Typography.Paragraph>
       {!readOnly && (
-        <button
+        <Button
           className={`studio-button run full-width${running ? " is-stop" : ""}`}
-          type="button"
+          type="text"
+          htmlType="button"
           disabled={runDisabled}
           onClick={running ? onStop : onRun}
         >
           {running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
           {running ? "停止运行" : "开始运行"}
-        </button>
+        </Button>
       )}
-      <div className="inspector-section-title run-log-title">
-        <span>执行记录</span>
+      <Flex className="inspector-section-title run-log-title">
+        <Typography.Text>执行记录</Typography.Text>
         {log.length > 0 && hasDetail ? (
-          <span className="run-log-actions">
-            <button type="button" onClick={expandAll}>
+          <Typography.Text className="run-log-actions">
+            <Button type="text" htmlType="button" onClick={expandAll}>
               全部展开
-            </button>
-            <button type="button" onClick={collapseAll}>
+            </Button>
+            <Button type="text" htmlType="button" onClick={collapseAll}>
               全部收起
-            </button>
-          </span>
+            </Button>
+          </Typography.Text>
         ) : null}
-      </div>
+      </Flex>
       {log.length === 0 ? (
-        <div className="run-empty">尚未运行</div>
+        <Empty className="run-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未运行" />
       ) : (
-        <ol className="run-log">
+        <Flex vertical className="run-log" role="list">
           {log.map((item, index) => (
             <RunLogItem
               key={item.id}
@@ -113,61 +113,45 @@ export function RunPreview({
               resumeIssue={resumeIssue?.(item.id) ?? null}
             />
           ))}
-        </ol>
+        </Flex>
       )}
       {outputs !== null ? (
         <>
-          <div className="inspector-section-title final-output-title">
-            <span>最终输出</span>
-            <span className="final-output-status">已完成</span>
-          </div>
-          {endNodes.length === 0 ? (
-            <div className="run-empty">未配置结束节点</div>
+          <Flex className="inspector-section-title final-output-title">
+            <Typography.Text>最终输出</Typography.Text>
+            <Typography.Text className="final-output-status">已完成</Typography.Text>
+          </Flex>
+          {Object.keys(outputs).length === 0 ? (
+            <Empty
+              className="run-empty"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="没有已执行的结果输出"
+            />
           ) : (
-            <div className="run-output-list">
-              {endNodes.map((node) => {
-                const bindings = nodeOutputs(node.data);
-                const nodeValues = outputs[node.id];
-                return (
-                  <section className="run-output-block" key={node.id}>
-                    <div className="run-output-heading">
-                      <FlagOutlined />
-                      <b>{node.data.label}</b>
-                      <code>{node.id}</code>
-                    </div>
-                    {bindings.length === 0 ? (
-                      <p className="run-output-empty">结束节点未配置输出变量</p>
-                    ) : (
-                      <div className="run-output-values">
-                        {bindings.map((binding) => {
-                          const hasValue = Boolean(
-                            nodeValues &&
-                            Object.prototype.hasOwnProperty.call(nodeValues, binding.name),
-                          );
-                          return (
-                            <div className="run-output-value" key={binding.name}>
-                              <div className="run-output-label">
-                                <span>{binding.name}</span>
-                                <code>{binding.selector}</code>
-                              </div>
-                              <pre>
-                                {hasValue
-                                  ? formatWorkflowRunOutput(nodeValues?.[binding.name])
-                                  : "未执行"}
-                              </pre>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </section>
-                );
-              })}
-            </div>
+            <Flex vertical className="run-output-list">
+              <Flex vertical className="run-output-block">
+                <Flex className="run-output-heading">
+                  <FlagOutlined />
+                  <Typography.Text strong>合并结果</Typography.Text>
+                </Flex>
+                <Flex vertical className="run-output-values">
+                  {Object.entries(outputs).map(([name, value]) => (
+                    <Flex vertical className="run-output-value" key={name}>
+                      <Flex className="run-output-label">
+                        <Typography.Text>{name}</Typography.Text>
+                      </Flex>
+                      <Typography.Paragraph className="workflow-code-block">
+                        {formatWorkflowRunOutput(value)}
+                      </Typography.Paragraph>
+                    </Flex>
+                  ))}
+                </Flex>
+              </Flex>
+            </Flex>
           )}
         </>
       ) : null}
-    </div>
+    </Flex>
   );
 }
 
@@ -200,8 +184,11 @@ function RunLogItem({
       item.tokenUsage.inputTokens > 0 ||
       item.tokenUsage.outputTokens > 0);
   return (
-    <li
+    <Flex
+      vertical
+      role="listitem"
       className={[
+        "run-log-item",
         item.status === "error" ? "is-error" : undefined,
         hasBody ? "has-body" : undefined,
         collapsed ? "is-collapsed" : undefined,
@@ -209,36 +196,49 @@ function RunLogItem({
         .filter(Boolean)
         .join(" ")}
     >
-      <button type="button" className="run-log-toggle" onClick={onToggle}>
-        <span className="run-log-index">{String(index + 1).padStart(2, "0")}</span>
-        <b>
-          {item.label}
-          {item.kind ? <small className="run-log-kind">{item.kind}</small> : null}
-          {item.detail ? <small className="run-log-error">{item.detail}</small> : null}
-        </b>
+      <Button type="text" htmlType="button" className="run-log-toggle" onClick={onToggle}>
+        <Typography.Text className="run-log-index">
+          {String(index + 1).padStart(2, "0")}
+        </Typography.Text>
+        <Flex vertical className="run-log-copy">
+          <Typography.Text strong>{item.label}</Typography.Text>
+          {item.kind ? (
+            <Typography.Text className="run-log-kind">{item.kind}</Typography.Text>
+          ) : null}
+          {item.detail ? (
+            <Typography.Text className="run-log-error">{item.detail}</Typography.Text>
+          ) : null}
+        </Flex>
         {item.durationMs !== undefined ? (
-          <em className="run-log-duration">{formatNodeTestDuration(item.durationMs)}</em>
+          <Typography.Text className="run-log-duration">
+            {formatNodeTestDuration(item.durationMs)}
+          </Typography.Text>
         ) : null}
         {item.status === "error" ? <CloseCircleFilled /> : <CheckCircleFilled />}
-      </button>
+      </Button>
       {onResume && item.status === "success" ? (
-        <button
+        <Button
           className="variable-text-button"
-          type="button"
+          type="text"
+          htmlType="button"
           disabled={Boolean(resumeIssue)}
           title={resumeIssue ?? "复用上游真实输出，执行当前草稿的该节点及下游"}
           onClick={() => onResume(item.id)}
         >
           从此节点续跑
-        </button>
+        </Button>
       ) : null}
       {!collapsed && hasBody ? (
-        <div className="run-log-detail">
-          {item.cached ? <p className="field-help">复用历史缓存 · 本次未执行</p> : null}
+        <Flex vertical className="run-log-detail">
+          {item.cached ? (
+            <Typography.Paragraph className="field-help">
+              复用历史缓存 · 本次未执行
+            </Typography.Paragraph>
+          ) : null}
           {item.attempts && item.attempts > 1 ? (
-            <p className="field-help">
+            <Typography.Paragraph className="field-help">
               第 {item.attempts} 次尝试{item.status === "success" ? "成功" : "失败"}
-            </p>
+            </Typography.Paragraph>
           ) : null}
           {item.systemPrompt !== undefined ? (
             <RunLogDataBlock title="系统提示词" value={item.systemPrompt} />
@@ -254,34 +254,35 @@ function RunLogItem({
             <RunLogDataBlock title="原始结果" value={item.result} />
           ) : null}
           {hasUsage ? (
-            <div className="run-log-usage">
-              <span>输入 {item.tokenUsage?.inputTokens}</span>
-              <span>输出 {item.tokenUsage?.outputTokens}</span>
-              <span>合计 {item.tokenUsage?.totalTokens}</span>
-            </div>
+            <Flex className="run-log-usage">
+              <Typography.Text>输入 {item.tokenUsage?.inputTokens}</Typography.Text>
+              <Typography.Text>输出 {item.tokenUsage?.outputTokens}</Typography.Text>
+              <Typography.Text>合计 {item.tokenUsage?.totalTokens}</Typography.Text>
+            </Flex>
           ) : null}
-        </div>
+        </Flex>
       ) : null}
-    </li>
+    </Flex>
   );
 }
 
 function RunLogDataBlock({ title, value }: { title: string; value: unknown }) {
   const formatted = formatWorkflowRunOutput(value);
   return (
-    <section className="node-test-data-block run-log-data-block">
-      <header>
-        <b>{title}</b>
-        <button
-          type="button"
+    <Flex vertical className="node-test-data-block run-log-data-block">
+      <Flex className="node-test-data-heading">
+        <Typography.Text strong>{title}</Typography.Text>
+        <Button
+          type="text"
+          htmlType="button"
           title={`复制${title}`}
           aria-label={`复制${title}`}
           onClick={() => void navigator.clipboard?.writeText(formatted)}
         >
           <CopyOutlined />
-        </button>
-      </header>
-      <pre>{formatted}</pre>
-    </section>
+        </Button>
+      </Flex>
+      <Typography.Paragraph className="workflow-code-block">{formatted}</Typography.Paragraph>
+    </Flex>
   );
 }

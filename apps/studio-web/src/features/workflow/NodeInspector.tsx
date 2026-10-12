@@ -1,8 +1,25 @@
+import {
+  Alert,
+  Badge,
+  Button,
+  Checkbox,
+  Collapse,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  Segmented,
+  Select,
+  Slider,
+  Spin,
+  Typography,
+} from "antd";
 import { variableIssues, type VariableIssue } from "@open-agent-tools/workflow-contracts";
 import { variableNodes } from "./variables.js";
 import { RunVariablesEditor } from "./RunVariablesEditor.js";
 import { TemplateField } from "./TemplateField.js";
 import { ExecutionPolicyEditor } from "./ExecutionPolicyEditor.js";
+import { HttpNodeEditor } from "./HttpNodeEditor.js";
 import { nodeInputs } from "./model.js";
 import { useEffect, useState } from "react";
 import { PlayCircleOutlined, ReloadOutlined } from "../../lib/icons.js";
@@ -77,46 +94,47 @@ export function NodeInspector({
   const availableRagSources = new Set(catalog?.rag.sources.map((source) => source.source) ?? []);
   const missingRagSources = ragSources.filter((source) => !availableRagSources.has(source));
   return (
-    <div className="inspector-content node-inspector-content">
-      <div className="inspector-title-row">
-        <span className={`node-icon kind-${data.kind}`}>{iconByKind[data.kind]}</span>
-        <div className="inspector-title-copy">
-          <h2>{data.label}</h2>
-          <p>{palette.find((item) => item.kind === data.kind)?.group}</p>
-        </div>
-        <button
+    <Form component="div" layout="vertical" className="inspector-content node-inspector-content">
+      <Flex className="inspector-title-row">
+        <Flex className={`node-icon kind-${data.kind}`}>{iconByKind[data.kind]}</Flex>
+        <Flex vertical className="inspector-title-copy">
+          <Typography.Title level={4}>{data.label}</Typography.Title>
+          <Typography.Paragraph>
+            {palette.find((item) => item.kind === data.kind)?.group}
+          </Typography.Paragraph>
+        </Flex>
+        <Button
           className="node-test-command"
-          type="button"
+          type="text"
+          htmlType="button"
           disabled={testDisabled}
           title="单独测试当前节点"
           onClick={onTest}
         >
           <PlayCircleOutlined /> {testPending ? "测试中" : "测试运行"}
-        </button>
-      </div>
-      <div className="node-inspector-tabs" role="tablist" aria-label="节点检查器视图">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeView === "config"}
-          className={activeView === "config" ? "is-active" : undefined}
-          onClick={() => setActiveView("config")}
-        >
-          配置
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeView === "run"}
-          className={activeView === "run" ? "is-active" : undefined}
-          onClick={() => setActiveView("run")}
-        >
-          上次运行
-          {testResult ? (
-            <span className={`test-tab-dot is-${testResult.status}`} aria-hidden="true" />
-          ) : null}
-        </button>
-      </div>
+        </Button>
+      </Flex>
+      <Segmented
+        className="workflow-panel-switcher"
+        aria-label="节点检查器视图"
+        block
+        value={activeView}
+        options={[
+          { value: "config", label: "配置" },
+          {
+            value: "run",
+            label: (
+              <Flex align="center" gap={6}>
+                上次运行
+                {testResult ? (
+                  <Badge status={testResult.status === "success" ? "success" : "error"} />
+                ) : null}
+              </Flex>
+            ),
+          },
+        ]}
+        onChange={setActiveView}
+      />
       {activeView === "run" ? (
         <NodeTestResultPanel
           result={testResult}
@@ -126,21 +144,23 @@ export function NodeInspector({
         />
       ) : (
         <>
-          <label className="studio-field">
-            <span>节点名称</span>
-            <input
+          <Form.Item label="节点名称">
+            <Input
+              aria-label="节点名称"
               value={data.label}
               onChange={(event) => updateNode({ label: event.target.value })}
             />
-          </label>
-          <label className="studio-field">
-            <span>说明</span>
-            <input
+          </Form.Item>
+          <Form.Item label="说明">
+            <Input
+              aria-label="说明"
               value={data.description}
               onChange={(event) => updateNode({ description: event.target.value })}
             />
-          </label>
-          <div className="inspector-section-title">参数</div>
+          </Form.Item>
+          <Flex vertical className="inspector-section-title">
+            参数
+          </Flex>
           <ExecutionPolicyEditor data={data} updateConfig={updateConfig} />
           {data.kind === "start" ? (
             <RunVariablesEditor
@@ -160,99 +180,107 @@ export function NodeInspector({
               sample={testResult?.status === "success" ? testResult.result : undefined}
             />
           )}
+          {data.kind === "http" ? <HttpNodeEditor data={data} updateConfig={updateConfig} /> : null}
           {variableIssues(variableNodes(nodes))
             .filter((issue) => issue.nodeId === node.id)
             .map((issue, index) => (
-              <div className="node-resource-state is-error" key={`${issue.code}-${index}`}>
-                <span>{issue.message}</span>
-                {onRepairReference && issue.reference && issue.suggestions?.length
-                  ? issue.suggestions.map((suggestion) => (
-                      <button
-                        key={`${issue.reference}-${suggestion}`}
-                        type="button"
-                        className="variable-text-button"
-                        onClick={() => onRepairReference(issue, suggestion)}
-                      >
-                        改为 {suggestion}
-                      </button>
-                    ))
-                  : null}
-              </div>
+              <Alert
+                type="error"
+                showIcon
+                className="node-resource-alert"
+                key={`${issue.code}-${index}`}
+                title={issue.message}
+                description={
+                  onRepairReference && issue.reference && issue.suggestions?.length
+                    ? issue.suggestions.map((suggestion) => (
+                        <Button
+                          key={`${issue.reference}-${suggestion}`}
+                          type="text"
+                          htmlType="button"
+                          className="variable-text-button"
+                          onClick={() => onRepairReference(issue, suggestion)}
+                        >
+                          改为 {suggestion}
+                        </Button>
+                      ))
+                    : undefined
+                }
+              />
             ))}
           {providerError && data.kind === "llm" ? (
-            <div className="node-resource-state is-error">{providerError}</div>
+            <Alert className="node-resource-alert" type="error" title={providerError} showIcon />
           ) : null}
           {resourceError && (data.kind === "rag" || data.kind === "mcp") ? (
-            <div className="node-resource-state is-error">{resourceError}</div>
+            <Alert className="node-resource-alert" type="error" title={resourceError} showIcon />
           ) : null}
           {data.kind === "mcp" && catalog && !catalog.mcp.configured ? (
-            <div className="node-resource-state is-error">
-              Agent Server 尚未配置 MCP Gateway API Key
-            </div>
+            <Alert
+              className="node-resource-alert"
+              type="error"
+              title="Agent Server 尚未配置 MCP Gateway API Key"
+              showIcon
+            />
           ) : null}
           {data.kind === "rag" ? (
             <>
-              <div className="studio-field">
-                <span>挂载文档</span>
-                <div className="workflow-resource-options">
+              <Form.Item label="挂载文档">
+                <Flex vertical className="workflow-resource-options">
                   {missingRagSources.map((source) => (
-                    <label key={source} className="is-missing">
-                      <input
-                        type="checkbox"
-                        checked
-                        onChange={() =>
-                          updateConfig(
-                            "sources",
-                            ragSources.filter((item) => item !== source),
-                          )
-                        }
-                      />
-                      <span>
-                        <b>{source}</b>
-                        <small>文档已失效，取消勾选可移除</small>
-                      </span>
-                    </label>
+                    <Checkbox
+                      key={source}
+                      className="is-missing"
+                      checked
+                      onChange={() =>
+                        updateConfig(
+                          "sources",
+                          ragSources.filter((item) => item !== source),
+                        )
+                      }
+                    >
+                      <Flex vertical className="workflow-resource-copy">
+                        <Typography.Text strong>{source}</Typography.Text>
+                        <Typography.Text type="secondary">
+                          文档已失效，取消勾选可移除
+                        </Typography.Text>
+                      </Flex>
+                    </Checkbox>
                   ))}
                   {loading && !catalog ? (
-                    <div className="node-resource-state">正在加载文档...</div>
+                    <Spin className="node-resource-state" aria-label="正在加载文档" />
                   ) : (catalog?.rag.sources.length ?? 0) === 0 ? (
-                    <div className="node-resource-state">暂无可挂载文档</div>
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可挂载文档" />
                   ) : (
                     catalog?.rag.sources.map((source) => (
-                      <label key={source.source}>
-                        <input
-                          type="checkbox"
-                          checked={ragSources.includes(source.source)}
-                          onChange={(event) =>
-                            updateConfig(
-                              "sources",
-                              event.target.checked
-                                ? [...ragSources, source.source]
-                                : ragSources.filter((item) => item !== source.source),
-                            )
-                          }
-                        />
-                        <span>
-                          <b>{source.source}</b>
-                          <small>{source.chunks} 个分块</small>
-                        </span>
-                      </label>
+                      <Checkbox
+                        key={source.source}
+                        checked={ragSources.includes(source.source)}
+                        onChange={(event) =>
+                          updateConfig(
+                            "sources",
+                            event.target.checked
+                              ? [...ragSources, source.source]
+                              : ragSources.filter((item) => item !== source.source),
+                          )
+                        }
+                      >
+                        <Flex vertical className="workflow-resource-copy">
+                          <Typography.Text strong>{source.source}</Typography.Text>
+                          <Typography.Text type="secondary">{source.chunks} 个分块</Typography.Text>
+                        </Flex>
+                      </Checkbox>
                     ))
                   )}
-                </div>
-              </div>
-              <label className="range-field">
-                <span>
-                  Top-K <b>{String(data.config.topK)}</b>
-                </span>
-                <input
-                  type="range"
+                </Flex>
+              </Form.Item>
+              <Form.Item label={`Top-K · ${String(data.config.topK)}`}>
+                <Slider
+                  ariaLabelForHandle="Top-K"
                   min={1}
                   max={10}
                   value={Number(data.config.topK)}
-                  onChange={(event) => updateConfig("topK", Number(event.target.value))}
+                  onChange={(value) => updateConfig("topK", value)}
                 />
-              </label>
+              </Form.Item>
             </>
           ) : null}
           {data.kind === "graph" || data.kind === "rag" ? (
@@ -266,38 +294,33 @@ export function NodeInspector({
           ) : null}
           {data.kind === "llm" ? (
             <>
-              <label className="studio-field">
-                <span>Provider</span>
-                <select
+              <Form.Item label="Provider">
+                <Select
+                  aria-label="Provider"
                   value={String(data.config.providerId ?? "default")}
-                  onChange={(event) => {
-                    const provider = providers.find((item) => item.id === event.target.value);
+                  onChange={(value) => {
+                    const provider = providers.find((item) => item.id === value);
                     updateNode({
                       config: {
                         ...data.config,
-                        providerId: event.target.value,
+                        providerId: value,
                         model: provider?.models[0] ?? "",
                       },
                     });
                   }}
-                >
-                  {providers.length === 0 ? (
-                    <option value="default">暂无可用 Provider</option>
-                  ) : null}
-                  {providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="studio-field">
-                <span>模型</span>
-                <select
+                  options={
+                    providers.length === 0
+                      ? [{ value: "default", label: "暂无可用 Provider" }]
+                      : providers.map((provider) => ({ value: provider.id, label: provider.name }))
+                  }
+                />
+              </Form.Item>
+              <Form.Item label="模型">
+                <Select
+                  aria-label="模型"
                   value={String(data.config.model)}
-                  onChange={(event) => updateConfig("model", event.target.value)}
-                >
-                  {[
+                  onChange={(value) => updateConfig("model", value)}
+                  options={[
                     ...new Set([
                       String(data.config.model),
                       ...(providers.find(
@@ -306,24 +329,19 @@ export function NodeInspector({
                     ]),
                   ]
                     .filter(Boolean)
-                    .map((model) => (
-                      <option key={model}>{model}</option>
-                    ))}
-                </select>
-              </label>
-              <label className="range-field">
-                <span>
-                  Temperature <b>{String(data.config.temperature)}</b>
-                </span>
-                <input
-                  type="range"
+                    .map((model) => ({ value: model, label: model }))}
+                />
+              </Form.Item>
+              <Form.Item label={`Temperature · ${String(data.config.temperature)}`}>
+                <Slider
+                  ariaLabelForHandle="Temperature"
                   min={0}
                   max={1}
                   step={0.1}
                   value={Number(data.config.temperature)}
-                  onChange={(event) => updateConfig("temperature", Number(event.target.value))}
+                  onChange={(value) => updateConfig("temperature", value)}
                 />
-              </label>
+              </Form.Item>
               <TemplateField
                 label="系统提示词"
                 value={String(data.config.systemPrompt ?? "")}
@@ -344,52 +362,60 @@ export function NodeInspector({
           ) : null}
           {data.kind === "mcp" ? (
             <>
-              <label className="studio-field">
-                <span>MCP 服务</span>
-                <select
-                  value={String(data.config.serviceSlug)}
+              <Form.Item label="MCP 服务">
+                <Select
+                  aria-label="MCP 服务"
+                  placeholder="选择已授权服务"
+                  value={String(data.config.serviceSlug) || undefined}
                   disabled={loading}
-                  onChange={(event) => {
+                  onChange={(value) => {
                     updateNode({
                       config: {
                         ...data.config,
-                        serviceSlug: event.target.value,
+                        serviceSlug: value,
                         toolName: "",
                       },
                     });
                   }}
-                >
-                  <option value="">选择已授权服务</option>
-                  {catalog?.mcp.services.map((service) => (
-                    <option key={service.serviceSlug} value={service.serviceSlug}>
-                      {service.serviceSlug}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="studio-field">
-                <span>Tool</span>
-                <select
-                  value={String(data.config.toolName)}
+                  options={catalog?.mcp.services.map((service) => ({
+                    value: service.serviceSlug,
+                    label: service.serviceSlug,
+                  }))}
+                />
+              </Form.Item>
+              <Form.Item label="Tool">
+                <Select
+                  aria-label="Tool"
+                  placeholder="选择 Tool"
+                  value={String(data.config.toolName) || undefined}
                   disabled={!selectedService}
-                  onChange={(event) => updateConfig("toolName", event.target.value)}
-                >
-                  <option value="">选择 Tool</option>
-                  {selectedService?.tools.map((tool) => (
-                    <option key={tool.name} value={tool.name}>
-                      {tool.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  onChange={(value) => updateConfig("toolName", value)}
+                  options={selectedService?.tools.map((tool) => ({
+                    value: tool.name,
+                    label: tool.name,
+                  }))}
+                />
+              </Form.Item>
               {selectedTool ? (
-                <div className="workflow-tool-detail">
-                  <p>{selectedTool.description ?? "该 Tool 未提供描述。"}</p>
-                  <details>
-                    <summary>Input Schema</summary>
-                    <pre>{JSON.stringify(selectedTool.inputSchema, null, 2)}</pre>
-                  </details>
-                </div>
+                <Flex vertical className="workflow-tool-detail">
+                  <Typography.Paragraph>
+                    {selectedTool.description ?? "该 Tool 未提供描述。"}
+                  </Typography.Paragraph>
+                  <Collapse
+                    ghost
+                    items={[
+                      {
+                        key: "schema",
+                        label: "Input Schema",
+                        children: (
+                          <Typography.Paragraph className="workflow-code-block">
+                            {JSON.stringify(selectedTool.inputSchema, null, 2)}
+                          </Typography.Paragraph>
+                        ),
+                      },
+                    ]}
+                  />
+                </Flex>
               ) : null}
               <TemplateField
                 label="参数映射"
@@ -403,9 +429,14 @@ export function NodeInspector({
             </>
           ) : null}
           {(data.kind === "rag" || data.kind === "mcp") && !loading ? (
-            <button className="resource-refresh-link" type="button" onClick={refreshResources}>
+            <Button
+              className="resource-refresh-link"
+              type="text"
+              htmlType="button"
+              onClick={refreshResources}
+            >
               <ReloadOutlined /> 刷新资源目录
-            </button>
+            </Button>
           ) : null}
           {data.kind === "condition" ? (
             <>
@@ -416,33 +447,35 @@ export function NodeInspector({
                 inputs={nodeInputs(data)}
                 rows={4}
               />
-              <div className="condition-routes">
-                <span>分支出口</span>
+              <Flex vertical className="condition-routes">
+                <Typography.Text>分支出口</Typography.Text>
                 {edges
                   .filter((edge) => edge.source === node.id)
                   .map((edge) => (
-                    <label key={edge.id}>
-                      <b>
+                    <Flex className="condition-route" align="center" gap={8} key={edge.id}>
+                      <Typography.Text strong>
                         {nodes.find((item) => item.id === edge.target)?.data.label ?? edge.target}
-                      </b>
-                      <select
+                      </Typography.Text>
+                      <Select
+                        aria-label={`${nodes.find((item) => item.id === edge.target)?.data.label ?? edge.target} 分支出口`}
                         value={typeof edge.label === "string" ? edge.label : ""}
-                        onChange={(event) => updateEdgeLabel(edge.id, event.target.value)}
-                      >
-                        <option value="">默认</option>
-                        <option value="true">True</option>
-                        <option value="false">False</option>
-                      </select>
-                    </label>
+                        onChange={(value) => updateEdgeLabel(edge.id, value)}
+                        options={[
+                          { value: "", label: "默认" },
+                          { value: "true", label: "True" },
+                          { value: "false", label: "False" },
+                        ]}
+                      />
+                    </Flex>
                   ))}
                 {edges.every((edge) => edge.source !== node.id) ? (
-                  <small>连接下游节点后可配置 True / False 出口。</small>
+                  <Typography.Text>连接下游节点后可配置 True / False 出口。</Typography.Text>
                 ) : null}
-              </div>
+              </Flex>
             </>
           ) : null}
         </>
       )}
-    </div>
+    </Form>
   );
 }

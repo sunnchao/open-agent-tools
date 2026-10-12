@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { createEdge, createNode } from "./graph.js";
 import { parseWorkflowFile, serializeWorkflow } from "./io.js";
+import { validateWorkflowGraph } from "./model.js";
 
 const echo = () => ({
   name: "Echo",
@@ -73,4 +74,71 @@ it("rejects invalid references and unavailable RAG resources before creating a w
       mcp: { services: [], configured: false },
     } as never),
   ).toThrow("RAG 文档已失效");
+});
+
+it("strips fixed HTTP authentication and literal credential bindings on export and import while keeping an editable draft", () => {
+  for (const authorization of [
+    { type: "bearer", config: { token: "private-bearer" } },
+    { type: "basic", config: { username: "demo", password: "private-password" } },
+    { type: "custom", config: { header: "X-Demo", value: "{{credential}}" } },
+  ]) {
+    const snapshot = echo();
+    snapshot.nodes[1] = createNode(
+      "i",
+      "http",
+      { x: 280, y: 0 },
+      {
+        url: "https://example.com",
+        authorization,
+        inputs: [{ name: "credential", source: { type: "literal", value: "private-literal" } }],
+        headers: "Authorization:Bearer private-header\nAccept:application/json",
+        outputs: [{ name: "query", selector: "$result.body" }],
+      },
+    );
+    const text = serializeWorkflow(snapshot);
+    expect(text).not.toContain("private-bearer");
+    expect(text).not.toContain("private-password");
+    expect(text).not.toContain("private-header");
+    if (authorization.type === "custom") expect(text).not.toContain("private-literal");
+    expect(snapshot.nodes[1].data.config.authorization).toEqual(authorization);
+    const imported = parseWorkflowFile(text, null);
+    expect(validateWorkflowGraph(imported.nodes, imported.edges, null)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "http-auth" })]),
+    );
+    const unsanitized = JSON.parse(text);
+    unsanitized.graph.nodes[1].data.config.authorization = {
+      type: "bearer",
+      config: { token: "private-incoming" },
+    };
+    expect(JSON.stringify(parseWorkflowFile(JSON.stringify(unsanitized), null))).not.toContain(
+      "private-incoming",
+    );
+  }
+});
+
+it("removes entry defaults used as HTTP credentials even when the entry variable has an ordinary name", () => {
+  const snapshot = echo();
+  snapshot.nodes[0]!.data.config.runVariables = [
+    { name: "query", type: "string", required: true, defaultValue: "private-entry-default" },
+  ];
+  snapshot.nodes[1] = createNode(
+    "i",
+    "http",
+    { x: 280, y: 0 },
+    {
+      url: "https://example.com",
+      inputs: [{ name: "credential", source: { type: "run", variable: "query" } }],
+      authorization: { type: "bearer", config: { token: "{{credential}}" } },
+      outputs: [{ name: "query", selector: "$result.body" }],
+    },
+  );
+  const text = serializeWorkflow(snapshot);
+  expect(text).not.toContain("private-entry-default");
+  const imported = parseWorkflowFile(text, null);
+  expect(imported.nodes[0]!.data.config.runVariables).toEqual([
+    { name: "query", type: "string", required: true },
+  ]);
+  expect(snapshot.nodes[0]!.data.config.runVariables).toEqual([
+    { name: "query", type: "string", required: true, defaultValue: "private-entry-default" },
+  ]);
 });

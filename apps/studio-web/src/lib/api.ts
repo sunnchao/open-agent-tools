@@ -288,7 +288,10 @@ export async function testWorkflowNode(
 export interface WorkflowStreamCallbacks {
   onNodeStart: (nodeId: string, label?: string, kind?: string, incomingEdgeIds?: string[]) => void;
   onNodeResult: (nodeId: string, status: "success" | "error", meta: WorkflowNodeRunMeta) => void;
-  onDone: (outputs: Record<string, Record<string, unknown>>) => void;
+  onDone: (
+    outputs: Record<string, unknown>,
+    nodeOutputs: Record<string, Record<string, unknown>>,
+  ) => void;
   onError: (error: string, nodeId?: string) => void;
 }
 
@@ -368,7 +371,10 @@ export function streamWorkflow(
               })(),
             });
           if (event.type === "run_done")
-            callbacks.onDone((event.outputs ?? {}) as Record<string, Record<string, unknown>>);
+            callbacks.onDone(
+              (event.outputs ?? {}) as Record<string, unknown>,
+              (event.nodeOutputs ?? {}) as Record<string, Record<string, unknown>>,
+            );
           if (event.type === "run_error")
             callbacks.onError(
               typeof event.error === "string" ? event.error : "Workflow execution failed",

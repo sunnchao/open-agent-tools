@@ -8,6 +8,8 @@ import {
 import { variableNodes, renameVariable, repairVariableReference } from "./variables.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Badge, Button, Empty, Flex, Input, Segmented, Typography } from "antd";
+import "./workflow-panels.css";
 import {
   addEdge,
   Background,
@@ -167,6 +169,7 @@ function WorkflowCanvas({
   const [runOutputs, setRunOutputs] = useState<Record<string, Record<string, unknown>> | null>(
     null,
   );
+  const [finalOutputs, setFinalOutputs] = useState<Record<string, unknown> | null>(null);
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
   const [showRunInputs, setShowRunInputs] = useState(false);
   const [nodeTestDialog, setNodeTestDialog] = useState<NodeTestDialogState | null>(null);
@@ -897,6 +900,7 @@ function WorkflowCanvas({
       Object.fromEntries(Object.entries(current).filter(([, status]) => status !== "active")),
     );
     setRunOutputs(null);
+    setFinalOutputs(null);
     setNodes((current) =>
       current.map((node) =>
         node.data.status === "running" ? { ...node, data: { ...node.data, status: "idle" } } : node,
@@ -1037,6 +1041,7 @@ function WorkflowCanvas({
     runIncomingEdges.current = {};
     setRunLog([]);
     setRunOutputs(null);
+    setFinalOutputs(null);
     setNodes((current) =>
       current.map((node) => ({ ...node, data: { ...node.data, status: "idle" } })),
     );
@@ -1105,9 +1110,10 @@ function WorkflowCanvas({
             },
           ]);
         },
-        onDone: (outputs) => {
+        onDone: (outputs, nodeOutputs) => {
           if (runToken.current !== token) return;
-          setRunOutputs(outputs);
+          setRunOutputs(nodeOutputs);
+          setFinalOutputs(outputs);
           setRunning(false);
           setRunHistoryRevision((revision) => revision + 1);
         },
@@ -1115,6 +1121,7 @@ function WorkflowCanvas({
           if (runToken.current !== token) return;
           if (nodeId) focusRunNode(nodeId);
           setRunOutputs(null);
+          setFinalOutputs(null);
           setRunLog((current) => [
             ...current,
             { id: nodeId ?? "run", label: nodeId ?? "Workflow", status: "error", detail: error },
@@ -1391,64 +1398,66 @@ function WorkflowCanvas({
       ) : null}
 
       <div className={`workflow-layout mobile-view-${mobileView}`}>
-        <aside className="node-palette">
-          <div className="panel-heading">
-            <span>节点库</span>
-            <span className="count-badge">{filteredPalette.length}</span>
-          </div>
-          <label className="palette-search">
-            <SearchOutlined />
-            <input
-              value={paletteQuery}
-              onChange={(event) => setPaletteQuery(event.target.value)}
-              placeholder="搜索节点"
-              aria-label="搜索节点"
-            />
-          </label>
-          {(["输入", "知识与模型", "工具与逻辑", "输出"] as const).map((group) => (
-            <div
-              className="palette-group"
-              key={group}
-              hidden={filteredPalette.every((item) => item.group !== group)}
-            >
-              <p>{group}</p>
-              {filteredPalette
-                .filter((item) => item.group === group)
-                .map((item) => (
-                  <button
-                    type="button"
-                    key={item.kind}
-                    className={`palette-item kind-${item.kind}`}
-                    disabled={
-                      item.kind === "start" && nodes.some((node) => node.data.kind === "start")
-                    }
-                    draggable={
-                      item.kind !== "start" || !nodes.some((node) => node.data.kind === "start")
-                    }
-                    title={
-                      item.kind === "start" && nodes.some((node) => node.data.kind === "start")
-                        ? "工作流只能有一个开始节点"
-                        : item.description
-                    }
-                    onClick={() => addPaletteNode(item.kind)}
-                    onDragStart={(event) => {
-                      event.dataTransfer.setData("application/open-agent-node", item.kind);
-                      event.dataTransfer.effectAllowed = "move";
-                    }}
-                  >
-                    <span>{iconByKind[item.kind]}</span>
-                    <span>
-                      <b>{item.label}</b>
-                      <small>{item.description}</small>
-                    </span>
-                  </button>
-                ))}
-            </div>
-          ))}
+        <Flex vertical className="node-palette">
+          <Flex className="panel-heading">
+            <Typography.Text>节点库</Typography.Text>
+            <Badge className="palette-count" count={filteredPalette.length} showZero />
+          </Flex>
+          <Input
+            className="palette-search"
+            prefix={<SearchOutlined />}
+            value={paletteQuery}
+            onChange={(event) => setPaletteQuery(event.target.value)}
+            placeholder="搜索节点"
+            aria-label="搜索节点"
+            allowClear
+          />
+          {(["输入", "知识与模型", "工具与逻辑", "输出"] as const)
+            .filter((group) => filteredPalette.some((item) => item.group === group))
+            .map((group) => (
+              <Flex vertical className="palette-group" key={group}>
+                <Typography.Text className="palette-group-label">{group}</Typography.Text>
+                {filteredPalette
+                  .filter((item) => item.group === group)
+                  .map((item) => (
+                    <Button
+                      htmlType="button"
+                      key={item.kind}
+                      className={`palette-item kind-${item.kind}`}
+                      disabled={
+                        item.kind === "start" && nodes.some((node) => node.data.kind === "start")
+                      }
+                      draggable={
+                        item.kind !== "start" || !nodes.some((node) => node.data.kind === "start")
+                      }
+                      title={
+                        item.kind === "start" && nodes.some((node) => node.data.kind === "start")
+                          ? "工作流只能有一个开始节点"
+                          : item.description
+                      }
+                      onClick={() => addPaletteNode(item.kind)}
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData("application/open-agent-node", item.kind);
+                        event.dataTransfer.effectAllowed = "move";
+                      }}
+                    >
+                      <Flex className="palette-item-icon">{iconByKind[item.kind]}</Flex>
+                      <Flex vertical className="palette-item-copy">
+                        <Typography.Text strong>{item.label}</Typography.Text>
+                        <Typography.Text type="secondary">{item.description}</Typography.Text>
+                      </Flex>
+                    </Button>
+                  ))}
+              </Flex>
+            ))}
           {filteredPalette.length === 0 ? (
-            <div className="palette-empty">没有匹配的节点</div>
+            <Empty
+              className="palette-empty"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="没有匹配的节点"
+            />
           ) : null}
-        </aside>
+        </Flex>
 
         <div className="flow-canvas" ref={flowCanvasRef}>
           <WorkflowEdgeActionsContext.Provider value={openEdgeNodePicker}>
@@ -1557,52 +1566,42 @@ function WorkflowCanvas({
           </div>
         </div>
 
-        <aside className="workflow-inspector inspector-panel">
-          <div className="panel-heading">
-            <span>
+        <Flex vertical className="workflow-inspector inspector-panel">
+          <Flex className="panel-heading">
+            <Typography.Text>
               {inspectorView === "history" ? "运行历史" : selectedNode ? "节点配置" : "运行预览"}
-            </span>
+            </Typography.Text>
             {selectedNode && inspectorView === "current" ? (
-              <span className="inspector-heading-actions">
-                <button
-                  type="button"
+              <Flex className="inspector-heading-actions">
+                <Button
+                  type="text"
                   title="复制节点"
                   aria-label="复制节点"
+                  icon={<CopyOutlined />}
                   onClick={duplicateSelected}
-                >
-                  <CopyOutlined />
-                </button>
-                <button
-                  type="button"
+                />
+                <Button
+                  type="text"
+                  danger
                   title="删除节点"
                   aria-label="删除节点"
+                  icon={<DeleteOutlined />}
                   onClick={removeSelected}
-                >
-                  <DeleteOutlined />
-                </button>
-              </span>
+                />
+              </Flex>
             ) : null}
-          </div>
-          <div className="node-inspector-tabs" role="tablist" aria-label="编辑器检查面板">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={inspectorView === "current"}
-              className={inspectorView === "current" ? "is-active" : undefined}
-              onClick={() => setInspectorView("current")}
-            >
-              {selectedNode ? "节点配置" : "本次运行"}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={inspectorView === "history"}
-              className={inspectorView === "history" ? "is-active" : undefined}
-              onClick={() => setInspectorView("history")}
-            >
-              运行历史
-            </button>
-          </div>
+          </Flex>
+          <Segmented
+            className="workflow-panel-switcher"
+            aria-label="编辑器检查面板"
+            block
+            value={inspectorView}
+            options={[
+              { value: "current", label: selectedNode ? "节点配置" : "本次运行" },
+              { value: "history", label: "运行历史" },
+            ]}
+            onChange={setInspectorView}
+          />
           {inspectorView === "history" ? (
             <RunHistoryPanel
               key={workflowId}
@@ -1645,12 +1644,12 @@ function WorkflowCanvas({
               running={running}
               runDisabled={nodeTestPendingId !== null}
               log={runLog}
-              outputs={runOutputs}
+              outputs={finalOutputs}
               onRun={() => void run()}
               onStop={stopRun}
             />
           )}
-        </aside>
+        </Flex>
       </div>
       {pendingDelete ? (
         <ConfirmDialog

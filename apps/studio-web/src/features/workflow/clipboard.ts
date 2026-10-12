@@ -1,4 +1,8 @@
-import { workflowGraphSchema } from "@open-agent-tools/workflow-contracts";
+import {
+  workflowGraphSchema,
+  nodeConfigSchemas,
+  portableHttpConfig,
+} from "@open-agent-tools/workflow-contracts";
 import type { Edge } from "@xyflow/react";
 import { createEdge, createNode, snapshotGraph } from "./graph.js";
 import { cloneSubgraph } from "./subgraph.js";
@@ -55,7 +59,9 @@ export function parseSelection(text: string): { nodes: WorkflowNode[]; edges: Ed
       node.id,
       node.data.kind,
       node.position ?? { x: index * 280, y: 0 },
-      node.data.config,
+      node.data.kind === "http"
+        ? portableHttpConfig(nodeConfigSchemas.http.parse(node.data.config ?? {}))
+        : node.data.config,
     );
     created.data.label = node.data.label ?? created.data.label;
     created.data.description = node.data.description ?? created.data.description;

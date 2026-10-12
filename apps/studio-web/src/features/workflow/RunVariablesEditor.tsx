@@ -1,3 +1,4 @@
+import { Button, Checkbox, Flex, Form, Input, Select, Typography } from "antd";
 import { useEffect, useState } from "react";
 import {
   runVariables,
@@ -30,9 +31,12 @@ function DefaultValueField({
     setDraft(text);
   }, [text]);
   return (
-    <label className="studio-field">
-      <span>默认值（可选）</span>
-      <input
+    <Form.Item
+      label="默认值（可选）"
+      validateStatus={error ? "error" : undefined}
+      help={error || undefined}
+    >
+      <Input
         aria-label={`${variable.name} 默认值`}
         value={draft}
         placeholder={variable.type === "string" ? "留空表示无默认值" : "JSON 值，如 3、true、{}"}
@@ -54,8 +58,7 @@ function DefaultValueField({
           }
         }}
       />
-      {error && <small className="field-error">{error}</small>}
-    </label>
+    </Form.Item>
   );
 }
 export function RunVariablesEditor({
@@ -77,11 +80,12 @@ export function RunVariablesEditor({
     );
   const [renaming, setRenaming] = useState<{ index: number; value: string } | null>(null);
   return (
-    <section className="variable-bindings" aria-label="工作流入口变量">
-      <div className="variable-group-head">
-        <span>入口变量 · {variables.length}</span>
-        <button
-          type="button"
+    <Flex vertical className="variable-bindings" aria-label="工作流入口变量">
+      <Flex className="variable-group-head">
+        <Typography.Text>入口变量 · {variables.length}</Typography.Text>
+        <Button
+          type="text"
+          htmlType="button"
           onClick={() =>
             updateConfig("runVariables", [
               ...variables,
@@ -97,15 +101,15 @@ export function RunVariablesEditor({
           }
         >
           <PlusOutlined /> 创建变量
-        </button>
-      </div>
-      <p className="variable-help">
+        </Button>
+      </Flex>
+      <Typography.Paragraph className="variable-help">
         在这里声明一次，其他节点通过选择引用。名称修改会同步入口绑定。
-      </p>
+      </Typography.Paragraph>
       {!variables.length && (
-        <small className="variable-empty">
+        <Typography.Text className="variable-empty">
           暂无入口变量。创建后可在任何节点的“输入来源”中选择。
-        </small>
+        </Typography.Text>
       )}
       {variables.map((variable, index) => {
         const uses = nodes.filter((item) =>
@@ -122,11 +126,14 @@ export function RunVariablesEditor({
           !validVariableName(name) ||
           variables.some((item, i) => i !== index && item.name === name);
         return (
-          <div className="variable-card" key={`${node.id}-${index}`}>
-            <div className="variable-card-heading">
-              <label className="studio-field">
-                <span>变量名</span>
-                <input
+          <Flex vertical className="variable-card" key={`${node.id}-${index}`}>
+            <Flex className="variable-card-heading">
+              <Form.Item
+                label="变量名"
+                className="variable-name-field"
+                validateStatus={invalid ? "error" : undefined}
+              >
+                <Input
                   aria-label="入口变量名"
                   value={name}
                   aria-invalid={invalid}
@@ -141,9 +148,10 @@ export function RunVariablesEditor({
                     if (event.key === "Enter") event.currentTarget.blur();
                   }}
                 />
-              </label>
-              <button
-                type="button"
+              </Form.Item>
+              <Button
+                type="text"
+                htmlType="button"
                 className="variable-delete"
                 aria-label={`删除入口变量 ${variable.name}`}
                 onClick={() =>
@@ -154,60 +162,56 @@ export function RunVariablesEditor({
                 }
               >
                 <DeleteOutlined />
-              </button>
-            </div>
-            <div className="variable-card-meta">
-              <label>
-                类型{" "}
-                <select
+              </Button>
+            </Flex>
+            <Flex className="variable-card-meta">
+              <Flex vertical className="variable-type-field" gap={4}>
+                <Typography.Text type="secondary">类型</Typography.Text>
+                <Select
                   aria-label={`${variable.name} 类型`}
                   value={variable.type}
-                  onChange={(event) =>
+                  onChange={(value: VariableType) =>
                     update(index, {
-                      type: event.target.value as VariableType,
+                      type: value,
                       defaultValue: undefined,
                     })
                   }
-                >
-                  {(["string", "number", "boolean", "object", "array", "any"] as const).map(
-                    (type) => (
-                      <option value={type} key={type}>
-                        {type === "any" ? "any · 任意类型" : type}
-                      </option>
-                    ),
+                  options={["string", "number", "boolean", "object", "array", "any"].map(
+                    (type) => ({ value: type, label: type === "any" ? "any · 任意类型" : type }),
                   )}
-                </select>
-              </label>
-              <label className="variable-required">
-                <input
-                  type="checkbox"
-                  checked={variable.required !== false}
-                  onChange={(event) => update(index, { required: event.target.checked })}
                 />
+              </Flex>
+              <Checkbox
+                className="variable-required"
+                checked={variable.required !== false}
+                onChange={(event) => update(index, { required: event.target.checked })}
+              >
                 必填
-              </label>
-            </div>
+              </Checkbox>
+            </Flex>
             <DefaultValueField
               key={`${index}-${variable.type}`}
               variable={variable}
               onChange={(defaultValue) => update(index, { defaultValue })}
             />
             {invalid && (
-              <small className="field-error">
+              <Typography.Text className="field-error">
                 名称须唯一，以字母或下划线开头，仅使用字母、数字、下划线或 $。
-              </small>
+              </Typography.Text>
             )}
             {similar.length > 0 && (
-              <small className="variable-help">与 {similar.join("、")} 名称相近，请核对。</small>
+              <Typography.Text className="variable-help">
+                与 {similar.join("、")} 名称相近，请核对。
+              </Typography.Text>
             )}
-            <small className="variable-help">
+            <Typography.Text className="variable-help">
               {uses.length
                 ? `被 ${uses.length} 个节点引用：${uses.map((item) => item.data.label).join("、")}。删除后引用将标记为失效。`
                 : "尚未被引用"}
-            </small>
-          </div>
+            </Typography.Text>
+          </Flex>
         );
       })}
-    </section>
+    </Flex>
   );
 }

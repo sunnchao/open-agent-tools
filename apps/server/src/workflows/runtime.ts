@@ -7,7 +7,7 @@ import {
   finishWorkflowRun,
   upsertWorkflowNodeRun,
 } from "./store.js";
-import { collectWorkflowOutputs } from "./schema.js";
+import { workflowRedactor } from "../workflow/redaction.js";
 import type {
   WorkflowApp,
   WorkflowRunRecord,
@@ -84,6 +84,7 @@ export function startPublishedWorkflow(input: {
   const sourceGraph = input.graph ?? input.version?.graph;
   if (!sourceGraph) throw new Error("workflow graph is required");
   const graph = structuredClone(sourceGraph);
+  const redactor = workflowRedactor(graphToRunNodes(graph), input.inputs);
   const abort = () => controller.abort();
   if (input.signal?.aborted) abort();
   let totalSteps = 0;
@@ -117,7 +118,7 @@ export function startPublishedWorkflow(input: {
     publicEvent(runId, taskId, "workflow_started", {
       id: runId,
       workflow_id: input.version?.id ?? null,
-      inputs: input.inputs,
+      inputs: redactor.redact(input.inputs),
       created_at: createdAt,
       ...(input.resume
         ? { resume_from_node_id: input.resume.fromNodeId, resume_run_id: input.resumeRunId }
@@ -127,14 +128,19 @@ export function startPublishedWorkflow(input: {
 
   const completion = (async (): Promise<PublishedRunResult> => {
     let finalNodeOutputs: Record<string, Record<string, unknown>> = {};
+    let outputs: Record<string, unknown> = {};
     try {
-      finalNodeOutputs = await executeWorkflow(
+      await executeWorkflow(
         {
           nodes: graphToRunNodes(graph),
           edges: graph.edges,
           input: input.inputs,
         },
         (event: WorkflowEvent) => {
+          if (event.type === "run_done") {
+            outputs = event.outputs ?? {};
+            finalNodeOutputs = event.nodeOutputs ?? {};
+          }
           if (event.type !== "run_done") input.onWorkflowEvent?.(event);
           if (event.type === "node_start" && event.nodeId) {
             upsertWorkflowNodeRun({ runId, nodeId: event.nodeId, status: "running" });
@@ -179,7 +185,6 @@ export function startPublishedWorkflow(input: {
         { signal: controller.signal, resume: input.resume },
       );
 
-      const outputs = collectWorkflowOutputs(graph, finalNodeOutputs);
       const elapsedTime = (Date.now() - startedAt) / 1_000;
       const finishedAt = new Date().toISOString();
       finishWorkflowRun({
@@ -203,7 +208,7 @@ export function startPublishedWorkflow(input: {
           finished_at: finishedAt,
         }),
       );
-      input.onWorkflowEvent?.({ type: "run_done", outputs: finalNodeOutputs });
+      input.onWorkflowEvent?.({ type: "run_done", outputs, nodeOutputs: finalNodeOutputs });
       return {
         taskId,
         runId,

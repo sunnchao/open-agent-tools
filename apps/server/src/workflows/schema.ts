@@ -117,18 +117,6 @@ export function validatePublishedInputs(
   return [...unknown, ...typed];
 }
 
-export function collectWorkflowOutputs(
-  graph: WorkflowGraph,
-  nodeOutputs: Record<string, Record<string, unknown>>,
-): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const node of graph.nodes) {
-    if (node.data.kind !== "end") continue;
-    Object.assign(result, nodeOutputs[node.id] ?? {});
-  }
-  return result;
-}
-
 export function createWorkflowOpenApi(
   origin: string,
   slug: string,

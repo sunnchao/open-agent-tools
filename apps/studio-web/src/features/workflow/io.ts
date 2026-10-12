@@ -3,6 +3,8 @@ import {
   runVariables,
   workflowFileSchema,
   workflowGraphSchema,
+  portableHttpConfig,
+  httpCredentialValues,
 } from "@open-agent-tools/workflow-contracts";
 import type { ResourceCatalog } from "../resources/api.js";
 import { createEdge, createNode, snapshotGraph } from "./graph.js";
@@ -52,19 +54,88 @@ function assertNoCredentials(value: unknown, path = "file"): void {
   }
 }
 
+function portableGraph(graph: ReturnType<typeof workflowGraphSchema.parse>) {
+  const defaults = Object.fromEntries(
+    runVariables(graph.nodes.map((node) => ({ id: node.id, ...node.data }))).map((variable) => [
+      variable.name,
+      variable.defaultValue,
+    ]),
+  );
+  const credentials = new Set(
+    graph.nodes
+      .filter((node) => node.data.kind === "http")
+      .flatMap((node) => {
+        const config = nodeConfigSchemas.http.parse(node.data.config ?? {});
+        const inputs = Object.fromEntries(
+          (config.inputs ?? []).map((input) => [
+            input.name,
+            input.source.type === "literal"
+              ? input.source.value
+              : input.source.type === "run"
+                ? defaults[input.source.variable]
+                : undefined,
+          ]),
+        );
+        return httpCredentialValues(config, inputs);
+      }),
+  );
+  const stripValue = (value: unknown): unknown => {
+    if (typeof value === "string" && credentials.has(value)) return "";
+    if (Array.isArray(value)) return value.map(stripValue);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, child]) => [key, stripValue(child)]),
+      );
+    return value;
+  };
+  for (const node of graph.nodes)
+    node.data.config =
+      node.data.kind === "http"
+        ? portableHttpConfig(nodeConfigSchemas.http.parse(node.data.config ?? {}))
+        : (nodeConfigSchemas[node.data.kind].parse(node.data.config ?? {}) as Record<
+            string,
+            unknown
+          >);
+  for (const node of graph.nodes) {
+    const config = node.data.config!;
+    if (Array.isArray(config.inputs))
+      config.inputs = config.inputs.map((input) =>
+        input.source.type === "literal"
+          ? { ...input, source: { ...input.source, value: stripValue(input.source.value) } }
+          : input,
+      );
+    if (node.data.kind === "start" && Array.isArray(config.runVariables))
+      config.runVariables = config.runVariables.map((variable) => {
+        if (
+          JSON.stringify(variable.defaultValue) ===
+          JSON.stringify(stripValue(variable.defaultValue))
+        )
+          return variable;
+        const result = { ...variable };
+        delete result.defaultValue;
+        return result;
+      });
+  }
+  const check = {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      if (node.data.kind !== "http") return node;
+      const config = { ...node.data.config };
+      delete config.authorization;
+      return { ...node, data: { ...node.data, config } };
+    }),
+  };
+  assertNoCredentials(check);
+  return graph;
+}
+
 export function serializeWorkflow(
   snapshot: WorkflowSnapshot,
   exportedAt = new Date().toISOString(),
 ): string {
-  assertNoCredentials(snapshot);
-  const graph = workflowGraphSchema.parse(
-    snapshotGraph(snapshot.name, snapshot.nodes, snapshot.edges),
+  const graph = portableGraph(
+    workflowGraphSchema.parse(snapshotGraph(snapshot.name, snapshot.nodes, snapshot.edges)),
   );
-  for (const node of graph.nodes)
-    node.data.config = nodeConfigSchemas[node.data.kind].parse(node.data.config ?? {}) as Record<
-      string,
-      unknown
-    >;
   const value = {
     name: graph.name,
     version: 1,
@@ -87,13 +158,14 @@ export function parseWorkflowFile(text: string, catalog: ResourceCatalog | null)
   } catch {
     throw new Error("文件不是合法 JSON");
   }
-  assertNoCredentials(value);
   const parsed = workflowFileSchema.safeParse(value);
   if (!parsed.success)
     throw new Error(
       parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n"),
     );
-  const { graph, runVariables: declarations } = parsed.data;
+  assertNoCredentials(parsed.data.runVariables);
+  const graph = portableGraph(parsed.data.graph);
+  const declarations = parsed.data.runVariables;
   const nodes = graph.nodes.map((node, index) => {
     const result = createNode(
       node.id,
@@ -112,7 +184,9 @@ export function parseWorkflowFile(text: string, catalog: ResourceCatalog | null)
     ...(edge.id ? { id: edge.id } : {}),
     ...(edge.label ? { label: edge.label } : {}),
   }));
-  const issues = validateWorkflowGraph(nodes, edges, catalog);
+  const issues = validateWorkflowGraph(nodes, edges, catalog).filter(
+    (issue) => issue.code !== "http-auth",
+  );
   if (issues.length)
     throw new Error(
       issues.map((issue) => `${issue.nodeId ?? "工作流"}: ${issue.message}`).join("\n"),
