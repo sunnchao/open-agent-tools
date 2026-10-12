@@ -4,24 +4,37 @@
 
 本仓库是一个 pnpm + TypeScript Monorepo。本 README 重点介绍 MCP 管理平台：管理员可以配置、构建、发布和回滚托管 MCP 服务，MCP 客户端通过 API Key 和细粒度授权访问已发布的 Tools 与 Prompts。
 
-`apps/studio-web` 是统一的可视化入口，整合 Agent Chat、MCP 管理、RAG 知识库和工作流编排；`apps/cli` 与 `apps/server` 仍可独立运行。
+`apps/studio-web` 是统一的可视化入口，整合 Agent Chat、MCP 管理、RAG 知识库、知识图谱、多源问数和工作流编排；对话、工作流、问数和设置等接口由 `apps/server`（Agent Server，默认端口 `3000`）提供。`apps/cli` 与 `apps/server` 也可作为独立的 Agent/Chat 入口运行。
 
 ## 当前能力
 
-- 管理托管 MCP 服务及其版本生命周期：草稿、校验、构建、发布、回滚、禁用和软删除。
+### MCP 管理平台
+
+- 管理托管 MCP 服务及其版本生命周期：草稿、校验、构建、发布、回滚、禁用/启用和软删除；软删除后 Slug 可被新服务复用。
 - 配置 Tool-only、Prompt-only 或 Tools + Prompts 混合服务。
-- 在草稿版本中新增、修改和删除 Tools 与 Prompts。
+- 在草稿版本中新增、修改和删除 Tools 与 Prompts；已发布版本可通过「创建草稿」分叉出新草稿继续修改。
 - 上传 Node.js Tool ZIP 包，校验归档与 npm 包结构，执行 `npm ci` 和可选构建。
 - 构建、推送和摘要固定 OCI 镜像，生成 CycloneDX SBOM，并通过 Trivy 扫描镜像。
 - 通过隔离 Docker 容器执行 Tool；Prompt 由 Gateway 直接校验参数并渲染。
+- 服务级运行环境变量：在「MCP → 服务 → 环境变量」为 Tool 配置 `TAVILY_API_KEY` 等变量。值只写不回显，保存后下一次调用生效，无需重新构建或发布。
+- 版本运行限制：代码包检查后可在预览面板调整超时、内存、CPU 和网络模式（`none` 禁网、`bridge` 联网）；已发布版本只读。
 - Studio Web 与管理 API 暂时匿名开放，任何访问者都以管理员权限操作。
 - 为 MCP 客户端签发一次性可见的 API Key，按服务、Scope、Tool 名称和 Prompt 名称授权。
 - 通过 Streamable HTTP 提供 `tools/list`、`tools/call`、`prompts/list` 和 `prompts/get`。
-- 提供 React 管理界面，用于服务、Tool、Prompt、构建和版本操作。
+- 审计：Control Plane 的写操作和 Gateway 的每个 MCP 请求都会写入 `mcp_audit_events`，记录操作者、动作、结果、耗时，以及脱敏后的输入、输出和上下文；Studio Web「MCP → 审计」可按结果和动作筛选并查看详情。
+- 提供 React 管理界面，覆盖服务、Tool、Prompt、构建、版本、客户端授权和审计。
+- 自定义 Function Tools：`packages/function-tools` 聚合可独立打包上传的 MCP 工具包，目前包含 `pinyin`（汉字转拼音，离线运行）和 `web-search`（Tavily 联网搜索，需要 `bridge` 网络和 `TAVILY_API_KEY`），并提供交互式打包脚本。
+
+### Studio Web 与 Agent Server
+
 - IM 协同入口：Studio Web「设置 → IM 渠道」可视化配置飞书/钉钉机器人（多渠道、密钥加密存储、知识库绑定），群聊 @机器人即可走 Agent Chat + RAG 知识库问答。
-- 多源问数：Studio Web「设置 → Schema 数据源」管理多个 MySQL / PostgreSQL 只读连接、采集范围和默认路由；问数页按源隔离 catalog、关系图和 SQL 执行。
+- 多源问数：Studio Web「设置 → Schema 数据源」管理多个 MySQL / PostgreSQL 只读连接、采集范围和默认路由；问数页按源隔离 catalog、关系图和 SQL 执行，并为每次问数记录从解析数据源到输出结果的分阶段审计，可在问数页「审计日志」检索回放。
 - RAG 资产运营：支持固定切分与基于 Embedding 相似度的语义切分；文档标题/标签、内容指纹、切分参数、版本与更新时间可治理；同名重传原子替换，内置查询量、空召回率、延迟、热门来源和用户反馈看板。
-- 工作流 HTTP 请求节点：支持六种方法、JSON/文本/文本表单、Basic/Bearer/自定义头认证、节点超时与重试；多结束节点按执行顺序合并最终输出，并保留逐节点调试轨迹。认证观测脱敏，导出与剪贴板复制移除固定凭据。
+- MCP Gateway 连接：Studio Web「设置 → MCP Gateway」配置工作流和对话使用的 Gateway 地址与 API Key（加密存储），保存后立即生效；未保存配置时回退到环境变量。
+- 工作流编排：节点库包含开始、用户输入、知识检索、图谱检索、SQL 问数、LLM、MCP Tool、HTTP 请求、条件分支和结束节点。编辑器提供运行历史与检查点续跑、失效引用修复、运行连线高亮、节点执行策略、JSON 导入导出、多选编辑、自动布局和子图剪贴板复制粘贴。草稿可发布为不可变版本，并通过工作流级 API Key（带每分钟限流）、OpenAPI 3.1 和 `/v1/workflows/{slug}/run` 对外调用。
+- 工作流 HTTP 请求节点：支持六种方法，请求体可选 JSON、纯文本或 multipart 表单（仅文本字段），支持 Basic/Bearer/自定义头认证、节点超时与重试；多结束节点按执行顺序合并最终输出，并保留逐节点调试轨迹。认证观测脱敏，导出与剪贴板复制移除固定凭据。
+- 工作流 SQL 问数节点：选择 Schema 数据源（缺省使用默认源），用自然语言描述问题并可引用输入变量；复用问数模块的文本转 SQL、只读校验和审计。「默认返回条数」（1–100，缺省 100）只在问题没有指定条数时生效；问题已写明前 N 条或查询全部时以问题为准，最多返回 100 行。默认输出 `rows`、`sql`、`rowCount` 和 `auditId`；需要补充业务口径时节点报错并附审计 ID。
+- 工作流条件分支节点：可视化配置 IF / ELIF / ELSE 分支，每个分支用 AND/OR 组合多条规则，内置 14 种运算符并按变量类型过滤；在画布上为每个分支选择下一节点。运行时按顺序命中第一个满足的分支，变量缺省或类型不匹配的条件按不满足处理并给出告警，运行预览和节点测试会展示命中的分支。草稿可保存未完成的条件；运行和发布前会校验变量引用、运算符、比较值类型和每个分支的下一节点。仍兼容旧的表达式模式。
 
 当前托管运行时只支持 Node.js 20、ESM 和 npm。Python、Java、托管 MCP Resources，以及远程 MCP 代理尚未包含在当前可运行范围内。
 
@@ -47,34 +60,46 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
                   MCP Worker
 ```
 
-| 组件           | 包名                                  | 职责                                                            |
-| -------------- | ------------------------------------- | --------------------------------------------------------------- |
-| Control Plane  | `@open-agent-tools/mcp-worker`        | 匿名管理 API、服务版本、客户端 Key/Grant、上传和构建调度        |
-| MCP Gateway    | `@open-agent-tools/mcp-server`        | MCP 协议入口、API Key 鉴权、Scope 检查、Tool 调用与 Prompt 渲染 |
-| MCP Worker     | `@open-agent-tools/mcp-worker`        | ZIP 检查、依赖安装、镜像构建/扫描、Tool 容器执行                |
-| Studio Web     | `@open-agent-tools/studio-web`        | Agent、MCP、RAG 与工作流统一 React 工作台                       |
-| RAG Server     | `@open-agent-tools/rag-server`        | 文档入库、SQLite 索引、混合检索与可选 LLM 回答                  |
-| Contracts      | `@open-agent-tools/mcp-contracts`     | Manifest、Prompt、任务和 Runner I/O 的共享 Zod 契约             |
-| Auth           | `@open-agent-tools/mcp-auth`          | API Key 生成、解析、哈希和校验                                  |
-| Node.js Runner | `@open-agent-tools/mcp-nodejs-runner` | 在 Tool 容器内加载 handler 并校验 MCP 返回值                    |
+| 组件               | 包名                                   | 职责                                                                                                           |
+| ------------------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Control Plane      | `@open-agent-tools/mcp-worker`         | 匿名管理 API、服务版本与运行环境变量、客户端 Key/Grant、审计、上传和构建调度                                   |
+| MCP Gateway        | `@open-agent-tools/mcp-server`         | MCP 协议入口、API Key 鉴权、Scope 检查、Tool 调用与 Prompt 渲染、请求审计                                      |
+| MCP Worker         | `@open-agent-tools/mcp-worker`         | ZIP 检查、依赖安装、镜像构建/扫描、Tool 容器执行                                                               |
+| Agent Server       | `@open-agent-tools/server`             | Agent Chat、工作流草稿/发布/运行与 Service API、问数、IM 渠道，以及 Provider、Schema 数据源和 MCP Gateway 设置 |
+| Studio Web         | `@open-agent-tools/studio-web`         | Agent、MCP、RAG、图谱、问数与工作流统一 React 工作台                                                           |
+| RAG Server         | `@open-agent-tools/rag-server`         | 文档入库、SQLite 索引、混合检索与可选 LLM 回答                                                                 |
+| Contracts          | `@open-agent-tools/mcp-contracts`      | Manifest、Prompt、任务和 Runner I/O 的共享 Zod 契约                                                            |
+| Workflow Contracts | `@open-agent-tools/workflow-contracts` | 工作流图、变量引用、条件分支和 HTTP 节点的共享校验契约（Studio Web 与 Agent Server 共用）                      |
+| Auth               | `@open-agent-tools/mcp-auth`           | API Key 生成、解析、哈希和校验                                                                                 |
+| Node.js Runner     | `@open-agent-tools/mcp-nodejs-runner`  | 在 Tool 容器内加载 handler 并校验 MCP 返回值                                                                   |
 
-Control Plane 与 Worker 共用 `@open-agent-tools/mcp-worker` 包，但仍是独立进程和权限边界：管理 API 通过 BullMQ 调度后台 Worker，Tool 仍在隔离容器内执行。管理 API 不需要 Docker Socket、Runner 镜像或 Registry 权限；这些能力只属于后台 Worker。`apps/mcp-server` 不在本次合并范围内，其结构、职责和启动方式保持不变。
+Control Plane 与 Worker 共用 `@open-agent-tools/mcp-worker` 包，但仍是独立进程和权限边界：管理 API 通过 BullMQ 调度后台 Worker，Tool 仍在隔离容器内执行。管理 API 不需要 Docker Socket、Runner 镜像或 Registry 权限；这些能力只属于后台 Worker。Gateway（`apps/mcp-server`）仍是独立进程，与 Control Plane 使用同一个 PostgreSQL，并把每个 MCP 请求写入审计表。
+
+Studio Web 的对话、工作流、问数和设置请求由 Agent Server 处理（开发时 Vite 把 `/api` 和 `/v1` 代理到 `3000`）。Agent Server 使用「设置 → MCP Gateway」中的地址和 API Key 作为 MCP 客户端访问 Gateway，知识库检索通过 `RAG_API_URL` 指向的 RAG Server 完成；会话、工作流和配置保存在它自己的 SQLite（默认 `apps/server/data/chat.sqlite`）。
 
 ## 目录结构
 
 ```text
 apps/
-  mcp-control-plane/       README 跳转与旧 drizzle 路径兼容链接（不再是工作区包）
+  cli/                     命令行 Coding Agent（Pi Agent）
   mcp-server/              动态 MCP Gateway
   mcp-worker/              Control Plane 与后台 Worker 共用包
     src/index.ts          后台 Worker 入口
     src/control-plane/    Control Plane 源码与管理 API 入口 index.ts
     drizzle/              PostgreSQL 迁移 SQL 与 journal
+  server/                  Agent Server：对话、工作流、问数、IM 渠道与设置
   studio-web/              统一 React 工作台
   rag-server/              RAG HTTP API 与 SQLite 数据
 packages/
+  database/                PostgreSQL / MySQL / Redis / Elasticsearch 连接封装
+  function-tools/          自定义 MCP 工具包聚合目录（pinyin、web-search）与打包脚本
   mcp-auth/                MCP API Key 契约
   mcp-contracts/           跨服务共享数据契约
+  observability/           审计脱敏与 Langfuse/OpenTelemetry 追踪
+  query-resolver/          问数前置口径解析（日期、组织、费用、状态）
+  rag/                     RAG 核心库：切分、入库、SQLite 向量索引、检索、CRAG 与知识图谱
+  schema-catalog/          MySQL / PostgreSQL Schema 采集与渐进式加载
+  workflow-contracts/      工作流图、变量、条件分支与 HTTP 节点共享契约
 runtimes/
   nodejs/
     Dockerfile             摘要固定、非 root Runner 镜像
@@ -87,21 +112,22 @@ docs/superpowers/
 
 ## 组件文档
 
-| 组件            | 中文文档                                     | English                                            |
-| --------------- | -------------------------------------------- | -------------------------------------------------- |
-| CLI Agent       | [README](./apps/cli/README.md)               | [README_EN](./apps/cli/README_EN.md)               |
+| 组件            | 中文文档                                            | English                                                   |
+| --------------- | --------------------------------------------------- | --------------------------------------------------------- |
+| CLI Agent       | [README](./apps/cli/README.md)                      | [README_EN](./apps/cli/README_EN.md)                      |
 | Control Plane   | [CONTROL_PLANE](./apps/mcp-worker/CONTROL_PLANE.md) | [CONTROL_PLANE_EN](./apps/mcp-worker/CONTROL_PLANE_EN.md) |
-| MCP Gateway     | [README](./apps/mcp-server/README.md)        | [README_EN](./apps/mcp-server/README_EN.md)        |
-| MCP Worker      | [README](./apps/mcp-worker/README.md)        | [README_EN](./apps/mcp-worker/README_EN.md)        |
-| Studio Web      | [README](./apps/studio-web/README.md)        | [README_EN](./apps/studio-web/README_EN.md)        |
-| RAG Server      | [README](./apps/rag-server/README.md)        | -                                                  |
-| MCP Auth        | [README](./packages/mcp-auth/README.md)      | [README_EN](./packages/mcp-auth/README_EN.md)      |
-| MCP Contracts   | [README](./packages/mcp-contracts/README.md) | [README_EN](./packages/mcp-contracts/README_EN.md) |
-| Node.js Runtime | [README](./runtimes/nodejs/README.md)        | [README_EN](./runtimes/nodejs/README_EN.md)        |
+| MCP Gateway     | [README](./apps/mcp-server/README.md)               | [README_EN](./apps/mcp-server/README_EN.md)               |
+| MCP Worker      | [README](./apps/mcp-worker/README.md)               | [README_EN](./apps/mcp-worker/README_EN.md)               |
+| Studio Web      | [README](./apps/studio-web/README.md)               | [README_EN](./apps/studio-web/README_EN.md)               |
+| RAG Server      | [README](./apps/rag-server/README.md)               | -                                                         |
+| MCP Auth        | [README](./packages/mcp-auth/README.md)             | [README_EN](./packages/mcp-auth/README_EN.md)             |
+| MCP Contracts   | [README](./packages/mcp-contracts/README.md)        | [README_EN](./packages/mcp-contracts/README_EN.md)        |
+| Node.js Runtime | [README](./runtimes/nodejs/README.md)               | [README_EN](./runtimes/nodejs/README_EN.md)               |
+| Function Tools  | [README](./packages/function-tools/README.md)       | -                                                         |
 
 ## 环境要求
 
-- Node.js 20 或更高版本；托管 Tool 的运行时版本固定为 Node.js 20。
+- Node.js 22.5 或更高版本（根 `package.json` 的 `engines` 要求；Agent Server、RAG Server 和 CLI 使用 `node:sqlite`）。托管 Tool 的运行时版本固定为 Node.js 20，由 Runner 镜像提供。
 - pnpm 10.32.1。
 - PostgreSQL 16，Control Plane 与 Gateway 必须连接同一数据库。
 - Redis 7 或兼容服务。
@@ -110,7 +136,7 @@ docs/superpowers/
 - OCI Registry，并提前完成 Worker 所在环境的登录。
 - Worker 主机安装 `syft` 和 `trivy`。
 
-仓库目前未提供 Docker Compose。PostgreSQL、Redis、对象存储和 Registry 需要单独准备。
+仓库没有完整的 Docker Compose。`scripts/docker-compose.yml` 只包含本地开发用的 MinIO（API `9000`、Console `9001`，默认账号 `minioadmin` / `minioadmin`，只应在本机使用），可用 `docker compose -f scripts/docker-compose.yml up -d` 启动，启动后仍需在 Console 创建 Artifact Bucket。PostgreSQL、Redis 和 Registry 需要单独准备。
 
 仅启动管理 API 时需要 PostgreSQL、Redis 和 S3 配置，不需要 Docker、Buildx、Runner 镜像、Registry、Syft 或 Trivy；后者仅在后台 Worker 构建/执行 Tool 时需要。
 
@@ -128,6 +154,8 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
+只启动 Studio Web 和 Agent Server 的开发服务时，至少先构建共享包：`pnpm build:deps`（`mcp-auth`、`mcp-contracts`、`database`、`workflow-contracts` 和 `observability`）。
+
 ## 配置
 
 ### Control Plane 与 Worker 共用配置
@@ -138,7 +166,7 @@ pnpm build
 test -e apps/mcp-worker/.env || cp apps/mcp-worker/.env.example apps/mcp-worker/.env
 ```
 
-若旧 `apps/mcp-control-plane/.env` 和 `apps/mcp-worker/.env` 已有本地配置，请手工将原 Control Plane 所需值合并到 Worker 的 `.env`，核对数据库、Redis、S3 凭据和端口冲突；不要覆盖任何已有 `.env` 或密钥。管理 API 不再读取旧目录的 `.env`。生产部署仍应按进程分别注入必要变量和授予权限，不应因共用包而给管理 API Docker/Registry 权限。
+旧的 `apps/mcp-control-plane` 目录已从仓库移除，管理 API 只读取 `apps/mcp-worker/.env`。如果本地还留着旧目录里的 `.env`，请手工把需要的值合并进来，核对数据库、Redis、S3 凭据和端口冲突；不要覆盖任何已有 `.env` 或密钥。生产部署仍应按进程分别注入必要变量和授予权限，不应因共用包而给管理 API Docker/Registry 权限。
 
 ### Control Plane
 
@@ -189,15 +217,35 @@ pnpm --filter @open-agent-tools/mcp-worker dev:worker
 | `EXECUTION_CONCURRENCY` | Tool 执行并发，默认 `4`                       |
 | `BUILD_CONCURRENCY`     | 检查/构建并发，默认 `2`                       |
 
+### Agent Server
+
+```bash
+test -e apps/server/.env || cp apps/server/.env.example apps/server/.env
+```
+
+`apps/server` 启动时读取 `apps/server/.env`（`.env.local` 可覆盖），默认监听 `3000`。模型 Provider 不再从环境变量注入，统一在 Studio Web「设置」中配置。关键变量：
+
+| 变量                                      | 说明                                                                                                                                                                                                                    |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONFIG_SECRETS_ENCRYPTION_KEY`           | 64 位十六进制（32 字节）密钥，用于加密保存模型 Provider Key、IM 凭据、Schema 数据源连接串和 MCP Gateway API Key；缺失时这些配置无法保存。可用 `openssl rand -hex 32` 生成，旧名称 `PROVIDER_KEYS_ENCRYPTION_KEY` 仍兼容 |
+| `PORT`                                    | Agent Server 端口，默认 `3000`                                                                                                                                                                                          |
+| `WEB_ORIGIN`                              | 允许访问的 Studio Web 来源，默认 `http://localhost:5173`                                                                                                                                                                |
+| `RAG_API_URL`                             | RAG Server 地址，默认 `http://localhost:4001/api`                                                                                                                                                                       |
+| `MCP_GATEWAY_URL` / `MCP_GATEWAY_API_KEY` | 仅在「设置 → MCP Gateway」没有保存配置时作为兜底                                                                                                                                                                        |
+| `WORKFLOW_HTTP_ALLOWLIST`                 | 可选，逗号分隔的 hostname 白名单，限制工作流 HTTP 节点的目标（含重定向）；未配置时允许任意 HTTP/HTTPS 目标                                                                                                              |
+| `SQLITE_PATH`                             | 可选，默认 `apps/server/data/chat.sqlite`                                                                                                                                                                               |
+
+Langfuse、飞书 IM、问数 LLM 和报表数据库等其余变量见 `apps/server/.env.example`。
+
 ### Studio Web
 
-开发服务器把 MCP 管理 API、Gateway 和 RAG API 分别代理到 `4200`、`4100` 和 `4001`：
+开发服务器把 `/api` 和 `/v1` 代理到 Agent Server（`3000`），并把 MCP 管理 API、Gateway 和 RAG API 分别代理到 `4200`、`4100` 和 `4001`：
 
 ```bash
 pnpm --filter @open-agent-tools/studio-web dev
 ```
 
-Studio Web 当前不做鉴权，不读取浏览器 Token；Control Plane 也将所有管理请求作为匿名 `admin` 处理。该模式只适用于本机开发或受信网络，不能直接暴露到公网。
+Studio Web 当前不做鉴权，不读取浏览器 Token；Control Plane 也将所有管理请求作为匿名 `admin` 处理，Agent Server 的管理接口同样没有身份认证（公开的 `/v1/workflows/{slug}/run` 使用工作流 API Key）。该模式只适用于本机开发或受信网络，不能直接暴露到公网。
 
 ## 数据库迁移
 
@@ -208,9 +256,11 @@ export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcp_management
 pnpm --filter @open-agent-tools/mcp-worker db:migrate
 ```
 
-Schema 位于 `apps/mcp-worker/src/control-plane/db/schema.ts`，迁移文件位于 `apps/mcp-worker/drizzle/`，原有 SQL 和 journal 保持不变。需要根据 Schema 变更生成新迁移时，使用 `pnpm --filter @open-agent-tools/mcp-worker db:generate`。
+Schema 位于 `apps/mcp-worker/src/control-plane/db/schema.ts`，迁移文件位于 `apps/mcp-worker/drizzle/`。需要根据 Schema 变更生成新迁移时，使用 `pnpm --filter @open-agent-tools/mcp-worker db:generate`。
 
-旧 `apps/mcp-control-plane` 不再是工作区包或源码树，仅保留 README 跳转与 `drizzle -> ../mcp-worker/drizzle` 符号链接，以兼容仍使用旧迁移路径的消费者；`apps/mcp-server` 完全不改动。不要让 Control Plane 和 Gateway 使用不同数据库，否则 Gateway 无法读取已发布服务和客户端授权。
+升级已有部署时，请先执行 `db:migrate`，再重启 Control Plane、Gateway 和 Worker。近期新增的迁移：`0004` 为服务增加运行环境变量，`0005` 允许复用已软删除服务的 Slug，`0006` 为审计事件增加来源（Control Plane 或 Gateway）、输入、输出和上下文字段。
+
+旧 `apps/mcp-control-plane` 目录及其 `drizzle` 兼容链接已移除，迁移历史只保留在 `apps/mcp-worker/drizzle/`。不要让 Control Plane 和 Gateway 使用不同数据库，否则 Gateway 无法读取已发布服务和客户端授权。
 
 ## 构建 Node.js Runner 镜像
 
@@ -234,8 +284,11 @@ docker inspect --format='{{index .RepoDigests 0}}' registry.example.com/mcp-node
 pnpm --filter @open-agent-tools/mcp-worker dev:admin
 pnpm --filter @open-agent-tools/mcp-server dev
 pnpm --filter @open-agent-tools/rag-server dev
+pnpm --filter @open-agent-tools/server dev
 pnpm --filter @open-agent-tools/studio-web dev
 ```
+
+Agent Server 需要先准备 `apps/server/.env`（见上文）并执行 `pnpm build:deps`。
 
 需要检查、构建或执行 Tool 时，再准备 Docker、Runner 镜像、Registry 等 Worker 依赖，并在另一个进程启动：
 
@@ -251,6 +304,7 @@ pnpm --filter @open-agent-tools/mcp-worker dev:worker
 | -------------------- | -------------------------------------------------- |
 | Studio Web           | `http://localhost:5173`                            |
 | RAG Server Health    | `http://localhost:4001/api/health`                 |
+| Agent Server Health  | `http://localhost:3000/health`                     |
 | Control Plane Health | `http://localhost:4200/health`                     |
 | MCP Gateway Health   | `http://localhost:4100/health`                     |
 | MCP Service Endpoint | `http://localhost:4100/mcp/services/{serviceSlug}` |
@@ -265,9 +319,9 @@ pnpm --filter @open-agent-tools/mcp-worker dev:worker
 4. 管理员发布 `READY` 版本，服务变为 `ACTIVE`。
 5. 管理员创建 MCP Client、签发 API Key，并为服务配置 Grant 与 Scope。
 6. MCP Client 使用 Bearer API Key 连接 Gateway，列出或调用获准的 Tools/Prompts。
-7. 管理员可回滚到历史版本，或禁用服务以立即拒绝新的 MCP 请求。
+7. 管理员可回滚到历史版本，或禁用服务以立即拒绝新的 MCP 请求；已禁用的服务可以重新启用。
 
-发布版本不可修改。修改 Tool 或 Prompt 应基于新草稿生成下一版本；当前管理 API 对完整“从已发布版本自动分叉草稿”的支持仍在完善。
+发布版本不可修改。需要调整 Tool 或 Prompt 时，在 Studio Web 对已发布或已被取代的版本点击「创建草稿」（对应 `fork-draft` 接口）：新草稿会复制 Tools、Prompts、运行限制和 Artifact 引用，并清空镜像摘要。包含 Tools 的草稿需要重新构建后才能校验和发布，不必重新上传 ZIP。
 
 ## Node.js Tool 包规范
 
@@ -336,6 +390,8 @@ export const handlers = {
 };
 ```
 
+`limits.network` 必须是 `none`（禁网）或 `bridge`（允许联网）。需要访问外部 API 的 Tool 应声明 `bridge`，并把密钥放在服务的「环境变量」中，而不是写进代码包或 Tool 参数；Worker 会在每次执行前读取这些变量并注入容器，更新后无需重新构建。
+
 Prompt-only 服务不需要 ZIP、Node.js Runtime、依赖安装或执行镜像。Prompt 模板只支持已声明参数的 `{{name}}` 文本插值，不执行表达式、Helper、循环、条件或任意代码。
 
 ## 客户端鉴权
@@ -374,15 +430,21 @@ Gateway 使用无状态 Streamable HTTP；`GET` 和 `DELETE` 会返回 `405 Meth
 
 所有管理接口都位于 `/api/admin/mcp`，主要包括：
 
-- `/services`：服务 CRUD、禁用和版本列表。
+- `/services`：服务 CRUD、禁用/启用和版本列表。
+- `/services/:serviceId/environment`：读取（仅变量名）和更新 Tool 运行环境变量。
+- `/services/:serviceId/versions/:versionId/limits`：更新版本的超时、内存、CPU 和网络模式。
 - `/services/:serviceId/versions/:versionId/tools`：Tool CRUD。
 - `/services/:serviceId/versions/:versionId/prompts`：Prompt CRUD 与预览。
 - `/services/:serviceId/versions/:versionId/upload-url`：S3 直传地址。
 - `/services/:serviceId/versions/:versionId/complete-upload`：确认上传并创建检查任务。
 - `/services/:serviceId/versions/:versionId/build`：创建构建任务。
 - `/services/:serviceId/versions/:versionId/validate`：校验 Prompt-only 或已构建版本。
+- `/services/:serviceId/versions/:versionId/reset-to-draft`：把未发布的 `READY` 版本退回草稿。
+- `/services/:serviceId/versions/:versionId/fork-draft`：基于已发布或已被取代的版本创建新草稿。
 - `/services/:serviceId/versions/:versionId/publish`：发布版本。
 - `/services/:serviceId/versions/:versionId/rollback`：回滚版本。
+- `/builds`：检查和构建任务列表。
+- `/audit`、`/audit/:eventId`：审计事件列表与详情。
 - `/clients`、`/clients/:id/keys`、`/clients/:id/grants`：客户端、Key 和 Grant 管理。
 
 写操作使用 `expectedRevision` 做乐观并发控制。
@@ -426,6 +488,9 @@ Docker E2E 还需要本机 Docker daemon 和已构建的测试 Runner 镜像。
 - Worker 是高权限基础设施组件，应部署在隔离网络中，不应暴露到公网。
 - Runner 与 Tool 镜像必须通过 SHA-256 摘要引用。
 - API Key、S3/Registry 凭据、完整 Tool 输入输出和渲染后的 Prompt 不应写入普通日志。
+- 审计事件会保存脱敏后的请求和响应：敏感字段名、`mcp.*` API Key、Bearer Token、URL 凭据和服务环境变量值会被屏蔽，但 Tool 输入输出等业务内容仍可能包含敏感数据。审计表是上一条规则的受控例外，只应向维护人员开放，并需要规划保留与归档策略。
+- 联网 Tool（`limits.network: "bridge"`）的密钥只放在服务环境变量中；变量值不会写入队列任务或镜像，审计内容中也会被屏蔽。
+- 工作流 HTTP 请求节点在未配置 `WORKFLOW_HTTP_ALLOWLIST` 时允许访问任意 HTTP/HTTPS 目标；生产环境应配置 hostname 白名单。
 - 生产环境需要为 PostgreSQL、Redis、S3 和 Registry 配置 TLS、备份、密钥轮换、限流和审计策略。
 - 当前匿名管理面只能放在本机或受信网络；接入公网前必须恢复身份认证和授权。
 
@@ -434,7 +499,7 @@ Docker E2E 还需要本机 Docker daemon 和已构建的测试 Runner 镜像。
 - 仅支持托管 Node.js 20 ESM/npm Tool；不支持 Python、Java、Yarn、pnpm Tool 包、Bun 或自定义 Dockerfile。
 - 不支持托管 MCP Resources，也未完成远程 MCP 服务代理。
 - 管理端已提供 Builds、Clients/Access 和 Audit 操作视图；独立 Executions 页面仍需补全。
-- Studio Web 与 Control Plane 当前没有身份认证或用户隔离，不适合直接暴露到公网。
+- Studio Web、Control Plane 与 Agent Server 当前没有身份认证或用户隔离，不适合直接暴露到公网。
 - 仓库未提供一键式 Docker Compose 或 Kubernetes 部署清单。
 - Node.js 20 已结束上游生命周期；生产上线前应完成安全例外审批或升级到受支持的 LTS，并同步更新运行时契约。
 
