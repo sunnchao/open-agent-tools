@@ -1,10 +1,9 @@
+import { Alert, Button, Card, Empty, Flex, Form, Input, Select, Segmented, Spin, Typography } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Input } from "antd";
 import {
   CodeOutlined,
   ExperimentOutlined,
   FileTextOutlined,
-  KeyOutlined,
   LoadingOutlined,
   SendOutlined,
   UndoOutlined,
@@ -240,7 +239,15 @@ function defaultVersion(
 }
 
 function CodeBlock({ value }: { value: string }) {
-  return <pre className="studio-code">{value}</pre>;
+  return (
+    <Typography.Paragraph
+      code
+      copyable
+      style={{ whiteSpace: "pre-wrap", marginBottom: 12 }}
+    >
+      {value}
+    </Typography.Paragraph>
+  );
 }
 
 function messageFrom(reason: unknown): string {
@@ -388,144 +395,121 @@ export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
     busy === null;
 
   return (
-    <div className="mcp-operations-view">
-      <div className="operations-toolbar">
-        <div>
-          <b>调试沙箱</b>
-          <span>构造 JSON-RPC 请求并直接发送到 Gateway,不伪造执行结果</span>
-        </div>
-        <label className="compact-select">
-          <span>服务</span>
-          <select
+    <Flex vertical gap={12}>
+      <Card size="small">
+        <Flex gap={12} align="center" wrap>
+          <Flex vertical gap={0}>
+            <Typography.Text strong>调试沙箱</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              构造 JSON-RPC 请求并直接发送到 Gateway,不伪造执行结果
+            </Typography.Text>
+          </Flex>
+          <Form.Item label="服务" style={{ marginBottom: 0 }}>
+            <Select
+              aria-label="服务"
             value={serviceId}
-            onChange={(event) => {
-              setServiceId(event.target.value);
+              onChange={(value) => {
+                setServiceId(value);
               resetOnSelection();
             }}
-          >
-            <option value="">选择服务</option>
-            {services.map((candidate) => (
-              <option key={candidate.id} value={candidate.id}>
-                {candidate.name} ({candidate.status})
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="compact-select">
-          <span>版本</span>
-          <select
+              placeholder="选择服务"
+              allowClear
+              options={services.map((candidate) => ({
+                value: candidate.id,
+                label: `${candidate.name} (${candidate.status})`,
+              }))}
+              style={{ minWidth: 180 }}
+            />
+          </Form.Item>
+          <Form.Item label="版本" style={{ marginBottom: 0 }}>
+            <Select
+              aria-label="版本"
             value={versionId}
-            onChange={(event) => {
-              setVersionId(event.target.value);
+              onChange={(value) => {
+                setVersionId(value);
               setAssetId("");
               resetOnSelection();
             }}
-          >
-            <option value="">选择版本</option>
-            {[...versions]
-              .sort((left, right) => right.versionNumber - left.versionNumber)
-              .map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>
-                  v{candidate.versionNumber} · {candidate.status}
-                </option>
-              ))}
-          </select>
-        </label>
-        <div className="segmented-control" aria-label="资源类型">
-          <button
-            type="button"
-            className={assetKind === "tool" ? "is-active" : ""}
-            onClick={() => {
-              setAssetKind("tool");
+              placeholder="选择版本"
+              allowClear
+              options={[...versions]
+                .sort((left, right) => right.versionNumber - left.versionNumber)
+                .map((candidate) => ({
+                  value: candidate.id,
+                  label: `v${candidate.versionNumber} · ${candidate.status}`,
+                }))}
+              style={{ minWidth: 180 }}
+            />
+          </Form.Item>
+          <Segmented
+            aria-label="资源类型"
+            value={assetKind}
+            onChange={(value) => {
+              setAssetKind(value as typeof assetKind);
               resetOnSelection();
             }}
-          >
-            <CodeOutlined /> Tool
-          </button>
-          <button
-            type="button"
-            className={assetKind === "prompt" ? "is-active" : ""}
-            onClick={() => {
-              setAssetKind("prompt");
-              resetOnSelection();
-            }}
-          >
-            <FileTextOutlined /> Prompt
-          </button>
-        </div>
-        <label className="compact-select">
-          <span>{assetKind === "tool" ? "Tool" : "Prompt"}</span>
-          <select value={assetId} onChange={(event) => setAssetId(event.target.value)}>
-            <option value="">选择资源</option>
-            {assets.map((candidate) => (
-              <option key={candidate.id} value={candidate.id}>
-                {candidate.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+            options={[
+              { value: "tool", label: "Tool", icon: <CodeOutlined /> },
+              { value: "prompt", label: "Prompt", icon: <FileTextOutlined /> },
+            ]}
+          />
+          <Form.Item label={assetKind === "tool" ? "Tool" : "Prompt"} style={{ marginBottom: 0 }}>
+            <Select
+              aria-label={assetKind === "tool" ? "Tool" : "Prompt"}
+              value={assetId || undefined}
+              onChange={(value) => setAssetId(value)}
+              placeholder="选择资源"
+              allowClear
+              options={assets.map((candidate) => ({
+                value: candidate.id,
+                label: candidate.name,
+              }))}
+              style={{ minWidth: 160 }}
+            />
+          </Form.Item>
+        </Flex>
+      </Card>
 
-      <div
-        className="workspace-notice"
-        role="note"
-        style={{ position: "static", transform: "none", maxWidth: "none", margin: "0 0 14px" }}
-      >
-        <ExperimentOutlined />
-        真正的工具执行依赖后台 Worker 与 Docker 运行时。未部署 Worker 时 Gateway
-        会返回执行错误(requestId 形如「Tool execution is unavailable」),这属于环境限制,
-        不是沙箱缺陷;沙箱只如实展示 Gateway 的原始响应。
-      </div>
+      <Alert
+        showIcon
+        type="info"
+        message="真正的工具执行依赖后台 Worker 与 Docker 运行时。未部署 Worker 时 Gateway 会返回执行错误,这属于环境限制,不是沙箱缺陷;沙箱只如实展示 Gateway 的原始响应。"
+      />
 
-      {error ? (
-        <div className="workspace-notice error" role="status">
-          {error}
-        </div>
-      ) : null}
+      {error ? <Alert type="error" showIcon message={error} role="alert" /> : null}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(320px, 1fr) minmax(320px, 1fr)",
-          gap: 18,
-          alignItems: "start",
-        }}
-      >
-        <section>
-          <div className="inspector-section-title">参数(JSON)</div>
+      <Flex gap={12} align="start" wrap>
+        <Card size="small" title="参数(JSON)" style={{ flex: 1, minWidth: 320 }}>
           {assetKind === "tool" && tool ? (
             <CodeBlock value={serializeSchema(tool.inputSchema)} />
           ) : null}
           {assetKind === "prompt" && prompt ? (
-            <p className="muted-copy">
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
               Prompt 参数必须是字符串;渲染会调用控制面的 preview 接口,不会触达 Gateway。
-            </p>
+            </Typography.Paragraph>
           ) : null}
           {loading ? (
-            <div className="operations-empty">
-              <LoadingOutlined spin />
-              <p>正在读取版本资源</p>
-            </div>
+            <Flex justify="center" style={{ padding: 24 }}>
+              <Spin tip="正在读取版本资源" />
+            </Flex>
           ) : null}
           {!loading && !version ? (
-            <div className="operations-empty">
-              <ExperimentOutlined />
-              <p>请选择服务与版本</p>
-              <small>只有已发布版本的资源才会被 Gateway 执行。</small>
-            </div>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="请选择服务与版本。只有已发布版本的资源才会被 Gateway 执行。"
+            />
           ) : null}
           {!loading && version && assets.length === 0 ? (
-            <div className="operations-empty">
-              <ExperimentOutlined />
-              <p>该版本没有{assetKind === "tool" ? " Tool" : " Prompt"}</p>
-            </div>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={`该版本没有${assetKind === "tool" ? " Tool" : " Prompt"}`}
+            />
           ) : null}
           {version && asset ? (
-            <label className="studio-field">
-              <span>
-                参数 JSON
-                <small>{assetKind === "tool" ? "tools/call" : "prompts/get"}</small>
-              </span>
+            <Form.Item
+              label={`参数 JSON · ${assetKind === "tool" ? "tools/call" : "prompts/get"}`}
+              style={{ marginBottom: 12 }}
+            >
               <Input.TextArea
                 value={argsText}
                 autoComplete="off"
@@ -533,37 +517,37 @@ export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
                 rows={8}
                 onChange={(event) => setArgsText(event.target.value)}
               />
-            </label>
+            </Form.Item>
           ) : null}
-          {!parsed.ok ? <p className="field-message error">{parsed.error}</p> : null}
+          {!parsed.ok ? <Alert type="error" showIcon message={parsed.error} style={{ marginBottom: 8 }} /> : null}
           {validationErrors.map((message) => (
-            <p className="field-message error" key={message}>
-              {message}
-            </p>
+            <Alert key={message} type="error" showIcon message={message} style={{ marginBottom: 8 }} />
           ))}
           {parsed.ok && validationErrors.length === 0 && asset ? (
-            <p className="field-message">参数校验通过。</p>
+            <Alert type="success" showIcon message="参数校验通过。" style={{ marginBottom: 8 }} />
           ) : null}
-        </section>
+        </Card>
 
-        <section>
-          <div className="inspector-section-title">
-            {assetKind === "tool" ? "将要发送的 JSON-RPC 请求体" : "渲染后的 Prompt"}
-          </div>
+        <Card
+          size="small"
+          title={assetKind === "tool" ? "将要发送的 JSON-RPC 请求体" : "渲染后的 Prompt"}
+          style={{ flex: 1, minWidth: 320 }}
+        >
           {assetKind === "tool" ? (
             requestBody ? (
               <CodeBlock value={requestBody} />
             ) : (
-              <p className="muted-copy">选择 Tool 并填写合法 JSON 参数后显示请求体。</p>
+              <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+                选择 Tool 并填写合法 JSON 参数后显示请求体。
+              </Typography.Paragraph>
             )
           ) : null}
           {assetKind === "tool" ? (
-            <>
-              <label className="studio-field">
-                <span>
-                  Gateway 地址
-                  <small>POST /mcp/services/{"{slug}"}</small>
-                </span>
+            <Flex vertical gap={12}>
+              <Form.Item
+                label="Gateway 地址 · POST /mcp/services/{slug}"
+                style={{ marginBottom: 0 }}
+              >
                 <Input
                   value={gatewayUrl}
                   autoComplete="off"
@@ -571,12 +555,11 @@ export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
                   onChange={(event) => setGatewayUrl(event.target.value)}
                   placeholder="http://localhost:4100"
                 />
-              </label>
-              <label className="studio-field">
-                <span>
-                  <KeyOutlined /> 客户端 API Key
-                  <small>仅保存在组件内存</small>
-                </span>
+              </Form.Item>
+              <Form.Item
+                label="客户端 API Key · 仅保存在组件内存"
+                style={{ marginBottom: 0 }}
+              >
                 <Input.Password
                   value={apiKey}
                   autoComplete="off"
@@ -584,70 +567,70 @@ export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
                   onChange={(event) => setApiKey(event.target.value)}
                   placeholder="mcp_..."
                 />
-              </label>
-              <button
-                className="studio-button secondary compact"
-                type="button"
+              </Form.Item>
+              <Button
+                icon={<UndoOutlined />}
                 onClick={() => {
                   setApiKey("");
                   setOutcome(null);
                 }}
               >
-                <UndoOutlined /> 清空 Key
-              </button>
+                清空 Key
+              </Button>
               {version &&
               service &&
               (service.status !== "ACTIVE" ||
                 service.currentVersionId !== version.id ||
                 version.status !== "PUBLISHED") ? (
-                <p className="muted-copy">
-                  Gateway 只执行服务当前已发布的版本;当前选择不会命中执行入口,响应会返回对应错误。
-                </p>
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Gateway 只执行服务当前已发布的版本;当前选择不会命中执行入口,响应会返回对应错误。"
+                />
               ) : null}
-              <button
-                className="studio-button primary full-width"
-                type="button"
+              <Button
+                block
+                type="primary"
+                icon={busy === "send" ? <LoadingOutlined spin /> : <SendOutlined />}
+                loading={busy === "send"}
                 disabled={!canSend}
                 onClick={() => void send()}
               >
-                {busy === "send" ? <LoadingOutlined spin /> : <SendOutlined />} 发送到 Gateway
-              </button>
-            </>
+                发送到 Gateway
+              </Button>
+            </Flex>
           ) : null}
 
           {assetKind === "prompt" ? (
-            <>
-              <button
-                className="studio-button primary full-width"
-                type="button"
+            <Flex vertical gap={12}>
+              <Button
+                block
+                type="primary"
+                icon={busy === "render" ? <LoadingOutlined spin /> : <ExperimentOutlined />}
+                loading={busy === "render"}
                 disabled={!prompt || !parsed.ok || validationErrors.length > 0 || busy !== null}
                 onClick={() => void renderPrompt()}
               >
-                {busy === "render" ? <LoadingOutlined spin /> : <ExperimentOutlined />} 渲染 Prompt
-              </button>
+                渲染 Prompt
+              </Button>
               {renderedPrompt ? <CodeBlock value={renderedPrompt} /> : null}
-            </>
+            </Flex>
           ) : null}
 
           {outcome ? (
-            <div
-              className={
-                outcome.ok && !callFailed(outcome) ? "gateway-result" : "gateway-result is-error"
-              }
+            <Card
+              size="small"
+              type={outcome.ok && !callFailed(outcome) ? undefined : "inner"}
+              title={`HTTP ${outcome.status} · ${outcome.durationMs}ms · ${outcome.ok && !callFailed(outcome) ? "执行成功" : "执行失败"}`}
+              style={{ marginTop: 12 }}
             >
-              <div className="gateway-result-heading">
-                <span>
-                  HTTP {outcome.status} · {outcome.durationMs}ms
-                </span>
-                <strong>{outcome.ok && !callFailed(outcome) ? "执行成功" : "执行失败"}</strong>
-              </div>
-              {outcome.error ? <p className="field-message error">{outcome.error}</p> : null}
+              {outcome.error ? <Alert type="error" showIcon message={outcome.error} style={{ marginBottom: 8 }} /> : null}
               <CodeBlock value={outcome.bodyText || "(空响应体)"} />
-            </div>
+            </Card>
           ) : null}
-        </section>
-      </div>
-    </div>
+        </Card>
+      </Flex>
+    </Flex>
   );
 }
 
