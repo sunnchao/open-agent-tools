@@ -31,6 +31,8 @@ export function ChatResourceDrawer({
 }: ChatResourceDrawerProps) {
   const availableSources = new Set(catalog?.rag.sources.map((item) => item.source) ?? []);
   const missingSources = resources.rag.sources.filter((source) => !availableSources.has(source));
+  const availableSqlSources = new Set(catalog?.sql?.sources.map((source) => source.id) ?? []);
+  const missingSqlSources = resources.sqlSources.filter((id) => !availableSqlSources.has(id));
   const availableTools = new Set(
     catalog?.mcp.services.flatMap((service) =>
       service.tools.map((tool) => `${service.serviceSlug}:${tool.name}`),
@@ -44,6 +46,13 @@ export function ChatResourceDrawer({
       ? [...resources.rag.sources, source]
       : resources.rag.sources.filter((item) => item !== source);
     onChange({ ...resources, rag: { ...resources.rag, sources } });
+  };
+
+  const toggleSqlSource = (id: string, checked: boolean) => {
+    const sqlSources = checked
+      ? [...resources.sqlSources, id]
+      : resources.sqlSources.filter((item) => item !== id);
+    onChange({ ...resources, sqlSources });
   };
 
   const toggleTool = (binding: McpToolBinding, checked: boolean) => {
@@ -131,6 +140,58 @@ export function ChatResourceDrawer({
                 onChange={(topK) => onChange({ ...resources, rag: { ...resources.rag, topK } })}
               />
             </label>
+          </section>
+
+          <section className="chat-resource-section">
+            <header>
+              <span className="resource-section-icon sql">
+                <DatabaseOutlined />
+              </span>
+              <div>
+                <b>SQL 问数</b>
+                <small>选择数据源，复用 SQL 问数的查询与审计</small>
+              </div>
+              <strong>{resources.sqlSources.length}</strong>
+            </header>
+            {catalog?.sql?.error ? (
+              <Alert type="warning" showIcon title={catalog.sql.error} />
+            ) : null}
+            <div className="resource-check-list">
+              {missingSqlSources.map((id) => (
+                <label key={id} className="resource-check-row is-missing">
+                  <Checkbox checked onChange={() => toggleSqlSource(id, false)} />
+                  <span>
+                    <b>{id}</b>
+                    <small>数据源已停用或删除，取消勾选可移除绑定</small>
+                  </span>
+                </label>
+              ))}
+              {(catalog?.sql?.sources.length ?? 0) === 0 ? (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="暂无可用的 SQL 数据源，请先在「数据源管理」中配置"
+                />
+              ) : (
+                catalog?.sql?.sources.map((source) => (
+                  <label key={source.id} className="resource-check-row">
+                    <Checkbox
+                      checked={resources.sqlSources.includes(source.id)}
+                      disabled={
+                        !resources.sqlSources.includes(source.id) && resources.sqlSources.length >= 20
+                      }
+                      onChange={(event) => toggleSqlSource(source.id, event.target.checked)}
+                    />
+                    <span>
+                      <b>
+                        {source.name}
+                        {source.isDefault ? <em className="resource-default-badge">默认</em> : null}
+                      </b>
+                      <small>{source.connector === "postgresql" ? "PostgreSQL" : "MySQL"}</small>
+                    </span>
+                  </label>
+                ))
+              )}
+            </div>
           </section>
 
           <section className="chat-resource-section">

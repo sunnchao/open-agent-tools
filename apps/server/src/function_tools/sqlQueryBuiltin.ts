@@ -1,35 +1,10 @@
 /**
- * 内置 query_sql（方案 C：Agent 侧直连数据库）。
- *
- * 背景：MCP Worker 容器 network:"none" + 无 env，工具容器无法连库。
- * 方案 C = server（Agent）持有 REPORT_DATABASE_URL，直连 MySQL 执行 LLM 生成的只读 SQL。
+ * SQL 问数和 AI Query 共用的 SQL 校验与执行原语。
  *
  * 安全：护栏（黑名单/单语句/SELECT 限定）+ 最多返回 100 行 + 只读账号建议。
  */
 import { createMysqlPool, type MysqlPool } from "@open-agent-tools/database/mysql";
 import { createPostgresPool } from "@open-agent-tools/database/postgres";
-
-export const QUERY_SQL_TOOL = {
-  type: "function" as const,
-  function: {
-    name: "query_sql",
-    description:
-      "执行只读 SELECT 查询 NEW-API 运营数据（数据表 schema 见系统提示中的 schema 上下文）。" +
-      "返回 JSON 行数组。规则：表名/列名用反引号；时间戳为 Unix 秒；大表必须带 WHERE 过滤。" +
-      "示例：SELECT user_id, model_name, quota, created_at FROM `logs` WHERE type=2 LIMIT 20",
-    parameters: {
-      type: "object",
-      properties: {
-        sql: {
-          type: "string",
-          description: "只读 SELECT 语句，由 LLM 生成，工具内置护栏",
-        },
-      },
-      required: ["sql"],
-      additionalProperties: false,
-    },
-  },
-} as const;
 
 const BLOCKED =
   /\b(drop|truncate|delete|update|insert|alter|create|grant|revoke|copy|vacuum|rename|replace|load_file|outfile|dumpfile|sleep|benchmark|shutdown)\b/i;

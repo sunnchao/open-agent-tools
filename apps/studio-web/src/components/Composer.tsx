@@ -89,7 +89,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   // 模型名可能很长：让触发框宽度随选中模型自适应，避免截断显示
   const modelSelectWidth = Math.min(Math.max(120, estimateTextWidth(selectedModel) + 36), 260);
 
-  const resourceCount = resources.rag.sources.length + resources.mcpTools.length;
+  const resourceCount =
+    resources.rag.sources.length + resources.mcpTools.length + resources.sqlSources.length;
 
   return (
     <div className="composer-wrap">
@@ -136,6 +137,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   onClick={onConfigureResources}
                 >
                   MCP {resources.mcpTools.length}
+                </Tag>
+              ) : null}
+              {resources.sqlSources.length > 0 ? (
+                <Tag
+                  icon={<DatabaseOutlined />}
+                  color="blue"
+                  style={{ cursor: "pointer", marginInlineEnd: 0 }}
+                  onClick={onConfigureResources}
+                >
+                  SQL 问数 {resources.sqlSources.length}
                 </Tag>
               ) : null}
 

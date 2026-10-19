@@ -1,8 +1,23 @@
+import type { QueryStep } from "./features/observatory/api.js";
+
 export type Role = "user" | "assistant" | "system" | "tool";
 
-export type MessageStatus = "streaming" | "complete" | "error";
+export type MessageStatus = "streaming" | "complete" | "error" | "stopped";
 
 export type ToolCallStatus = "pending" | "done" | "error";
+
+export interface SqlResultProps {
+  rows: Record<string, unknown>[];
+  sourceId?: string;
+  sourceName?: string;
+  question?: string;
+  sql?: string;
+  auditId?: string;
+  steps?: QueryStep[];
+  durationMs?: number;
+  truncated?: boolean;
+  clarifying?: string;
+}
 
 /**
  * 渲染用的 UI 块（由工具产生，例如财务报表卡片）。
@@ -13,6 +28,7 @@ export type UiBlock =
       type: "financial_report_card";
       props: { reports: Array<{ id: string; name: string; status: string }> };
     }
+  | { type: "sql_result"; props: SqlResultProps }
   // 兼容服务端可能下发的其它 ui 形状。
   | { type: string; [key: string]: unknown };
 
@@ -45,6 +61,8 @@ export interface Message {
   content: string;
   createdAt: number;
   status?: MessageStatus;
+  /** 生成失败时的错误文案。与 content 分开，避免刷新后把 partial 覆盖掉。 */
+  errorMessage?: string;
   /** 助手消息：生成回复过程中发起的函数调用。 */
   toolCalls?: ToolCall[];
   /** 助手消息：需要内联渲染的 UI 块（卡片）。 */
@@ -74,10 +92,12 @@ export interface ChatResourceBinding {
     sources: string[];
     topK: number;
   };
+  /** 绑定的 SQL 问数数据源，服务端校验存在且启用。 */
+  sqlSources: string[];
 }
 
 export function emptyChatResources(): ChatResourceBinding {
-  return { mcpTools: [], rag: { sources: [], topK: 5 } };
+  return { mcpTools: [], rag: { sources: [], topK: 5 }, sqlSources: [] };
 }
 
 export interface Session {

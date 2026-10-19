@@ -45,11 +45,14 @@ export interface McpToolBinding {
 export interface ResourceBindings {
   mcpTools: McpToolBinding[];
   rag: { sources: string[]; topK: number };
+  /** 绑定的 SQL 问数数据源，服务端校验存在且启用。 */
+  sqlSources: string[];
 }
 
 export interface ResourceBindingsInput {
   mcpTools?: McpToolBinding[];
   rag?: { sources?: string[]; topK?: number };
+  sqlSources?: string[];
 }
 
 export interface ResolvedMcpTool extends McpToolBinding {
@@ -67,6 +70,7 @@ interface GatewayServiceSummary {
 export function normalizeResourceBindings(value?: ResourceBindingsInput): ResourceBindings {
   const tools = value?.mcpTools ?? [];
   const sources = value?.rag?.sources ?? [];
+  const sqlSources = value?.sqlSources ?? [];
   if (
     tools.length > 30 ||
     tools.some(
@@ -86,6 +90,20 @@ export function normalizeResourceBindings(value?: ResourceBindingsInput): Resour
   ) {
     throw new Error("RAG sources must contain at most 50 valid source names");
   }
+  if (
+    !Array.isArray(sqlSources) ||
+    sqlSources.length > 20 ||
+    sqlSources.some((source) => typeof source !== "string" || !source.trim())
+  ) {
+    throw new Error("sqlSources must contain at most 20 valid source ids");
+  }
+  const uniqueSqlSources = [...new Set(sqlSources.map((source) => source.trim()))];
+  if (uniqueSqlSources.length > 0) {
+    const available = new Set(listSchemaSources().map((source) => source.id));
+    if (uniqueSqlSources.some((id) => !available.has(id))) {
+      throw new Error("invalid sqlSources: schema source not found or disabled");
+    }
+  }
 
   const uniqueTools = new Map<string, McpToolBinding>();
   tools.forEach((tool) => {
@@ -100,6 +118,7 @@ export function normalizeResourceBindings(value?: ResourceBindingsInput): Resour
   return {
     mcpTools: [...uniqueTools.values()],
     rag: { sources: [...new Set(sources.map((source) => source.trim()))], topK },
+    sqlSources: uniqueSqlSources,
   };
 }
 

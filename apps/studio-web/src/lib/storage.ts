@@ -18,6 +18,9 @@ export function normalizeSession(
           : [],
         topK: Number(session.resources?.rag?.topK) || emptyChatResources().rag.topK,
       },
+      sqlSources: Array.isArray(session.resources?.sqlSources)
+        ? session.resources.sqlSources
+        : [],
     },
   };
 }

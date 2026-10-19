@@ -21,6 +21,7 @@ import {
   type PermissionContext,
 } from "../aiQuery/permission.js";
 import { routeIntentWithGateA } from "../aiQuery/decisionProvider.js";
+import { buildChartSuggestion, type ChartSuggestion } from "../aiQuery/chartSuggest.js";
 
 /**
  * AI 问数端点（POST /api/ai/query，标准 SSE）。
@@ -415,6 +416,8 @@ export interface TableData {
   rows: Array<Record<string, string | number | null>>;
   totalRows: number;
   truncated: boolean;
+  /** 自动生成的图表建议；无法推断时缺省，前端回退到表格。 */
+  chart?: ChartSuggestion;
 }
 
 function isNumeric(v: unknown): boolean {
@@ -452,19 +455,23 @@ export function buildDataPayload(
       ...(scope ? { scope } : {}),
     };
   }
+  const tableColumns = columns.map((key) => ({ key, title: key }));
+  const normalizedRows = rows.map((row) => {
+    const normalized: Record<string, string | number | null> = {};
+    for (const key of columns) {
+      const v = row[key];
+      normalized[key] = v === null || v === undefined ? null : (v as string | number);
+    }
+    return normalized;
+  });
+  const chart = buildChartSuggestion(tableColumns, normalizedRows);
   return {
     type: "table",
-    columns: columns.map((key) => ({ key, title: key })),
-    rows: rows.map((row) => {
-      const normalized: Record<string, string | number | null> = {};
-      for (const key of columns) {
-        const v = row[key];
-        normalized[key] = v === null || v === undefined ? null : (v as string | number);
-      }
-      return normalized;
-    }),
+    columns: tableColumns,
+    rows: normalizedRows,
     totalRows: rows.length,
     truncated: rows.length >= RESULT_LIMIT,
+    ...(chart ? { chart } : {}),
   };
 }
 

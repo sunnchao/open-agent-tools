@@ -12,6 +12,8 @@ interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onDone: (meta?: { assistantMessageId?: string }) => void;
   onError: (error: string) => void;
+  /** 用户主动停止。与 onError / onDone 互斥，避免停止后被标成 complete。 */
+  onStopped?: () => void;
   onAssistantMessageId?: (id: string) => void;
   onRagCitations?: (citations: RagCitation[]) => void;
   /** 收到一次“函数调用请求”（name + arguments）。 */
@@ -199,7 +201,10 @@ export function streamChat(
       // 避免前端一直停留在 loading 状态。
       callbacks.onDone({ assistantMessageId });
     } catch (err) {
-      if ((err as Error).name === "AbortError") return;
+      if ((err as Error).name === "AbortError") {
+        callbacks.onStopped?.();
+        return;
+      }
       callbacks.onError(err instanceof Error ? err.message : "Request failed");
     }
   })();

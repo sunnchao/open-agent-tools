@@ -9,16 +9,30 @@ const SYNONYMS: Record<ExpenseEnum, string[]> = {
 // 优先级：具体类型优先于 ALL
 const PRIORITY: ExpenseEnum[] = ["TRAVEL", "MEAL", "ENTERTAIN", "ALL"];
 
+/** 可配置口径的费用同义词：value 命中任一 word 即解析为该费用类型 */
+export interface ExpenseWordPattern {
+  value: ExpenseEnum;
+  words: string[];
+}
+
 /**
  * 费用类型解析：同义词 → enum。
  * 未提供默认 TRAVEL（差旅场景约定）；多义时取优先级最高的并标记 ambiguous。
+ * patterns 提供时按配置词表解析（顺序即优先级），否则沿用内置同义词。
  */
-export function resolveExpense(raw: string | undefined, fallback: ExpenseEnum = "TRAVEL"): ResolverResult<ExpenseEnum> {
+export function resolveExpense(
+  raw: string | undefined,
+  fallback: ExpenseEnum = "TRAVEL",
+  patterns?: ExpenseWordPattern[],
+): ResolverResult<ExpenseEnum> {
   if (!raw) {
     return { value: fallback, candidates: [], ambiguous: false, missing: false, note: `未提供费用类型，默认 ${fallback}` };
   }
 
-  const matched = PRIORITY.filter((e) => SYNONYMS[e].some((s) => raw.includes(s)));
+  const matched = patterns?.length
+    ? patterns.filter((p) => p.words.some((w) => raw.includes(w))).map((p) => p.value)
+    : PRIORITY.filter((e) => SYNONYMS[e].some((s) => raw.includes(s)));
+
   if (matched.length === 0) {
     return { value: fallback, candidates: [], ambiguous: false, missing: false, note: `未匹配费用类型，默认 ${fallback}` };
   }

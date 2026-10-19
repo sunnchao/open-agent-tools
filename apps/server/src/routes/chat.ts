@@ -1,7 +1,13 @@
 import { Router, type Request, type Response } from "express";
 import { addMessage, ensureSession, updateMessage, type Role } from "../db.js";
 import { executeTool, tools as builtinTools } from "../function_tools/index.js";
-import { buildSchemaInjection } from "../schema-inject.js";
+import {
+  buildSqlQuestionTools,
+  sqlQuestionToolName,
+  type SqlQuestionSource,
+} from "../function_tools/sqlQuestion.js";
+import type { HistoryTurn } from "../oneapiDemo/text2sql.js";
+import { listSchemaSources } from "../schemaSources/store.js";
 import { getDefaultProvider, getProvider } from "../providers/store.js";
 import {
   createLlmClient,
@@ -29,6 +35,16 @@ import {
 
 export const chatRouter: ReturnType<typeof Router> = Router();
 
+class ChatTurnError extends Error {
+  constructor(
+    message: string,
+    readonly partialContent: string,
+  ) {
+    super(message);
+    this.name = "ChatTurnError";
+  }
+}
+
 // 启发式评估器无状态，跨请求复用同一控制器；LLM 评估器依赖每请求的 provider，单独构造。
 let cragSingleton: ReturnType<typeof createChatCragController> | null = null;
 
@@ -41,6 +57,7 @@ interface ChatRequestBody {
   resources?: {
     mcpTools?: McpToolBinding[];
     rag?: { sources?: string[]; topK?: number };
+    sqlSources?: string[];
   };
 }
 
@@ -52,8 +69,7 @@ interface ChatStreamParams {
   resolvedSessionId: string | null | undefined;
   send: (data: Record<string, unknown>) => void;
   span: ObservationHandle;
-  /** 渐进式 schema 注入（enriched catalog → 骨架 + 相关表）。 */
-  schemaInjection: ReturnType<typeof buildSchemaInjection>;
+  schemaSources: SqlQuestionSource[];
 }
 
 /**
@@ -61,23 +77,33 @@ interface ChatStreamParams {
  * 所有 LLM 调用（generation）、工具调用（tool）、检索（retriever）都会写入 Langfuse。
  */
 async function streamChatTurn(params: ChatStreamParams): Promise<{ fullContent: string; toolRounds: number }> {
-  const { llm, model, messages, bindings, resolvedSessionId, send, schemaInjection } = params;
+  const { llm, model, messages, bindings, resolvedSessionId, send, schemaSources } =
+    params;
   let fullContent = "";
   let toolRounds = 0;
+  let awaitingSqlClarification = false;
 
   // 历史会话中的 tool 行缺少 OpenAI 要求的 assistant tool_calls 上下文，统一丢弃。
   const completionMessages: LlmMessage[] = messages
     .filter((message) => message.role !== "tool")
     .map((message) => ({ role: message.role, content: message.content }));
 
-  if (schemaInjection.enabled) {
-    const schemaSystem =
-      "你是 NEW-API 运营数据查询助手。可基于以下数据库 schema 生成只读 SQL，并调用 query_sql 工具执行获取数据。\n" +
-      "规则：1) 表名/列名用反引号包裹；2) 时间戳是 Unix 秒；3) 大表必须带 WHERE 过滤；4) 中文问日期先换算 Unix 秒区间；5) 结果按用户语言汇总成自然语言回答。\n\n" +
-      schemaInjection.skeleton +
-      (schemaInjection.selected ? `\n\n${schemaInjection.selected}` : "");
-    completionMessages.unshift({ role: "system", content: schemaSystem });
+  if (schemaSources.length > 0) {
+    completionMessages.unshift({
+      role: "system",
+      content:
+        "需要查询数据库时，调用对应数据源的 SQL 问数工具，提交自然语言问题。" +
+        "保留用户明确提出的条件和条数；模块会自行检索 Schema、生成和校验 SQL，按结果汇总回答。" +
+        "收到 clarifying 时原样向用户确认，等待用户补充后再调用；不要自行猜测条数或查询口径。" +
+        "跨数据源问题分别调用各源工具后汇总，不要尝试跨源 JOIN。",
+    });
   }
+  const sqlHistory: HistoryTurn[] = messages
+    .slice(0, Math.max(0, messages.map((message) => message.role).lastIndexOf("user")))
+    .filter(
+      (message): message is HistoryTurn => message.role === "user" || message.role === "assistant",
+    )
+    .slice(-6);
 
   const lastUserQuery = [...messages]
     .reverse()
@@ -195,7 +221,10 @@ async function streamChatTurn(params: ChatStreamParams): Promise<{ fullContent: 
         level: "ERROR",
         statusMessage: error instanceof Error ? truncate(error.message, 300) : String(error),
       });
-      throw error;
+      throw new ChatTurnError(
+        error instanceof Error ? error.message : String(error),
+        fullContent,
+      );
     } finally {
       ragObservation.end();
     }
@@ -208,22 +237,29 @@ async function streamChatTurn(params: ChatStreamParams): Promise<{ fullContent: 
     resolved: mcpTools.length,
   });
   const mcpByAlias = new Map(mcpTools.map((tool) => [tool.alias, tool]));
+  const sqlTools = buildSqlQuestionTools(schemaSources).map((tool) => ({
+    name: tool.function.name,
+    description: tool.function.description ?? "",
+    parameters: tool.function.parameters as Record<string, unknown>,
+  }));
   const completionTools: LlmToolDefinition[] = [
     ...builtinTools.map((tool) => ({
       name: tool.function.name,
       description: tool.function.description ?? "",
       parameters: tool.function.parameters as Record<string, unknown>,
     })),
+    ...sqlTools,
     ...mcpTools.map((tool) => ({
       name: tool.definition.function.name,
       description: tool.definition.function.description ?? "",
       parameters: tool.definition.function.parameters as Record<string, unknown>,
     })),
   ];
+  const sqlByName = new Map(schemaSources.map((source) => [sqlQuestionToolName(source.id), source]));
 
   const maxToolRounds = 4;
   for (let round = 0; round <= maxToolRounds; round += 1) {
-    const allowTools = round < maxToolRounds;
+    const allowTools = round < maxToolRounds && !awaitingSqlClarification;
     const roundStartedAt = Date.now();
     const generation = startObservation(
       "generate-response",
@@ -253,7 +289,10 @@ async function streamChatTurn(params: ChatStreamParams): Promise<{ fullContent: 
         statusMessage: error instanceof Error ? truncate(error.message, 300) : String(error),
       });
       generation.end();
-      throw error;
+      throw new ChatTurnError(
+        error instanceof Error ? error.message : String(error),
+        fullContent,
+      );
     }
 
     const roundContent = result.content;
@@ -289,8 +328,13 @@ async function streamChatTurn(params: ChatStreamParams): Promise<{ fullContent: 
 
     for (const call of calls) {
       const mcp = mcpByAlias.get(call.name);
-      const displayName = mcp ? `${mcp.serviceSlug}/${mcp.toolName}` : call.name;
-      const kind = mcp ? "mcp" : "builtin";
+      const sqlSource = sqlByName.get(call.name);
+      const displayName = mcp
+        ? `${mcp.serviceSlug}/${mcp.toolName}`
+        : sqlSource
+          ? `SQL 问数 · ${sqlSource.name}`
+          : call.name;
+      const kind = mcp ? "mcp" : sqlSource ? "sql" : "builtin";
       send({ tool_call: { id: call.id, name: displayName, arguments: call.arguments } });
       let toolContent: string;
       const toolStartedAt = Date.now();
@@ -308,7 +352,7 @@ async function streamChatTurn(params: ChatStreamParams): Promise<{ fullContent: 
         >;
         const result = mcp
           ? await callMcpTool(mcp, args)
-          : await executeTool(call.name, call.arguments);
+          : await executeTool(call.name, call.arguments, { schemaSources, history: sqlHistory });
         toolContent = JSON.stringify(result) ?? "null";
         logDuration("chat.tool", toolStartedAt, {
           tool: displayName,
@@ -320,6 +364,9 @@ async function streamChatTurn(params: ChatStreamParams): Promise<{ fullContent: 
           result && typeof result === "object" && "ui" in result
             ? (result as { ui?: unknown }).ui
             : undefined;
+        if (sqlSource && (ui as { props?: { clarifying?: string } } | undefined)?.props?.clarifying) {
+          awaitingSqlClarification = true;
+        }
         send({
           tool_result: {
             id: call.id,
@@ -442,6 +489,14 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
   const resolvedSessionId = sessionId;
   let assistantMessageId: string | null = null;
   let toolRounds = 0;
+
+  const schemaSources: SqlQuestionSource[] =
+    bindings.sqlSources.length > 0
+      ? listSchemaSources()
+          .filter((source) => bindings.sqlSources.includes(source.id))
+          .map(({ id, name, connector }) => ({ id, name, connector }))
+      : [];
+
   logTrace("chat.start", {
     sessionId: resolvedSessionId ?? null,
     messageCount: messages.length,
@@ -451,6 +506,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
     ragSources: bindings.rag.sources.length,
     ragTopK: bindings.rag.topK,
     mcpToolBindings: bindings.mcpTools.length,
+    sqlSources: bindings.sqlSources.join(",") || "(none)",
   });
 
   if (resolvedSessionId) {
@@ -488,24 +544,12 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
   }
 
   let fullContent = "";
+  let outcome: "complete" | "error" = "complete";
+  let errorMessage = "LLM request failed";
   try {
     const lastUserQuery = [...messages]
       .reverse()
       .find((message) => message.role === "user")?.content;
-    const schemaInjectStartedAt = Date.now();
-    const schemaInjection = buildSchemaInjection(lastUserQuery);
-    logDebugDuration("chat.stage.schema_inject", schemaInjectStartedAt, {
-      sessionId: resolvedSessionId ?? null,
-      enabled: schemaInjection.enabled,
-    });
-    if (schemaInjection.enabled) {
-      logTrace("chat.schema", {
-        sessionId: resolvedSessionId ?? null,
-        tables: schemaInjection.tableNames.join(",") || "(skeleton only)",
-        estimatedTokens: schemaInjection.estimatedTokens,
-      });
-    }
-
     await runTraced("chat-turn", async (span) => {
       span.update({
         input: lastUserQuery ?? null,
@@ -536,7 +580,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
               resolvedSessionId,
               send,
               span,
-              schemaInjection,
+              schemaSources,
             });
             fullContent = result.fullContent;
             toolRounds = result.toolRounds;
@@ -566,38 +610,35 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
       });
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "LLM request failed";
+    outcome = "error";
+    if (error instanceof ChatTurnError && error.partialContent) fullContent = error.partialContent;
+    errorMessage = error instanceof Error ? error.message : "LLM request failed";
     logTrace(
       "chat.error",
       {
         sessionId: resolvedSessionId ?? null,
-        error: truncate(message, 300),
+        error: truncate(errorMessage, 300),
         durationMs: Date.now() - chatStartedAt,
       },
       "error",
     );
-    if (assistantMessageId) {
-      updateMessage(assistantMessageId, {
-        content: fullContent || message,
-        status: "error",
-      });
-    }
-    send({ error: message });
+    send({ error: errorMessage });
   } finally {
-    // 结束标志：前端依赖 { done: true } 结束 loading 并解锁下一次对话。
-    // 无论成功还是失败都必须发送，否则客户端无法区分流是否结束。
+    // 终态只写一次。失败时保留已生成内容，不能被无条件的 complete 覆盖。
+    // { done: true } 无论成败都要发，否则客户端无法区分流是否结束。
     if (assistantMessageId) {
       updateMessage(assistantMessageId, {
-        content: fullContent,
-        status: "complete",
+        content: outcome === "error" ? fullContent || errorMessage : fullContent,
+        status: outcome,
       });
     }
     logDebugDuration("chat.done", chatStartedAt, {
       sessionId: resolvedSessionId ?? null,
       toolRounds,
       contentLength: fullContent.length,
+      status: outcome,
     });
-    send({ done: true });
+    send({ done: true, status: outcome });
     res.end();
   }
 });

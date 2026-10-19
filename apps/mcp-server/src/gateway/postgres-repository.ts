@@ -2,6 +2,7 @@ import {
   ExecutionLimitsSchema,
   ManagedToolSchema,
   PromptDefinitionSchema,
+  RemoteServiceConfigSchema,
 } from "@open-agent-tools/mcp-contracts";
 import { createPostgresPool, type Pool } from "@open-agent-tools/database/postgres";
 import { z } from "zod";
@@ -89,6 +90,7 @@ export class PostgresGatewayRepository implements GatewayRepository {
       version_status: string;
       image_digest: string | null;
       limits: unknown;
+      remote_config: unknown;
     }>(
       `SELECT service.id AS service_id,
               service.slug AS service_slug,
@@ -96,7 +98,8 @@ export class PostgresGatewayRepository implements GatewayRepository {
               version.id AS version_id,
               version.status AS version_status,
               version.image_digest,
-              version.limits
+              version.limits,
+              version.remote_config
        FROM mcp_services AS service
        JOIN mcp_service_versions AS version ON version.id = service.current_version_id
        WHERE service.slug = $1 AND service.status <> 'DELETED'`,
@@ -141,6 +144,10 @@ export class PostgresGatewayRepository implements GatewayRepository {
       versionStatus: VersionStatusSchema.parse(service.version_status),
       imageDigest: service.image_digest,
       limits: service.limits === null ? null : ExecutionLimitsSchema.parse(service.limits),
+      remote:
+        service.remote_config === null || service.remote_config === undefined
+          ? null
+          : RemoteServiceConfigSchema.parse(service.remote_config),
       tools: toolResult.rows.map((row) =>
         ManagedToolSchema.parse({
           name: row.name,

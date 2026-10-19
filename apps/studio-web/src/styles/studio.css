@@ -3458,9 +3458,25 @@ select:focus-visible {
   background: var(--studio-rag-soft);
 }
 
+.resource-section-icon.sql {
+  color: var(--studio-sql, #1677ff);
+  background: var(--studio-sql-soft, rgba(22, 119, 255, 0.12));
+}
+
 .resource-section-icon.mcp {
   color: var(--studio-mcp);
   background: var(--studio-mcp-soft);
+}
+
+.resource-default-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 500;
+  color: var(--studio-sql, #1677ff);
+  background: var(--studio-sql-soft, rgba(22, 119, 255, 0.12));
+  border-radius: 4px;
 }
 
 .resource-check-list {
@@ -6300,6 +6316,35 @@ select:focus-visible {
   flex-direction: column;
   gap: 10px;
   margin-top: 10px;
+}
+
+.chat-sql-result {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-sql-result .ant-card-head-title {
+  white-space: normal;
+}
+
+.chat-sql-result .ant-table-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chat-sql-result-details {
+  margin-top: 12px;
+}
+
+.chat-sql-result-details summary {
+  cursor: pointer;
+}
+
+.chat-sql-result-note {
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--studio-muted);
+  font-size: 12px;
 }
 
 .ui-blocks .ant-card,

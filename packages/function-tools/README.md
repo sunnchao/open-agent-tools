@@ -24,7 +24,7 @@ packages/function-tools/
 │   └── lib/packager.mjs    # 打包引擎（校验/剔除缓存/ZIP 验证）
 ├── dist/                   # 打包产物目录（已 gitignore，供 MCP 上传）
 ├── README.md               # 本文件：目录约定
-# （SQL 查询能力由 apps/server 内置 query_sql 提供，见 sqlQueryBuiltin.ts）
+# （Web Chat 按绑定数据源接入 SQL 问数模块，见 apps/server/src/function_tools/sqlQuestion.ts）
 └── <tool-name>/            # 每个工具一个子目录
     ├── mcp.json            # 服务清单：tools / prompts / limits / entry
     ├── package.json        # "type": "module"，入口 src/index.js

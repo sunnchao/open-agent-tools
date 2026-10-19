@@ -2,6 +2,7 @@ import type {
   ExecutionLimits,
   ManagedTool,
   PromptDefinition,
+  RemoteServiceConfig,
 } from "@open-agent-tools/mcp-contracts";
 
 export type McpScope = "mcp:connect" | "tools:list" | "tools:call" | "prompts:list" | "prompts:get";
@@ -36,6 +37,8 @@ export interface ManagedServiceSnapshot {
     "DRAFT" | "VALIDATING" | "BUILDING" | "READY" | "FAILED" | "PUBLISHED" | "SUPERSEDED";
   imageDigest: string | null;
   limits: ExecutionLimits | null;
+  /** REMOTE_MCP：上游第三方 MCP Server 接入配置；MANAGED_MCP 为 null。 */
+  remote?: RemoteServiceConfig | null;
   tools: ManagedTool[];
   prompts: PromptDefinition[];
 }

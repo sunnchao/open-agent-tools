@@ -13,6 +13,9 @@ import { querySources } from "./query-settings.js";
 import { buildCragController, graphRouter } from "./graph.js";
 import { GraphLifecycle } from "./lifecycle.js";
 import { RagAnalyticsStore, type QueryEventInput } from "./analytics.js";
+import { EvalRunner } from "./eval/runner.js";
+import { evalRouter } from "./eval/router.js";
+import { EvalStore } from "./eval/store.js";
 import { documentMetadataPatch, queryFeedback } from "./request-validation.js";
 // Langfuse 必须在创建 LangChain 模型（llm/embeddings）之前初始化并附加 CallbackHandler。
 import { initLangfuse, runTraced, withTraceAttributes } from "@open-agent-tools/observability";
@@ -69,6 +72,16 @@ const rag = new Rag({
   semanticThreshold: defaultSemanticThreshold,
 });
 const analytics = new RagAnalyticsStore(dbPath, Number(process.env.RAG_QUERY_RETENTION_DAYS) || 90);
+
+// 检索评估基准：评测集/运行记录与知识库同库，检索直接复用在线链路，保证评测与线上口径一致。
+const evalStore = new EvalStore(dbPath);
+const evalRunner = new EvalRunner({
+  store: evalStore,
+  retrieve: async (query, options) => {
+    const result = await rag.retrieve(query, { topK: options.topK, sources: options.sources });
+    return result.chunks.map((chunk) => ({ source: chunk.source, content: chunk.content }));
+  },
+});
 
 // 知识图谱：独立 SQLite 邻接表存储（与 rag 共用文档源，抽取输入为 rag 分块）。
 // 有 Key 时接入 LLM 抽取器（语义三元组）+ 实体名向量兜底；无 Key 自动回退规则抽取（句内共现）。
@@ -460,6 +473,9 @@ function summarize(value: string | null): string | null {
 
 // 知识图谱 API
 app.use("/api/graph", graphRouter({ rag, graph, lifecycle }));
+
+// 检索评估 API（评测集 CRUD + 运行 + 看板）
+app.use("/api/eval", evalRouter({ store: evalStore, runner: evalRunner }));
 
 app.listen(PORT, () => {
   console.log(`[rag-server] api listening on http://localhost:${PORT}`);

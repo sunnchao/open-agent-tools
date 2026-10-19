@@ -4,12 +4,14 @@ import {
   ManagedMcpManifestSchema,
   ManagedToolSchema,
   PromptDefinitionSchema,
+  RemoteServiceConfigSchema,
   ToolEnvironmentSchema,
   ToolEnvironmentUpdateSchema,
   renderPrompt,
   type ManagedMcpManifest,
   type ManagedTool,
   type PromptDefinition,
+  type RemoteServiceConfig,
   type RenderedPrompt,
 } from "@open-agent-tools/mcp-contracts";
 import { z } from "zod";
@@ -66,6 +68,14 @@ const UpdateServiceSchema = z
       .string()
       .regex(/^[a-z][a-z0-9-]{0,62}[a-z0-9]$|^[a-z]$/)
       .optional(),
+  })
+  .strict();
+
+const CreateRemoteServiceSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    slug: z.string().regex(/^[a-z][a-z0-9-]{0,62}[a-z0-9]$|^[a-z]$/),
+    remote: RemoteServiceConfigSchema,
   })
   .strict();
 
@@ -196,6 +206,7 @@ export class McpManagementService {
       artifactObjectKey: null,
       artifactSize: null,
       imageDigest: null,
+      remoteConfig: null,
       tools: [],
       prompts: [],
       revision: 1,
@@ -209,6 +220,64 @@ export class McpManagementService {
       mapRepositoryError(error);
     }
     return { service, draftVersion };
+  }
+
+  /**
+   * 注册第三方远程 MCP 服务：仅保存接入配置，无需构建。
+   * 版本直接置为 READY 并发布，从而使 Gateway 立即可以代理其 Tool。
+   */
+  async createRemoteService(
+    input: unknown,
+    actor: Actor,
+  ): Promise<{ service: McpServiceRecord; draftVersion: McpServiceVersionRecord }> {
+    requireAdmin(actor);
+    const parsed = parse(CreateRemoteServiceSchema, input);
+    const now = this.#now();
+    const remote: RemoteServiceConfig = parsed.remote;
+    const service: McpServiceRecord = {
+      id: this.#createId(),
+      name: parsed.name,
+      slug: parsed.slug,
+      type: "REMOTE_MCP",
+      status: "DRAFT",
+      currentVersionId: null,
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    };
+    const draftVersion: McpServiceVersionRecord = {
+      id: this.#createId(),
+      serviceId: service.id,
+      versionNumber: 1,
+      status: "READY",
+      runtime: null,
+      entry: null,
+      buildCommand: null,
+      limits: null,
+      artifactDigest: null,
+      artifactObjectKey: null,
+      artifactSize: null,
+      imageDigest: null,
+      remoteConfig: remote,
+      tools: [],
+      prompts: [],
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      await this.#repository.createManagedService(service, draftVersion);
+      const published = await this.#repository.publishVersion(
+        draftVersion.id,
+        draftVersion.revision,
+        now,
+      );
+      return { service: published.service, draftVersion: published.version };
+    } catch (error) {
+      mapRepositoryError(error);
+    }
   }
 
   async listServices(_actor: Actor): Promise<McpServiceRecord[]> {
@@ -793,6 +862,7 @@ export class McpManagementService {
       artifactObjectKey: version.artifactObjectKey,
       artifactSize: version.artifactSize,
       imageDigest: null,
+      remoteConfig: version.remoteConfig,
       tools: version.tools.map((tool) => ({ ...tool, id: this.#createId() })),
       prompts: version.prompts.map((prompt) => ({ ...prompt, id: this.#createId() })),
       revision: 1,

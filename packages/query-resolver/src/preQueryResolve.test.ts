@@ -48,7 +48,10 @@ test("resolveOrg 歧义返回候选", () => {
 });
 
 test("preQueryResolve 成功路径", async () => {
-  const r = await preQueryResolve("上海分上月差旅已通过", {}, { orgDirectory: dir });
+  const r = await preQueryResolve("上海分上月差旅已通过", {}, {
+    orgDirectory: dir,
+    now: new Date("2026-08-06T10:00:00+08:00"),
+  });
   assert.equal(r.ok, true);
   if (r.ok) {
     assert.equal(r.caliber.org.code, "SH-BRANCH");
@@ -78,7 +81,10 @@ test("preQueryResolve 越权组织 → 拒绝", async () => {
 });
 
 test("preQueryResolve 无时间关键词 → 默认上月", async () => {
-  const r = await preQueryResolve("北京分公司差旅", {}, { orgDirectory: dir });
+  const r = await preQueryResolve("北京分公司差旅", {}, {
+    orgDirectory: dir,
+    now: new Date("2026-08-06T10:00:00+08:00"),
+  });
   assert.equal(r.ok, true);
   if (r.ok) assert.equal(r.caliber.period.start, "2026-07-01");
 });

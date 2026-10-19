@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { logDebugDuration } from "./trace.js";
 
 export type Role = "user" | "assistant" | "system" | "tool";
-export type MessageStatus = "streaming" | "complete" | "error";
+export type MessageStatus = "streaming" | "complete" | "error" | "stopped";
 
 export interface Message {
   id: string;
@@ -124,6 +124,43 @@ export function openDb(path = getDbPath()): DatabaseSync {
       api_key_enc TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS metric_definitions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      category TEXT,
+      unit TEXT,
+      caliber_json TEXT NOT NULL,
+      source_id TEXT,
+      tables_json TEXT NOT NULL DEFAULT '[]',
+      synonyms_json TEXT NOT NULL DEFAULT '[]',
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'active',
+      version INTEGER NOT NULL DEFAULT 1,
+      owner TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_metric_definitions_category
+      ON metric_definitions(category);
+    CREATE INDEX IF NOT EXISTS idx_metric_definitions_status
+      ON metric_definitions(status);
+
+    CREATE TABLE IF NOT EXISTS caliber_configs (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      config_json TEXT NOT NULL,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_caliber_configs_default
+      ON caliber_configs(is_default) WHERE is_default = 1;
   `);
 
   migrateMessagesTable(db);
@@ -327,6 +364,40 @@ export function addMessage(
   const id = message.id ?? randomUUID();
   const createdAt = message.createdAt ?? Date.now();
   const status = message.status ?? "complete";
+
+  // 同 id 再插入（重新生成、断网重试、双击）不能抛 UNIQUE，也不能改写已有行。
+  // 会话或角色不一致时拒绝，避免把别的会话的消息吞掉。
+  const existing = database
+    .prepare(
+      `SELECT id, session_id AS sessionId, role, content, created_at AS createdAt, status,
+              tool_call_id AS toolCallId, tool_name AS toolName
+       FROM messages WHERE id = ?`,
+    )
+    .get(id) as
+    | {
+        id: string;
+        sessionId: string;
+        role: Role;
+        content: string;
+        createdAt: number;
+        status: MessageStatus | null;
+        toolCallId: string | null;
+        toolName: string | null;
+      }
+    | undefined;
+  if (existing) {
+    if (existing.sessionId !== sessionId || existing.role !== message.role) return null;
+    return {
+      id: existing.id,
+      role: existing.role,
+      content: existing.content,
+      createdAt: existing.createdAt,
+      status: existing.status ?? "complete",
+      ...(existing.toolCallId ? { tool_call_id: existing.toolCallId } : {}),
+      ...(existing.toolName ? { tool_name: existing.toolName } : {}),
+    };
+  }
+
   const position = nextPosition(sessionId);
 
   database

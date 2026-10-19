@@ -36,7 +36,7 @@ const mockSession: Session = {
     },
   ],
   updatedAt: 1001,
-  resources: { mcpTools: [], rag: { sources: [], topK: 5 } },
+  resources: { mcpTools: [], rag: { sources: [], topK: 5 }, sqlSources: [] },
 };
 
 describe("storage", () => {
@@ -83,6 +83,34 @@ describe("storage", () => {
     expect(loadSessions()[0]?.resources).toEqual({
       mcpTools: [],
       rag: { sources: [], topK: 5 },
+      sqlSources: [],
     });
+  });
+
+  it("restores SQL source selections and query result cards", () => {
+    const session: Session = {
+      ...mockSession,
+      resources: { ...mockSession.resources, sqlSources: ["ops", "analytics"] },
+      messages: [{
+        id: "sql-message",
+        role: "assistant",
+        content: "查询完成",
+        createdAt: 1002,
+        uiBlocks: [{
+          type: "sql_result",
+          props: { sourceName: "运营库", rows: [{ id: 1 }], auditId: "audit-1" },
+        }],
+      }],
+    };
+    saveSessions([session]);
+    expect(loadSessions()[0]).toEqual(session);
+  });
+
+  it("defaults SQL bindings for sessions created with only RAG and MCP resources", () => {
+    localStorage.setItem("open-agent-tools.chat.v1", JSON.stringify([{
+      ...mockSession,
+      resources: { mcpTools: [], rag: { sources: [], topK: 5 } },
+    }]));
+    expect(loadSessions()[0]?.resources.sqlSources).toEqual([]);
   });
 });

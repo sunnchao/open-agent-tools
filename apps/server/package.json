@@ -27,6 +27,7 @@
     "@modelcontextprotocol/sdk": "catalog:",
     "@open-agent-tools/database": "workspace:*",
     "@open-agent-tools/observability": "workspace:*",
+    "@open-agent-tools/query-resolver": "workspace:*",
     "@open-agent-tools/rag": "workspace:*",
     "@open-agent-tools/schema-catalog": "workspace:*",
     "chalk": "catalog:",

@@ -82,6 +82,7 @@ describe("parseSseBuffer", () => {
           resources: {
             mcpTools: [{ serviceSlug: "docs", toolName: "search" }],
             rag: { sources: ["guide.md"], topK: 3 },
+            sqlSources: ["ops", "analytics"],
           },
         },
       );
@@ -92,8 +93,32 @@ describe("parseSseBuffer", () => {
       resources: {
         mcpTools: [{ serviceSlug: "docs", toolName: "search" }],
         rag: { sources: ["guide.md"], topK: 3 },
+        sqlSources: ["ops", "analytics"],
       },
     });
+  });
+
+  it("calls onStopped and not onDone when the request is aborted", async () => {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const error = new Error("The operation was aborted");
+          error.name = "AbortError";
+          reject(error);
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const calls: string[] = [];
+    const controller = streamChat([{ role: "user", content: "hi" }], undefined, {
+      onDelta: () => calls.push("delta"),
+      onDone: () => calls.push("done"),
+      onError: () => calls.push("error"),
+      onStopped: () => calls.push("stopped"),
+    });
+    controller.abort();
+    await vi.waitFor(() => expect(calls).toEqual(["stopped"]));
   });
 
   it("calls onDone when the stream closes without a done event (fallback)", async () => {

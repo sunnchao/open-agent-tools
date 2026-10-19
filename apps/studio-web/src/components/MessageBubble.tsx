@@ -1,8 +1,9 @@
 import { Alert, Button, Card } from "antd";
 import { CopyOutlined, ReloadOutlined } from "../lib/icons.js";
-import type { Message, RagCitation, ToolCall, UiBlock } from "../types.js";
+import type { Message, RagCitation, SqlResultProps, ToolCall, UiBlock } from "../types.js";
 import { MarkdownView } from "./MarkdownView.js";
 import { FinancialReportCard } from "./FinancialReportCard.js";
+import { SqlResultCard } from "./SqlResultCard.js";
 import { ToolCalls } from "./ToolCalls.js";
 
 interface MessageBubbleProps {
@@ -37,7 +38,7 @@ function MessageActions({ message, onRegenerate }: { message: Message; onRegener
 }
 
 export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleProps) {
-  if (message.status === "error") {
+  if (message.status === "error" && message.content.trim().length === 0) {
     return (
       <div className="msg-row msg-row--assistant">
         <div className="msg-avatar msg-avatar--assistant">AI</div>
@@ -45,7 +46,7 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
           <Alert
             type="error"
             showIcon
-            title={message.content || "请求失败"}
+            title={message.errorMessage || "请求失败"}
             action={
               onRetry ? (
                 <Button size="small" danger onClick={onRetry}>
@@ -90,11 +91,16 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
   const hasUi = (message.uiBlocks?.length ?? 0) > 0;
   const hasCitations = (message.ragCitations?.length ?? 0) > 0;
   const isThinking = message.status === "streaming" && !hasContent && !hasToolCalls && !hasUi;
+  const isStopped = message.status === "stopped";
+  const isError = message.status === "error";
 
-  // 空消息不渲染（除了思考中状态）
-  if (!hasContent && !hasToolCalls && !hasUi && !hasCitations && !isThinking) return <></>;
+  // 空消息不渲染（思考中、已停止、出错除外，否则用户看不到终态）
+  if (!hasContent && !hasToolCalls && !hasUi && !hasCitations && !isThinking && !isStopped && !isError) {
+    return <></>;
+  }
 
-  const canRegenerate = message.status === "complete" && Boolean(onRegenerate);
+  const canRegenerate =
+    (message.status === "complete" || message.status === "stopped") && Boolean(onRegenerate);
 
   return (
     <div className="msg-row msg-row--assistant">
@@ -114,11 +120,27 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
               <UiBlocks blocks={message.uiBlocks} />
               <ToolCalls toolCalls={message.toolCalls} />
               {message.status === "streaming" && <span className="msg__caret" />}
+              {isError ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  title={message.errorMessage || "请求失败"}
+                  action={
+                    onRetry ? (
+                      <Button size="small" danger onClick={onRetry}>
+                        重试
+                      </Button>
+                    ) : undefined
+                  }
+                  style={{ marginTop: 8 }}
+                />
+              ) : null}
             </>
           )}
         </div>
         <div className="msg-meta">
           <span>{formatTime(message.createdAt)}</span>
+          {isStopped ? <span>已停止生成</span> : null}
           {canRegenerate ? (
             <Button
               type="link"
@@ -160,6 +182,9 @@ function UiBlocks({ blocks }: { blocks?: UiBlock[] }) {
   return (
     <div className="ui-blocks">
       {blocks.map((block, index) => {
+        if (block.type === "sql_result") {
+          return <SqlResultCard key={index} {...(block.props as SqlResultProps)} />;
+        }
         if (block.type !== "financial_report_card") return null;
         const reports = (
           block as Extract<UiBlock, { type: "financial_report_card" }>

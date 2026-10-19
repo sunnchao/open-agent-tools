@@ -16,6 +16,8 @@ import { observatoryRouter } from "./routes/observatory.js";
 import { schemaSourcesRouter } from "./routes/schemaSources.js";
 import { mcpGatewayRouter } from "./routes/mcpGateway.js";
 import { workflowsRouter } from "./routes/workflows.js";
+import { metricsRouter } from "./routes/metrics.js";
+import { caliberRouter } from "./routes/caliber.js";
 
 export function createApp(): express.Express {
   const app: express.Express = express();
@@ -58,6 +60,8 @@ export function createApp(): express.Express {
   app.use(mcpGatewayRouter);
   app.use(observatoryRouter);
   app.use(oneapiDemoRouter);
+  app.use(metricsRouter);
+  app.use(caliberRouter);
 
   return app;
 }

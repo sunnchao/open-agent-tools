@@ -12,7 +12,7 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
-import type { PromptDefinition } from "@open-agent-tools/mcp-contracts";
+import type { PromptDefinition, RemoteServiceConfig } from "@open-agent-tools/mcp-contracts";
 import type { AuditPayload } from "@open-agent-tools/observability/audit";
 import type { McpServiceVersionRecord } from "../types.js";
 
@@ -92,6 +92,8 @@ export const mcpServiceVersions = pgTable(
     artifactObjectKey: text("artifact_object_key"),
     artifactSize: integer("artifact_size"),
     imageDigest: text("image_digest"),
+    /** REMOTE_MCP：上游第三方 MCP Server 接入配置（transport/url/headers/token/timeout）。 */
+    remoteConfig: jsonb("remote_config").$type<RemoteServiceConfig>(),
     revision: integer("revision").notNull().default(1),
     createdAt: timestampColumn("created_at").notNull(),
     updatedAt: timestampColumn("updated_at").notNull(),

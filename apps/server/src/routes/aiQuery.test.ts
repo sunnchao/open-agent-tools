@@ -79,6 +79,18 @@ test("buildDataPayload：多行 → table，null 归一化，达上限标记 tru
   assert.equal(capped.truncated, true);
 });
 
+test("buildDataPayload：表格自动附带图表建议", () => {
+  const data = buildDataPayload([
+    { 月份: "2026-01", 金额: 10 },
+    { 月份: "2026-02", 金额: 20 },
+  ]);
+  assert.equal(data.type, "table");
+  if (data.type !== "table") return assert.fail("expected table");
+  assert.equal(data.chart?.type, "line");
+  assert.equal(data.chart?.x, "月份");
+  assert.deepEqual(data.chart?.series, ["金额"]);
+});
+
 test("emptyResultText 回显行业/模块口径", () => {
   assert.match(emptyResultText("煤炭", "/invoice-management/list"), /行业：煤炭/);
   assert.match(emptyResultText("煤炭", "/invoice-management/list"), /模块：发票/);

@@ -24,6 +24,8 @@ export interface BuildQueue {
       removeOnFail: number;
     },
   ): Promise<unknown>;
+  /** 队列各状态任务计数，供可观测性积压监控消费。 */
+  getJobCounts(): Promise<Record<string, number>>;
 }
 
 export class BullMqArtifactInspectionQueue implements ArtifactInspectionQueue, ArtifactBuildQueue {
@@ -39,6 +41,10 @@ export class BullMqArtifactInspectionQueue implements ArtifactInspectionQueue, A
 
   async enqueueBuild(job: ArtifactInspectionJob): Promise<void> {
     await this.#enqueue("build-tool", job);
+  }
+
+  async getJobCounts(): Promise<Record<string, number>> {
+    return this.#queue.getJobCounts();
   }
 
   async #enqueue(name: string, job: ArtifactInspectionJob): Promise<void> {

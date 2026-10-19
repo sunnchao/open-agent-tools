@@ -1,8 +1,19 @@
 import type { DraftQuery, DraftSlots } from "./types.js";
 import type { OrgDirectory, OrgEntry } from "./resolvers/orgResolver.js";
 
+/** 各槽位/意图的抽取正则，可由可配置口径注入覆盖 */
+export interface SlotPatterns {
+  date?: RegExp;
+  org?: RegExp;
+  expense?: RegExp;
+  status?: RegExp;
+  intent?: RegExp;
+}
+
 export interface SlotExtractorOptions {
   orgDirectory: OrgDirectory;
+  /** 可选模式注入，缺省沿用内置默认词表 */
+  patterns?: SlotPatterns;
   /**
    * 可选 LLM 抽取注入点：正则扫不到的维度交给模型补。
    * 模型产出会做"回原文校验"——片段必须能在原话里找到，否则视为编造丢弃。
@@ -43,16 +54,16 @@ export async function extractSlots(
 ): Promise<DraftQuery> {
   const slots: DraftSlots = { ...partial };
 
-  const dateM = utterance.match(DATE_RE);
+  const dateM = utterance.match(opts.patterns?.date ?? DATE_RE);
   if (dateM?.[1]) slots.date_raw = dateM[1];
 
   const orgM = utterance.match(buildOrgRegex(opts.orgDirectory));
   if (orgM?.[1]) slots.org_raw = orgM[1];
 
-  const expM = utterance.match(EXPENSE_RE);
+  const expM = utterance.match(opts.patterns?.expense ?? EXPENSE_RE);
   if (expM?.[1]) slots.expense_raw = expM[1];
 
-  const statusM = utterance.match(STATUS_RE);
+  const statusM = utterance.match(opts.patterns?.status ?? STATUS_RE);
   if (statusM?.[1]) slots.status_raw = statusM[1];
 
   if (opts.llmExtract) {
@@ -73,7 +84,9 @@ export async function extractSlots(
 
   // 出现费用/审批/报销类关键词即视为报销查询意图；缺哪个维度交给编排器反问
   const intent =
-    slots.expense_raw || slots.status_raw || INTENT_RE.test(utterance) ? "expense_query" : "other";
+    slots.expense_raw || slots.status_raw || (opts.patterns?.intent ?? INTENT_RE).test(utterance)
+      ? "expense_query"
+      : "other";
 
   return { intent, slots };
 }

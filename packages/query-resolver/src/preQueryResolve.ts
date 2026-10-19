@@ -7,11 +7,18 @@ import type {
   Period,
   TimeField,
 } from "./types.js";
-import { extractSlots } from "./extractSlots.js";
+import { extractSlots, type SlotPatterns } from "./extractSlots.js";
 import { resolveDate, shanghaiNow } from "./resolvers/dateResolver.js";
 import { resolveOrg, type OrgDirectory, type OrgValue } from "./resolvers/orgResolver.js";
-import { resolveExpense } from "./resolvers/expenseResolver.js";
-import { resolveStatus } from "./resolvers/statusResolver.js";
+import { resolveExpense, type ExpenseWordPattern } from "./resolvers/expenseResolver.js";
+import { resolveStatus, type StatusWordPattern } from "./resolvers/statusResolver.js";
+
+/** 可配置口径注入的抽取/解析模式：槽位正则 + 费用/状态词表 */
+export interface CaliberPatterns {
+  slots: SlotPatterns;
+  expense?: ExpenseWordPattern[];
+  status?: StatusWordPattern[];
+}
 
 export interface ResolveContext {
   orgDirectory: OrgDirectory;
@@ -22,6 +29,8 @@ export interface ResolveContext {
   timeFieldDefault?: TimeField;
   /** 授权可查的组织编码白名单；未配置则不限制 */
   authorizedOrgs?: string[];
+  /** 可配置口径模式，缺省沿用内置默认词表 */
+  patterns?: CaliberPatterns;
   /** 可选 LLM 抽取注入点，透传给 extractSlots 补正则漏掉的维度 */
   llmExtract?: (utterance: string, partial: DraftSlots) => DraftSlots | Promise<DraftSlots>;
 }
@@ -50,6 +59,7 @@ export async function preQueryResolve(
 ): Promise<ResolveOutcome> {
   const draft = await extractSlots(utterance, partial, {
     orgDirectory: ctx.orgDirectory,
+    patterns: ctx.patterns?.slots,
     llmExtract: ctx.llmExtract,
   });
 
@@ -67,8 +77,8 @@ export async function preQueryResolve(
 
   const dateR = resolveDate(draft.slots.date_raw, now, tz);
   const orgR = resolveOrg(draft.slots.org_raw, ctx.orgDirectory);
-  const expR = resolveExpense(draft.slots.expense_raw, ctx.expenseDefault ?? "TRAVEL");
-  const statusR = resolveStatus(draft.slots.status_raw, ctx.statusDefault ?? "APPROVED");
+  const expR = resolveExpense(draft.slots.expense_raw, ctx.expenseDefault ?? "TRAVEL", ctx.patterns?.expense);
+  const statusR = resolveStatus(draft.slots.status_raw, ctx.statusDefault ?? "APPROVED", ctx.patterns?.status);
 
   if (orgR.ambiguous) {
     const list = orgR.candidates.map((c) => `· ${c.label}`).join("\n");

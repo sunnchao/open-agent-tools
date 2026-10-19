@@ -21,6 +21,7 @@ test("resource bindings are trimmed, bounded, and deduplicated", () => {
     {
       mcpTools: [{ serviceSlug: "docs", toolName: "search" }],
       rag: { sources: ["guide.md"], topK: 20 },
+      sqlSources: [],
     },
   );
 });

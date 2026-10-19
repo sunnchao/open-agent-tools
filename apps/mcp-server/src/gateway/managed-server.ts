@@ -14,20 +14,26 @@ import {
 import type { ValidateFunction } from "ajv";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { AuthorizedService } from "./access.js";
+import { RemoteMcpProxy } from "./remote-proxy.js";
+import type { RemoteServiceConfig } from "@open-agent-tools/mcp-contracts";
 import type { ToolExecutor } from "./tool-executor.js";
 
 export interface ManagedMcpServerOptions {
   executor?: ToolExecutor;
   createRequestId?: () => string;
   now?: () => string;
+  /** 注入远程代理工厂便于测试；缺省用 RemoteMcpProxy。 */
+  createRemoteProxy?: (config: RemoteServiceConfig) => RemoteMcpProxy;
 }
 
 export function createManagedMcpServer(
   authorized: AuthorizedService,
   options: ManagedMcpServerOptions = {},
 ): McpServer {
+  const hasRemote = authorized.snapshot.remote !== null && authorized.snapshot.remote !== undefined;
+  const hasTools = authorized.snapshot.tools.length > 0 || hasRemote;
   const capabilities = {
-    ...(authorized.snapshot.tools.length === 0 ? {} : { tools: {} }),
+    ...(hasTools ? { tools: {} } : {}),
     ...(authorized.snapshot.prompts.length === 0 ? {} : { prompts: {} }),
   };
   const server = new McpServer(
@@ -38,7 +44,9 @@ export function createManagedMcpServer(
     { capabilities },
   );
 
-  if (authorized.snapshot.tools.length > 0) {
+  if (hasRemote) {
+    registerRemoteToolHandlers(server, authorized, options);
+  } else if (authorized.snapshot.tools.length > 0) {
     registerToolHandlers(server, authorized, options);
   }
 
@@ -168,6 +176,59 @@ function registerToolHandlers(
         throw new McpError(
           ErrorCode.InternalError,
           `Tool execution failed (requestId: ${requestId})`,
+        );
+      }
+    },
+  );
+}
+
+function registerRemoteToolHandlers(
+  server: McpServer,
+  authorized: AuthorizedService,
+  options: ManagedMcpServerOptions,
+): void {
+  const config = authorized.snapshot.remote;
+  if (!config) return;
+  const proxy = (options.createRemoteProxy ?? ((value) => new RemoteMcpProxy(value)))(config);
+
+  server.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    requireScope(authorized, "tools:list");
+    try {
+      const tools = await proxy.listTools();
+      return {
+        tools: tools
+          .filter((tool) => authorized.toolNames === null || authorized.toolNames.has(tool.name))
+          .map((tool) => ({
+            name: tool.name,
+            ...(tool.description === undefined ? {} : { description: tool.description }),
+            inputSchema: tool.inputSchema,
+          })),
+      };
+    } catch (error) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Remote Tool discovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
+    }
+  });
+
+  server.server.setRequestHandler(
+    CallToolRequestSchema,
+    async (request): Promise<CallToolResult> => {
+      requireScope(authorized, "tools:call");
+      if (authorized.toolNames !== null && !authorized.toolNames.has(request.params.name)) {
+        throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
+      }
+      try {
+        const result = await proxy.callTool(request.params.name, request.params.arguments ?? {});
+        return {
+          content: result.content as CallToolResult["content"],
+          ...(result.isError === true ? { isError: true } : {}),
+        };
+      } catch (error) {
+        throw new McpError(
+          ErrorCode.InternalError,
+          `Remote Tool execution failed: ${error instanceof Error ? error.message : "unknown error"}`,
         );
       }
     },

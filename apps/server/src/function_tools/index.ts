@@ -1,8 +1,13 @@
 // 预置函数定义
 
 import type { ChatCompletionFunctionTool } from "openai/resources/chat/completions/completions";
-import { QUERY_SQL_TOOL, executeQuerySql } from "./sqlQueryBuiltin.js";
+import { runChatSqlQuestion, sqlQuestionToolName, type SqlQuestionSource } from "./sqlQuestion.js";
+import type { HistoryTurn } from "../oneapiDemo/text2sql.js";
 
+/**
+ * 静态内置工具。SQL 问数工具不再固定注入（旧 query_sql 已删除），
+ * 改为按会话绑定的数据源接入 SQL 问数模块（见 buildSqlQuestionTools）。
+ */
 export const tools: ChatCompletionFunctionTool[] = [
   {
     type: "function",
@@ -21,7 +26,6 @@ export const tools: ChatCompletionFunctionTool[] = [
       },
     },
   },
-  QUERY_SQL_TOOL,
 ];
 
 export interface FinancialReport {
@@ -71,17 +75,18 @@ const reportsByStatus = new Map<string, FinancialReport[]>([
   ],
 ]);
 
-export async function executeTool(name: string, argsJson: string): Promise<ToolExecutionResult> {
-  const args = (argsJson ? JSON.parse(argsJson) : {}) as { status?: unknown; sql?: unknown };
+export interface ExecuteToolOptions {
+  schemaSources?: SqlQuestionSource[];
+  history?: HistoryTurn[];
+}
+
+export async function executeTool(
+  name: string,
+  argsJson: string,
+  options?: ExecuteToolOptions,
+): Promise<ToolExecutionResult> {
+  const args = (argsJson ? JSON.parse(argsJson) : {}) as { status?: unknown; question?: unknown };
   switch (name) {
-    case "query_sql": {
-      const result = await executeQuerySql(String(args.sql ?? ""));
-      if (!result.ok) throw new Error(result.error);
-      return {
-        ok: true,
-        ui: { type: "sql_result", content: JSON.stringify(result.rows), props: { rows: result.rows } },
-      };
-    }
     // 调用 get_financial_reports 工具获取报表数据
     case "get_financial_reports": {
       const status = typeof args.status === "string" ? args.status : "unknown";
@@ -95,8 +100,13 @@ export async function executeTool(name: string, argsJson: string): Promise<ToolE
         },
       };
     }
-    default:
-      throw new Error(`unknown tool: ${name}`);
+    default: {
+      const source = options?.schemaSources?.find(
+        (candidate) => sqlQuestionToolName(candidate.id) === name,
+      );
+      if (!source) throw new Error(`unknown tool: ${name}`);
+      return runChatSqlQuestion(source, args.question, options?.history);
+    }
   }
 }
 

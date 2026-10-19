@@ -2,6 +2,7 @@ import type {
   ExecutionLimits,
   ManagedTool,
   PromptDefinition,
+  RemoteServiceConfig,
 } from "@open-agent-tools/mcp-contracts";
 
 export type AdminRole = "admin" | "operator" | "auditor";
@@ -56,6 +57,8 @@ export interface McpServiceVersionRecord {
   artifactObjectKey: string | null;
   artifactSize: number | null;
   imageDigest: string | null;
+  /** REMOTE_MCP：上游第三方 MCP Server 接入配置；MANAGED_MCP 为 null。 */
+  remoteConfig: RemoteServiceConfig | null;
   tools: ConfiguredTool[];
   prompts: ConfiguredPrompt[];
   revision: number;

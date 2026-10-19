@@ -56,6 +56,42 @@ describe("sqlite chat storage", () => {
     assert.equal(loaded.title, "Hello from the first message tha…");
   });
 
+  it("returns the existing row when the same message id is inserted again", () => {
+    const session = createSession();
+    const first = addMessage(session.id, {
+      id: "msg-user-1",
+      role: "user",
+      content: "original",
+      status: "complete",
+    });
+    assert.ok(first);
+    const second = addMessage(session.id, {
+      id: "msg-user-1",
+      role: "user",
+      content: "rewritten",
+      status: "error",
+    });
+    assert.ok(second);
+    assert.equal(second.content, "original");
+    assert.equal(second.status, "complete");
+    const loaded = getSession(session.id);
+    assert.equal(loaded?.messages.length, 1);
+    assert.equal(loaded?.messages[0]?.content, "original");
+  });
+
+  it("rejects a reused message id that belongs to another session", () => {
+    const first = createSession();
+    const second = createSession();
+    const message = addMessage(first.id, { id: "shared-id", role: "user", content: "owned" });
+    assert.ok(message);
+    assert.equal(
+      addMessage(second.id, { id: "shared-id", role: "user", content: "stolen" }),
+      null,
+    );
+    assert.equal(getSession(second.id)?.messages.length, 0);
+    assert.equal(getSession(first.id)?.messages[0]?.content, "owned");
+  });
+
   it("updates assistant message content and status", () => {
     const session = createSession();
     const assistant = addMessage(session.id, {

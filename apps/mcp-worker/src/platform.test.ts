@@ -24,6 +24,7 @@ test("management queue jobs remain asynchronous and compatible with the backgrou
       assert.equal(options.jobId, data.buildJobId);
       queued.push({ name, data });
     },
+    getJobCounts: async () => ({}),
   };
   const processed: Array<{ kind: string; data: ArtifactInspectionJob }> = [];
   const processor = createBuildQueueProcessor({

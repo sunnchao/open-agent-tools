@@ -27,6 +27,7 @@ export function useChatStream({
 }: UseChatStreamArgs) {
   const [isStreaming, setIsStreaming] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
+  const activeRef = useRef<{ sessionId: string; assistantId: string } | null>(null);
 
   const send = useCallback(
     (
@@ -49,6 +50,7 @@ export function useChatStream({
       });
 
       setIsStreaming(true);
+      activeRef.current = { sessionId, assistantId: localAssistantId };
 
       controllerRef.current = streamChat(
         messages,
@@ -58,6 +60,9 @@ export function useChatStream({
             if (id === assistantId) return;
             const prevId = assistantId;
             assistantId = id;
+            if (activeRef.current?.sessionId === sessionId) {
+              activeRef.current = { sessionId, assistantId: id };
+            }
             updateMessage(sessionId, prevId, { id });
           },
           onDelta: (delta) => {
@@ -88,11 +93,20 @@ export function useChatStream({
               assistantId = meta.assistantMessageId;
             }
             updateMessage(sessionId, assistantId, { status: "complete" });
+            activeRef.current = null;
             setIsStreaming(false);
             controllerRef.current = null;
           },
           onError: (error) => {
-            updateMessage(sessionId, assistantId, { status: "error", content: error });
+            // 保留已收到的 partial，错误文案单独展示。
+            updateMessage(sessionId, assistantId, { status: "error", errorMessage: error });
+            activeRef.current = null;
+            setIsStreaming(false);
+            controllerRef.current = null;
+          },
+          onStopped: () => {
+            // stop() 已经写过 stopped。这里只清引用，避免同一次停止写两次。
+            activeRef.current = null;
             setIsStreaming(false);
             controllerRef.current = null;
           },
@@ -109,10 +123,16 @@ export function useChatStream({
   );
 
   const stop = useCallback(() => {
+    const active = activeRef.current;
     controllerRef.current?.abort();
     controllerRef.current = null;
+    activeRef.current = null;
+    // 服务端 abort 接线属于 P0-1。这里只结束本地假转圈，保留已生成内容。
+    if (active) {
+      updateMessage(active.sessionId, active.assistantId, { status: "stopped" });
+    }
     setIsStreaming(false);
-  }, []);
+  }, [updateMessage]);
 
   return { isStreaming, send, stop };
 }

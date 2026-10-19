@@ -25,6 +25,7 @@ import {
   type SchemaSemanticProfile,
   type SchemaSourceWithSecret,
 } from "../schemaSources/store.js";
+import { selectTablesSemantically, semanticSelectorEnabled } from "../schemaSources/semantic.js";
 import {
   createQueryAudit,
   type QueryProgressEvent,
@@ -114,6 +115,7 @@ export async function selectTables(
   catalog: SchemaCatalog,
   profile: SchemaSemanticProfile,
   graph: Awaited<ReturnType<typeof getSchemaGraph>>,
+  sourceId?: string,
 ): Promise<string[]> {
   const names = catalog.tables.map((table) => table.table.name);
   const directHits = matchTableNames(question, names, profile);
@@ -130,6 +132,12 @@ export async function selectTables(
   }
   const explicit = unique([...directHits, ...commentHits]);
   if (explicit.length > 0) return explicit.slice(0, 4);
+
+  // 语义选表（SCHEMA_SEMANTIC_SELECTOR 启用时）：RAG 召回候选表，命中即返回。
+  if (sourceId && semanticSelectorEnabled()) {
+    const semantic = await selectTablesSemantically(sourceId, question, catalog, 4);
+    if (semantic.length > 0) return semantic;
+  }
 
   const retrieved = await graph.retrieve(question, { maxHops: 1, maxNodes: 24, seedLimit: 8 });
   const fromGraph = (retrieved.seeds ?? [])
@@ -321,7 +329,7 @@ export async function runSchemaText2Sql(
 
     audit.start("retrieval", { question, history });
     const lookup = [question, ...history.map((turn) => turn.content)].join("\n");
-    result.selectedTables = await selectTables(lookup, catalog, source.semanticProfile, graph);
+    result.selectedTables = await selectTables(lookup, catalog, source.semanticProfile, graph, source.id);
     result.schemaPrompt = renderSelectedSchema(
       catalog,
       result.selectedTables,
@@ -332,7 +340,11 @@ export async function runSchemaText2Sql(
     result.seeds = graphView.seeds.map((seed) => seed.name);
     result.formattedGraph = graphView.formatted;
     result.intent = source.semanticProfile === "oneapi" ? detectIntent(question) : undefined;
-    const rowLimit = detectRowLimitIntent(lookup);
+    const rowLimit = detectRowLimitIntent(
+      [...history.filter((turn) => turn.role === "user").map((turn) => turn.content), question].join(
+        "\n",
+      ),
+    );
     result.intent = [result.intent, `row_limit:${rowLimit.kind}`].filter(Boolean).join(",");
     audit.patch({ selectedTables: result.selectedTables, rowLimit });
     audit.complete("retrieval", `选中 ${result.selectedTables.length} 张相关表`, {

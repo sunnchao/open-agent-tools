@@ -6,19 +6,30 @@ const MAP: { status: ApprovalStatus; keys: string[] }[] = [
   { status: "PENDING", keys: ["审批中", "待审批", "待审核", "pending"] },
 ];
 
-/** 审批状态解析。未提供默认 APPROVED。 */
-export function resolveStatus(raw: string | undefined, fallback: ApprovalStatus = "APPROVED"): ResolverResult<ApprovalStatus> {
+/** 可配置口径的审批状态关键词：value 命中任一 word 即解析为该状态 */
+export interface StatusWordPattern {
+  value: ApprovalStatus;
+  words: string[];
+}
+
+/** 审批状态解析。未提供默认 APPROVED。patterns 提供时按配置词表解析。 */
+export function resolveStatus(
+  raw: string | undefined,
+  fallback: ApprovalStatus = "APPROVED",
+  patterns?: StatusWordPattern[],
+): ResolverResult<ApprovalStatus> {
   if (!raw) {
     return { value: fallback, candidates: [], ambiguous: false, missing: false, note: `未提供状态，默认 ${fallback}` };
   }
-  for (const m of MAP) {
-    if (m.keys.some((k) => raw.includes(k))) {
+  const rules = patterns?.length ? patterns : MAP.map((m) => ({ value: m.status, words: m.keys }));
+  for (const m of rules) {
+    if (m.words.some((k) => raw.includes(k))) {
       return {
-        value: m.status,
-        candidates: [{ label: m.status, value: m.status, score: 1 }],
+        value: m.value,
+        candidates: [{ label: m.value, value: m.value, score: 1 }],
         ambiguous: false,
         missing: false,
-        note: `命中 ${m.status}`,
+        note: `命中 ${m.value}`,
       };
     }
   }

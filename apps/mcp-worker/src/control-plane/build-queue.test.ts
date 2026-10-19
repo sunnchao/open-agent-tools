@@ -21,6 +21,7 @@ test("ZIP-001 dispatches an idempotent artifact inspection job", async () => {
     add: async (...args) => {
       calls.push(args);
     },
+    getJobCounts: async () => ({}),
   };
 
   await new BullMqArtifactInspectionQueue(queue).enqueueInspection(job);
@@ -46,6 +47,7 @@ test("BLD-001 dispatches a durable Tool build job with the same idempotency key"
     add: async (...args) => {
       calls.push(args);
     },
+    getJobCounts: async () => ({}),
   };
 
   await new BullMqArtifactInspectionQueue(queue).enqueueBuild(job);

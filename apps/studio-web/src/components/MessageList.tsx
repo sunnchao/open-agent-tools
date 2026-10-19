@@ -81,7 +81,9 @@ export function MessageList({
               message={m}
               onRetry={m.status === "error" ? onRetry : undefined}
               onRegenerate={
-                m.role === "assistant" && m.status === "complete" && onRegenerate
+                m.role === "assistant" &&
+                (m.status === "complete" || m.status === "stopped") &&
+                onRegenerate
                   ? () => onRegenerate(m.id)
                   : undefined
               }

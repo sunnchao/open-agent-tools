@@ -5,6 +5,10 @@ import type { FinancialReport } from "./index.js";
 
 describe("function calling — 获取财务报表数据", () => {
   describe("tool schema definition", () => {
+    it("does not expose the removed query_sql tool", async () => {
+      assert.equal(tools.some((tool) => tool.function.name === "query_sql"), false);
+      await assert.rejects(executeTool("query_sql", '{"sql":"SELECT 1"}'), /unknown tool/);
+    });
     it("exports a non-empty tools array", () => {
       assert.ok(Array.isArray(tools));
       assert.ok(tools.length > 0);

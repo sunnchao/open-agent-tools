@@ -931,4 +931,57 @@ describe("MCP management service", () => {
       (error: unknown) => error instanceof ManagementError && error.code === "FORBIDDEN",
     );
   });
+
+  it("registers a REMOTE_MCP service and publishes a READY config-only version", async () => {
+    const remote = {
+      transport: "streamable-http" as const,
+      url: "https://mcp.example.com/mcp",
+      token: "secret-token",
+      timeoutMs: 15_000,
+    };
+    const created = await management.createRemoteService(
+      { name: "Upstream search", slug: "upstream-search", remote },
+      admin,
+    );
+
+    assert.equal(created.service.type, "REMOTE_MCP");
+    assert.equal(created.service.status, "ACTIVE");
+    assert.equal(created.service.currentVersionId, created.draftVersion.id);
+    assert.equal(created.draftVersion.status, "PUBLISHED");
+    assert.equal(created.draftVersion.imageDigest, null);
+    assert.deepEqual(created.draftVersion.tools, []);
+    assert.deepEqual(created.draftVersion.prompts, []);
+    assert.deepEqual(created.draftVersion.remoteConfig, remote);
+
+    // 落库后快照仍可读回 remote 配置，供 Gateway 透传。
+    const stored = await repository.getVersion(created.draftVersion.id);
+    assert.deepEqual(stored?.remoteConfig, remote);
+  });
+
+  it("rejects non-admin actors and invalid remote configuration", async () => {
+    const validRemote = { transport: "streamable-http", url: "https://x.example.com/mcp" };
+    await assert.rejects(
+      management.createRemoteService({ name: "Remote", slug: "remote", remote: validRemote }, operator),
+      (error: unknown) => error instanceof ManagementError && error.code === "FORBIDDEN",
+    );
+
+    for (const remote of [
+      { transport: "stdio", url: "https://x.example.com/mcp" },
+      { transport: "streamable-http", url: "not-a-url" },
+      { transport: "streamable-http", url: "https://x.example.com/mcp", unknown: true },
+    ]) {
+      await assert.rejects(
+        management.createRemoteService({ name: "Remote", slug: "remote", remote }, admin),
+        (error: unknown) => error instanceof ManagementError && error.code === "VALIDATION_ERROR",
+      );
+    }
+
+    await assert.rejects(
+      management.createRemoteService(
+        { name: "Remote", slug: "Not A Slug", remote: validRemote },
+        admin,
+      ),
+      (error: unknown) => error instanceof ManagementError && error.code === "VALIDATION_ERROR",
+    );
+  });
 });

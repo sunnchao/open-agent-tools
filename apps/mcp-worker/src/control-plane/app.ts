@@ -15,6 +15,7 @@ import type { ArtifactBuildQueue } from "./build-queue.js";
 import type { ClientAccessService } from "./client-access.js";
 import type { McpScope } from "./client-access-repository.js";
 import { ManagementError, type McpManagementService } from "./management.js";
+import type { ObservabilityService } from "./observability/overview.js";
 import type { Actor } from "./types.js";
 
 export interface ControlPlaneAppOptions {
@@ -23,6 +24,7 @@ export interface ControlPlaneAppOptions {
   buildQueue?: ArtifactBuildQueue;
   clientAccess?: ClientAccessService;
   audit?: AuditService;
+  observability?: ObservabilityService;
   authenticate?: (request: Request) => Actor | null | Promise<Actor | null>;
 }
 
@@ -192,12 +194,31 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
     });
   }
 
+  if (options.observability) {
+    app.get("/api/admin/mcp/observability/overview", async (_request, response) => {
+      response.json(await options.observability!.overview(actorFrom(response)));
+    });
+  }
+
   app.post("/api/admin/mcp/services", async (request, response) => {
-    const body = request.body as { name?: string; slug?: string; type?: string };
+    const body = request.body as {
+      name?: string;
+      slug?: string;
+      type?: string;
+      remote?: unknown;
+    };
+    if (body.type === "REMOTE_MCP") {
+      const created = await management.createRemoteService(
+        { name: body.name ?? "", slug: body.slug ?? "", remote: body.remote },
+        actorFrom(response),
+      );
+      response.status(201).json(created);
+      return;
+    }
     if (body.type !== "MANAGED_MCP") {
       throw new ManagementError(
         "VALIDATION_ERROR",
-        "This endpoint currently requires type MANAGED_MCP",
+        "Service type must be MANAGED_MCP or REMOTE_MCP",
       );
     }
     const created = await management.createManagedService(

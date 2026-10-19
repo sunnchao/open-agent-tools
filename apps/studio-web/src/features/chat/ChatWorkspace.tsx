@@ -165,10 +165,11 @@ export function ChatWorkspace() {
         .slice(0, userIdx + 1)
         .filter((m) => m.status !== "error")
         .map((m) => ({ role: m.role, content: m.content }));
+      // user 行已经落库。重传 id 会触发 messages.id 唯一约束，重新生成直接 500。
       send(
         activeSession.id,
         history,
-        { id: userMsg.id, content: userMsg.content },
+        undefined,
         activeSession.resources,
         {
           providerId: activeSession.providerId ?? providers[0]?.id,

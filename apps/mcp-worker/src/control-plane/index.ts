@@ -8,6 +8,13 @@ import { createPostgresClientAccessRepository } from "./db/postgres-client-acces
 import { createPostgresAuditRepository } from "./db/postgres-audit-repository.js";
 import { createPostgresRepository } from "./db/postgres-repository.js";
 import { McpManagementService } from "./management.js";
+import { createAlertLoop } from "./observability/alerts.js";
+import { ObservabilityService } from "./observability/overview.js";
+import {
+  DEFAULT_QUEUE_THRESHOLDS,
+  EMPTY_QUEUE_SNAPSHOT,
+  QueueMonitor,
+} from "./observability/queue-monitor.js";
 import { createS3ArtifactStorage } from "./s3-artifact-storage.js";
 
 loadEnv();
@@ -16,6 +23,13 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+function numberEnvironment(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 const databaseUrl = requiredEnvironment("DATABASE_URL");
@@ -41,12 +55,35 @@ const artifactUploads = new ArtifactUploadService(
   artifactStorage.storage,
   inspectionQueue.queue,
 );
+const queueMonitor = new QueueMonitor(inspectionQueue.queue, {
+  backlogWarning: numberEnvironment("OBSERVABILITY_QUEUE_BACKLOG_WARNING", DEFAULT_QUEUE_THRESHOLDS.backlogWarning),
+  backlogCritical: numberEnvironment("OBSERVABILITY_QUEUE_BACKLOG_CRITICAL", DEFAULT_QUEUE_THRESHOLDS.backlogCritical),
+});
+const observability = new ObservabilityService({ management, audit, queueMonitor });
+const alertLoop = createAlertLoop({
+  collect: async () => {
+    const overview = await observability.overview({ id: "system", role: "admin" });
+    return { queue: overview.queue ?? EMPTY_QUEUE_SNAPSHOT, audit: overview.audit };
+  },
+  intervalMs: numberEnvironment("OBSERVABILITY_ALERT_INTERVAL_MS", 30_000),
+  sinks: [
+    {
+      publish(alerts) {
+        for (const alert of alerts) {
+          console.error(`[observability][${alert.severity}] ${alert.message}`);
+        }
+      },
+    },
+  ],
+});
+alertLoop.start();
 const app = createControlPlaneApp({
   management,
   clientAccess,
   artifactUploads,
   buildQueue: inspectionQueue.queue,
   audit,
+  observability,
 });
 const port = Number(process.env.PORT) || 4200;
 const server = app.listen(port, () => {
@@ -54,6 +91,7 @@ const server = app.listen(port, () => {
 });
 
 async function shutdown(): Promise<void> {
+  alertLoop.stop();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
