@@ -29,9 +29,7 @@ export function NodeTestResultPanel({
         </Typography.Paragraph>
         {!pending ? (
           <Button
-            className="studio-button run"
-            type="text"
-            htmlType="button"
+            type="primary"
             onClick={onTest}
             disabled={disabled}
           >
@@ -125,9 +123,7 @@ export function NodeTestResultPanel({
         />
       </Flex>
       <Button
-        className="studio-button secondary full-width node-test-rerun"
-        type="text"
-        htmlType="button"
+        block
         onClick={onTest}
         disabled={pending || disabled}
       >

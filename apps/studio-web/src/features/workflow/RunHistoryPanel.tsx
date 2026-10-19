@@ -126,9 +126,6 @@ export function RunHistoryPanel({
           />
         </Flex>
         <Button
-          className="studio-button secondary"
-          type="text"
-          htmlType="button"
           disabled={loading || detailLoading}
           onClick={() => setRevision((value) => value + 1)}
         >

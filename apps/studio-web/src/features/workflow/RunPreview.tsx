@@ -75,9 +75,9 @@ export function RunPreview({
       </Typography.Paragraph>
       {!readOnly && (
         <Button
-          className={`studio-button run full-width${running ? " is-stop" : ""}`}
-          type="text"
-          htmlType="button"
+          block
+          type="primary"
+          danger={running}
           disabled={runDisabled}
           onClick={running ? onStop : onRun}
         >

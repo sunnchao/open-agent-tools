@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { Alert, Button, Flex, Form, Input, Modal, Tooltip, Typography } from "antd";
 import { prepareRunInputs, type RunVariable } from "@open-agent-tools/workflow-contracts";
+import { useState } from "react";
 import { CloseOutlined, PlayCircleOutlined } from "../../lib/icons.js";
 
 export function RunInputDialog({
@@ -35,36 +36,34 @@ export function RunInputDialog({
     if (!next.length) onRun(result.input);
   };
   return (
-    <div className="settings-modal-backdrop" role="presentation">
-      <div
-        className="run-input-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="run-input-title"
-      >
-        <div className="settings-modal-head">
-          <div>
-            <span className="settings-kicker">RUN INPUTS</span>
-            <h2 id="run-input-title">填写运行变量</h2>
-          </div>
-          <button type="button" aria-label="关闭" onClick={onCancel}>
-            <CloseOutlined />
-          </button>
-        </div>
-        <p className="muted-copy">参数来自开始节点的入口声明。留空时使用默认值。</p>
-        <div className="run-input-fields">
-          {variables.map((variable, index) => (
-            <label className="studio-field" key={variable.name}>
-              <span>
-                {variable.name}
-                <small>
-                  {variable.type} · {variable.required !== false ? "必填" : "可选"}
-                </small>
-              </span>
-              <input
+    <Modal
+      open
+      centered
+      title="填写运行变量"
+      okText="开始运行"
+      cancelText="取消"
+      okButtonProps={{ icon: <PlayCircleOutlined /> }}
+      onCancel={onCancel}
+      onOk={submit}
+    >
+      <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          参数来自开始节点的入口声明。留空时使用默认值。RUN INPUTS
+        </Typography.Text>
+        <Tooltip title="关闭">
+          <Button type="text" size="small" icon={<CloseOutlined />} aria-label="关闭" onClick={onCancel} />
+        </Tooltip>
+      </Flex>
+      <Form layout="vertical" preserve={false}>
+        {variables.map((variable) => (
+          <Form.Item
+            key={variable.name}
+            label={`${variable.name} · ${variable.type} · ${variable.required !== false ? "必填" : "可选"}`}
+            style={{ marginBottom: 12 }}
+          >
+            <Input
                 value={values[variable.name] ?? ""}
                 onChange={(event) => setValues({ ...values, [variable.name]: event.target.value })}
-                autoFocus={index === 0}
                 placeholder={
                   variable.defaultValue !== undefined
                     ? `默认：${typeof variable.defaultValue === "string" ? variable.defaultValue : JSON.stringify(variable.defaultValue)}`
@@ -73,23 +72,10 @@ export function RunInputDialog({
                       : "输入 JSON 值"
                 }
               />
-            </label>
-          ))}
-        </div>
-        {errors.length > 0 && (
-          <div className="node-resource-state is-error" role="alert">
-            {errors.join("；")}
-          </div>
-        )}
-        <div className="settings-modal-actions">
-          <button className="studio-button secondary" type="button" onClick={onCancel}>
-            取消
-          </button>
-          <button className="studio-button run" type="button" onClick={submit}>
-            <PlayCircleOutlined /> 开始运行
-          </button>
-        </div>
-      </div>
-    </div>
+          </Form.Item>
+        ))}
+      </Form>
+      {errors.length > 0 ? <Alert type="error" showIcon message={errors.join("；")} role="alert" /> : null}
+    </Modal>
   );
 }

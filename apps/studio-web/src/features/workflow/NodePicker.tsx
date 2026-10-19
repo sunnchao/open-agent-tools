@@ -1,8 +1,9 @@
+import { Button, Empty, Flex, Input, List, Modal, Tooltip, Typography } from "antd";
 import { useState } from "react";
-import { CloseOutlined, SearchOutlined } from "../../lib/icons.js";
 import { iconByKind, palette } from "./palette.js";
 import type { NodeKind } from "./model.js";
 import type { NodePickerState } from "./types.js";
+import { CloseOutlined } from "../../lib/icons.js";
 
 export function NodePicker({
   state,
@@ -33,110 +34,107 @@ export function NodePicker({
         .includes(normalized)
     );
   });
-  const left = Math.max(12, Math.min(state.anchor.x - 170, window.innerWidth - 352));
-  const top =
-    state.anchor.y + 438 > window.innerHeight
-      ? Math.max(12, state.anchor.y - 430)
-      : state.anchor.y + 12;
+  const title = state.sourceNodeId ? "选择下一节点" : state.edgeId ? "插入节点" : "添加节点";
+  const hint = state.sourceNodeId
+    ? "选择后自动连接当前分支"
+    : state.edgeId
+      ? "原连接会自动拆分"
+      : "添加到当前画布";
   return (
-    <div
-      className="workflow-node-picker-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.currentTarget === event.target) onClose();
-      }}
+    <Modal
+      open
+      centered
+      title={title}
+      footer={null}
+      onCancel={onClose}
+      width={520}
     >
-      <section
-        className="workflow-node-picker"
-        role="dialog"
-        aria-modal="true"
-        aria-label={state.sourceNodeId ? "选择下一节点" : state.edgeId ? "插入节点" : "添加节点"}
-        style={{ left, top }}
-      >
-        <header>
-          <div>
-            <b>{state.sourceNodeId ? "选择下一节点" : state.edgeId ? "插入节点" : "添加节点"}</b>
-            <small>
-              {state.sourceNodeId
-                ? "选择后自动连接当前分支"
-                : state.edgeId
-                  ? "原连接会自动拆分"
-                  : "添加到当前画布"}
-            </small>
-          </div>
-          <button type="button" aria-label="关闭节点选择器" onClick={onClose}>
-            <CloseOutlined />
-          </button>
-        </header>
-        <label className="node-picker-search">
-          <SearchOutlined />
-          <input
-            autoFocus
-            value={query}
-            placeholder="搜索节点"
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") onClose();
-              if (event.key === "Enter") {
-                if (state.sourceNodeId && existingChoices[0] && onChooseExisting)
-                  onChooseExisting(existingChoices[0].id);
-                else {
-                  const first = choices.find(
-                    (item) => item.kind !== "start" || (!hasStart && !state.sourceNodeId),
-                  );
-                  if (first) onChoose(first.kind);
-                }
-              }
-            }}
-          />
-        </label>
-        <div className="node-picker-list">
-          {state.sourceNodeId && existingNodes.length > 0 && (
-            <>
-              <span className="node-picker-section-label">已有节点</span>
-              {existingChoices.map((node) => (
-                <button
-                  type="button"
-                  className={`kind-${node.kind ?? "input"}`}
-                  key={node.id}
-                  onClick={() => onChooseExisting?.(node.id)}
-                >
-                  <span aria-hidden="true">{iconByKind[node.kind ?? "input"]}</span>
-                  <span>
-                    <b>{node.label}</b>
-                    <small>{node.id}</small>
-                  </span>
-                  <code>连接</code>
-                </button>
-              ))}
-              <span className="node-picker-section-label">新建节点</span>
-            </>
-          )}
-          {choices.map((item) => {
-            const disabled = item.kind === "start" && (hasStart || Boolean(state.sourceNodeId));
-            return (
-              <button
-                type="button"
-                key={item.kind}
-                className={`kind-${item.kind}`}
-                disabled={disabled}
-                title={disabled ? "工作流只能有一个开始节点" : item.description}
-                onClick={() => onChoose(item.kind)}
+      <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {hint}
+        </Typography.Text>
+        <Tooltip title="关闭节点选择器">
+          <Button type="text" size="small" icon={<CloseOutlined />} aria-label="关闭节点选择器" onClick={onClose} />
+        </Tooltip>
+      </Flex>
+      <Input.Search
+        autoFocus
+        allowClear
+        value={query}
+        placeholder="搜索节点"
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            if (state.sourceNodeId && existingChoices[0] && onChooseExisting)
+              onChooseExisting(existingChoices[0].id);
+            else {
+              const first = choices.find(
+                (item) => item.kind !== "start" || (!hasStart && !state.sourceNodeId),
+              );
+              if (first) onChoose(first.kind);
+            }
+          }
+        }}
+        style={{ marginBottom: 12 }}
+      />
+      {state.sourceNodeId && existingNodes.length > 0 ? (
+        <>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            已有节点
+          </Typography.Text>
+          <List
+            size="small"
+            style={{ marginBottom: 12 }}
+            dataSource={existingChoices}
+            renderItem={(node) => (
+              <List.Item
+                actions={[<Button key="connect" type="link" size="small" onClick={() => onChooseExisting?.(node.id)}>连接</Button>]}
               >
-                <span>{iconByKind[item.kind]}</span>
-                <span>
-                  <b>{item.label}</b>
-                  <small>{item.description}</small>
-                </span>
-                <code>{item.group}</code>
-              </button>
-            );
-          })}
-          {choices.length === 0 && existingChoices.length === 0 ? (
-            <div className="node-picker-empty">没有匹配的节点</div>
-          ) : null}
-        </div>
-      </section>
-    </div>
+                <List.Item.Meta
+                  avatar={<span aria-hidden="true">{iconByKind[node.kind ?? "input"]}</span>}
+                  title={node.label}
+                  description={node.id}
+                />
+              </List.Item>
+            )}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            新建节点
+          </Typography.Text>
+        </>
+      ) : null}
+      <List
+        size="small"
+        dataSource={choices}
+        renderItem={(item) => {
+          const disabled = item.kind === "start" && (hasStart || Boolean(state.sourceNodeId));
+          return (
+            <List.Item
+              actions={[
+                <Button
+                  key="add"
+                  type="link"
+                  size="small"
+                  disabled={disabled}
+                  title={disabled ? "工作流只能有一个开始节点" : item.description}
+                  onClick={() => onChoose(item.kind)}
+                >
+                  {item.group}
+                </Button>,
+              ]}
+            >
+              <List.Item.Meta
+                avatar={<span aria-hidden="true">{iconByKind[item.kind]}</span>}
+                title={item.label}
+                description={item.description}
+              />
+            </List.Item>
+          );
+        }}
+      />
+      {choices.length === 0 && existingChoices.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的节点" />
+      ) : null}
+    </Modal>
   );
 }
