@@ -778,7 +778,7 @@ export function ClientsView({ services }: { services: McpService[] }) {
                   rowKey="id"
                   columns={keyColumns}
                   dataSource={keys}
-                  pagination={false}
+                  pagination={keys.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
                   locale={{
                     emptyText: (
                       <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 API Key" />

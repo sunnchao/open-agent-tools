@@ -219,6 +219,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   onClick={handleSend}
                   disabled={!canSend}
                   title="发送（Enter）"
+                  aria-label="发送消息"
                 />
               )}
             </div>

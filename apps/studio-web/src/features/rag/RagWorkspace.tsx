@@ -418,7 +418,11 @@ export function RagWorkspace() {
                 rowKey="source"
                 columns={docColumns}
                 dataSource={stats?.sources ?? []}
-                pagination={false}
+                pagination={
+                  (stats?.sources.length ?? 0) > 10
+                    ? { pageSize: 10, showSizeChanger: false }
+                    : false
+                }
                 showHeader={false}
                 onRow={(record) => ({
                   onClick: () => {

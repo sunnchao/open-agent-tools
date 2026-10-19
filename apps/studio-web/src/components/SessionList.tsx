@@ -129,6 +129,7 @@ export function SessionList({
                     size="small"
                     icon={<EditOutlined />}
                     title="重命名"
+                    aria-label="重命名会话"
                     onClick={() => startEdit(s)}
                   />
                   <Popconfirm
@@ -138,7 +139,14 @@ export function SessionList({
                     okButtonProps={{ danger: true }}
                     onConfirm={() => onDelete(s.id)}
                   >
-                    <Button type="text" size="small" danger icon={<DeleteOutlined />} title="删除" />
+                    <Button
+                      type="text"
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      title="删除"
+                      aria-label="删除会话"
+                    />
                   </Popconfirm>
                 </Space>
               </div>
