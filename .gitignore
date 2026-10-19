@@ -43,3 +43,5 @@ docs/**
 .playwright-cli/*
 
 schema-catalog*.json
+
+output
