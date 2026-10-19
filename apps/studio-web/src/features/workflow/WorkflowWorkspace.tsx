@@ -1,13 +1,25 @@
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  Modal,
+  Spin,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
   ApiOutlined,
-  ApartmentOutlined,
-  CloseOutlined,
   CopyOutlined,
   DeleteOutlined,
   PlusOutlined,
-  SearchOutlined,
 } from "../../lib/icons.js";
 import {
   createWorkflow,
@@ -24,11 +36,13 @@ import { useResourceCatalog } from "../resources/useResourceCatalog.js";
 import { downloadWorkflow, parseWorkflowFile, workflowFileSizeLimit } from "./io.js";
 import { validateWorkflowGraph } from "./model.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
+import { confirmAction } from "../../components/studio/confirmAction.js";
 import type { WorkflowSnapshot } from "./types.js";
 
 type WorkflowScreen = "library" | "editor" | "access";
 
 export function WorkflowWorkspace() {
+  const { message } = App.useApp();
   const [screen, setScreen] = useState<WorkflowScreen>("library");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowAppRecord[]>([]);
@@ -128,19 +142,7 @@ export function WorkflowWorkspace() {
     }
   };
 
-  useEffect(() => {
-    if (!showCreate) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeCreateDialog();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [creating, showCreate]);
+
 
   if (selectedId && screen === "editor") {
     return (
@@ -167,54 +169,79 @@ export function WorkflowWorkspace() {
 
   const localDraft = loadSavedGraph();
 
-  return (
-    <section className="workflow-library">
-      <header className="workflow-library-header">
-        <div>
-          <span className="settings-kicker">WORKFLOW CONTROL PLANE</span>
-          <h1>工作流</h1>
-        </div>
-        <button className="studio-button primary" type="button" onClick={() => setShowCreate(true)}>
-          <PlusOutlined /> 新建工作流
-        </button>
-      </header>
+  const doDelete = (workflow: WorkflowAppRecord) => {
+    confirmAction({
+      title: `删除“${workflow.name}”？`,
+      content: "已发布 API 将停止访问，该操作不可恢复。",
+      okText: "确认删除",
+      onOk: async () => {
+        try {
+          await deleteWorkflow(workflow.id);
+          setWorkflows((current) => current.filter((item) => item.id !== workflow.id));
+          message.success("工作流已删除");
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : "工作流删除失败");
+        }
+      },
+    });
+  };
 
-      <div className="workflow-library-tools">
-        <input
-          ref={fileInput}
-          type="file"
-          accept=".json,application/json"
-          hidden
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = "";
-            if (file) void importFile(file);
-          }}
-        />
-        <button
-          className="studio-button secondary"
-          type="button"
-          disabled={importing || resources.loading}
-          onClick={() => fileInput.current?.click()}
-        >
-          {importing ? "导入中…" : "导入 JSON"}
-        </button>
-        <label>
-          <SearchOutlined />
+  const doDuplicate = async (workflow: WorkflowAppRecord) => {
+    try {
+      const created = await duplicateWorkflow(workflow.id);
+      setWorkflows((current) => [created.app, ...current]);
+      message.success("工作流已复制");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "工作流复制失败");
+    }
+  };
+
+  return (
+    <Flex vertical gap={12} style={{ height: "100%", overflow: "auto", padding: 16 }}>
+      <Card size="small">
+        <Flex align="center" justify="space-between" gap={12} wrap>
+          <Flex vertical gap={2}>
+            <Typography.Text type="secondary" style={{ fontSize: 10, letterSpacing: 2 }}>
+              WORKFLOW CONTROL PLANE
+            </Typography.Text>
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              工作流
+            </Typography.Title>
+          </Flex>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreate(true)}>
+            新建工作流
+          </Button>
+        </Flex>
+      </Card>
+
+      <Card size="small">
+        <Flex gap={12} align="center" wrap>
           <input
+            ref={fileInput}
+            type="file"
+            accept=".json,application/json"
+            hidden
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void importFile(file);
+            }}
+          />
+          <Button disabled={importing || resources.loading} onClick={() => fileInput.current?.click()}>
+            {importing ? "导入中…" : "导入 JSON"}
+          </Button>
+          <Input.Search
+            allowClear
             value={query}
             placeholder="搜索名称或 slug"
             onChange={(event) => setQuery(event.target.value)}
+            style={{ flex: 1, minWidth: 200 }}
           />
-        </label>
-        <span>{workflows.length} WORKFLOWS</span>
-      </div>
+          <Tag>{workflows.length} WORKFLOWS</Tag>
+        </Flex>
+      </Card>
 
-      {error ? (
-        <div className="workflow-access-alert is-error workflow-import-errors" role="alert">
-          {error}
-        </div>
-      ) : null}
+      {error ? <Alert type="error" showIcon message={error} role="alert" /> : null}
       {pendingExport ? (
         <ConfirmDialog
           title="导出存在问题的工作流？"
@@ -231,214 +258,173 @@ export function WorkflowWorkspace() {
           }}
         />
       ) : null}
-      {loading ? <div className="workflow-screen-state">正在加载工作流...</div> : null}
+      {loading ? (
+        <Flex justify="center" style={{ padding: 48 }}>
+          <Spin tip="正在加载工作流..." />
+        </Flex>
+      ) : null}
       {!loading && filtered.length === 0 ? (
-        <div className="workflow-library-empty">
-          <span>01</span>
-          <h2>{query ? "没有匹配的工作流" : "创建第一个工作流"}</h2>
-          {!query ? (
-            <div>
-              <button
-                className="studio-button primary"
-                type="button"
-                onClick={() => setShowCreate(true)}
-              >
-                <PlusOutlined /> 从空白创建
-              </button>
-              {localDraft ? (
-                <button
-                  className="studio-button secondary"
-                  type="button"
-                  disabled={creating}
-                  onClick={() => {
-                    setCreating(true);
-                    void createWorkflow({ name: localDraft.name, graph: localDraft })
-                      .then((workflow) => open(workflow.app.id, "editor"))
-                      .catch((reason) =>
-                        setError(reason instanceof Error ? reason.message : "浏览器草稿导入失败"),
-                      )
-                      .finally(() => setCreating(false));
-                  }}
-                >
-                  导入浏览器草稿
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <Card size="small">
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={query ? "没有匹配的工作流" : "创建第一个工作流"}
+          >
+            {!query ? (
+              <Flex gap={8} justify="center">
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreate(true)}>
+                  从空白创建
+                </Button>
+                {localDraft ? (
+                  <Button
+                    disabled={creating}
+                    onClick={() => {
+                      setCreating(true);
+                      void createWorkflow({ name: localDraft.name, graph: localDraft })
+                        .then((workflow) => open(workflow.app.id, "editor"))
+                        .catch((reason) =>
+                          setError(reason instanceof Error ? reason.message : "浏览器草稿导入失败"),
+                        )
+                        .finally(() => setCreating(false));
+                    }}
+                  >
+                    导入浏览器草稿
+                  </Button>
+                ) : null}
+              </Flex>
+            ) : null}
+          </Empty>
+        </Card>
       ) : null}
 
       {!loading && filtered.length > 0 ? (
-        <div className="workflow-library-list">
-          <div className="workflow-library-list-head">
-            <span>工作流</span>
-            <span>发布状态</span>
-            <span>最近更新</span>
-            <span aria-hidden="true" />
-          </div>
-          {filtered.map((workflow, index) => (
-            <article key={workflow.id}>
-              <button
-                className="workflow-library-main"
-                type="button"
-                onClick={() => open(workflow.id, "editor")}
-              >
-                <span className="workflow-library-index">{String(index + 1).padStart(2, "0")}</span>
-                <span>
-                  <b>{workflow.name}</b>
-                  <code>{workflow.slug}</code>
-                </span>
-              </button>
-              <span
-                className={`workflow-library-status${workflow.currentVersionId ? " is-live" : ""}`}
-              >
-                {workflow.currentVersionId ? "LIVE" : "DRAFT"}
-              </span>
-              <time dateTime={workflow.updatedAt}>
-                {new Date(workflow.updatedAt).toLocaleString()}
-              </time>
-              <div className="workflow-library-actions">
-                <button
-                  type="button"
-                  title="导出 JSON"
-                  aria-label="导出 JSON"
-                  onClick={() => void exportFile(workflow)}
-                >
-                  JSON
-                </button>
-                <button
-                  type="button"
-                  title="访问点"
-                  aria-label="访问点"
-                  onClick={() => open(workflow.id, "access")}
-                >
-                  <ApiOutlined />
-                </button>
-                <button
-                  type="button"
-                  title="复制工作流"
-                  aria-label="复制工作流"
-                  onClick={() => {
-                    void duplicateWorkflow(workflow.id)
-                      .then((created) => setWorkflows((current) => [created.app, ...current]))
-                      .catch((reason) =>
-                        setError(reason instanceof Error ? reason.message : "工作流复制失败"),
-                      );
-                  }}
-                >
-                  <CopyOutlined />
-                </button>
-                <button
-                  type="button"
-                  title="删除工作流"
-                  aria-label="删除工作流"
-                  onClick={() => {
-                    if (!window.confirm(`删除“${workflow.name}”？已发布 API 将停止访问。`)) return;
-                    void deleteWorkflow(workflow.id)
-                      .then(() =>
-                        setWorkflows((current) =>
-                          current.filter((item) => item.id !== workflow.id),
-                        ),
-                      )
-                      .catch((reason) =>
-                        setError(reason instanceof Error ? reason.message : "工作流删除失败"),
-                      );
-                  }}
-                >
-                  <DeleteOutlined />
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
+        <Card
+          size="small"
+          title="工作流列表"
+          extra={<Tag>{filtered.length}</Tag>}
+          styles={{ body: { padding: 0 } }}
+        >
+          <Table<WorkflowAppRecord>
+            size="small"
+            rowKey="id"
+            dataSource={filtered}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+            onRow={(workflow) => ({
+              onClick: () => open(workflow.id, "editor"),
+              style: { cursor: "pointer" },
+            })}
+            columns={[
+              {
+                title: "工作流",
+                key: "name",
+                render: (_: unknown, workflow: WorkflowAppRecord) => (
+                  <Flex vertical gap={0}>
+                    <Typography.Text strong>{workflow.name}</Typography.Text>
+                    <Typography.Text type="secondary" code style={{ fontSize: 12 }}>
+                      {workflow.slug}
+                    </Typography.Text>
+                  </Flex>
+                ),
+              },
+              {
+                title: "发布状态",
+                key: "status",
+                width: 110,
+                render: (_: unknown, workflow: WorkflowAppRecord) =>
+                  workflow.currentVersionId ? (
+                    <Tag color="success">LIVE</Tag>
+                  ) : (
+                    <Tag>DRAFT</Tag>
+                  ),
+              },
+              {
+                title: "最近更新",
+                dataIndex: "updatedAt",
+                key: "updatedAt",
+                width: 190,
+                render: (value: string) => new Date(value).toLocaleString(),
+              },
+              {
+                title: "操作",
+                key: "actions",
+                width: 190,
+                fixed: "right",
+                render: (_: unknown, workflow: WorkflowAppRecord) => (
+                  <Flex
+                    gap={4}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <Tooltip title="导出 JSON">
+                      <Button type="text" size="small" onClick={() => void exportFile(workflow)}>
+                        JSON
+                      </Button>
+                    </Tooltip>
+                    <Tooltip title="访问点">
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<ApiOutlined />}
+                        aria-label="访问点"
+                        onClick={() => open(workflow.id, "access")}
+                      />
+                    </Tooltip>
+                    <Tooltip title="复制工作流">
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<CopyOutlined />}
+                        aria-label="复制工作流"
+                        onClick={() => void doDuplicate(workflow)}
+                      />
+                    </Tooltip>
+                    <Tooltip title="删除工作流">
+                      <Button
+                        type="text"
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        aria-label="删除工作流"
+                        onClick={() => doDelete(workflow)}
+                      />
+                    </Tooltip>
+                  </Flex>
+                ),
+              },
+            ]}
+          />
+        </Card>
       ) : null}
 
-      {showCreate
-        ? createPortal(
-            <div
-              className="settings-modal-backdrop workflow-create-backdrop"
-              role="presentation"
-              onMouseDown={(event) => {
-                if (event.currentTarget === event.target) closeCreateDialog();
+      <Modal
+        open={showCreate}
+        centered
+        title="创建工作流"
+        okText={creating ? "创建中..." : "创建并编排"}
+        cancelText="取消"
+        confirmLoading={creating}
+        onCancel={closeCreateDialog}
+        onOk={() => void submitCreate()}
+      >
+        <Typography.Paragraph type="secondary">NEW WORKFLOW</Typography.Paragraph>
+        <Form layout="vertical" preserve={false}>
+          <Form.Item
+            label={`工作流名称 · ${createName.trim().length}/120`}
+            validateStatus={createError ? "error" : undefined}
+            help={createError}
+          >
+            <Input
+              autoFocus
+              maxLength={120}
+              placeholder="例如：客户工单自动分类"
+              value={createName}
+              aria-invalid={Boolean(createError)}
+              onChange={(event) => {
+                setCreateName(event.target.value);
+                if (createError) setCreateError(null);
               }}
-            >
-              <form
-                className="settings-modal workflow-create-modal"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="workflow-create-title"
-                aria-describedby={createError ? "workflow-create-error" : undefined}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void submitCreate();
-                }}
-              >
-                <div className="settings-modal-head">
-                  <div className="workflow-create-heading">
-                    <span className="workflow-create-icon" aria-hidden="true">
-                      <ApartmentOutlined />
-                    </span>
-                    <div>
-                      <span className="settings-kicker">NEW WORKFLOW</span>
-                      <h2 id="workflow-create-title">创建工作流</h2>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label="关闭"
-                    disabled={creating}
-                    onClick={closeCreateDialog}
-                  >
-                    <CloseOutlined />
-                  </button>
-                </div>
-                <div className="workflow-create-body">
-                  <label className={`studio-field${createError ? " is-invalid" : ""}`}>
-                    <span>
-                      <b>工作流名称</b>
-                      <small>{createName.trim().length}/120</small>
-                    </span>
-                    <input
-                      autoFocus
-                      maxLength={120}
-                      placeholder="例如：客户工单自动分类"
-                      value={createName}
-                      aria-invalid={Boolean(createError)}
-                      aria-describedby={createError ? "workflow-create-error" : undefined}
-                      onChange={(event) => {
-                        setCreateName(event.target.value);
-                        if (createError) setCreateError(null);
-                      }}
-                    />
-                    {createError ? (
-                      <small className="field-error" id="workflow-create-error" role="alert">
-                        {createError}
-                      </small>
-                    ) : null}
-                  </label>
-                </div>
-                <div className="settings-modal-actions">
-                  <button
-                    className="studio-button secondary"
-                    type="button"
-                    disabled={creating}
-                    onClick={closeCreateDialog}
-                  >
-                    取消
-                  </button>
-                  <button
-                    className="studio-button primary"
-                    type="submit"
-                    disabled={creating || !createName.trim()}
-                  >
-                    {creating ? "创建中..." : "创建并编排"}
-                  </button>
-                </div>
-              </form>
-            </div>,
-            document.body,
-          )
-        : null}
-    </section>
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </Flex>
   );
 }
