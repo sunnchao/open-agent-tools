@@ -1,3 +1,5 @@
+import { studioFetch } from "../../lib/client.js";
+
 /** 图谱节点（与后端 GraphExport.GraphNode 对齐）。 */
 export interface GraphNode {
   id: string;
@@ -42,7 +44,8 @@ export interface RelationTypeStat {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/rag-api${path}`, init);
+  // 图谱管理/检索全部经 Studio 管理 BFF，不直接暴露 rag-server。
+  const response = await studioFetch(`/api/admin/rag${path}`, init);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `Graph request failed (${response.status})`);
@@ -65,11 +68,13 @@ export function neighborsOf(entityId: string, hops = 2): Promise<GraphExport> {
 }
 
 /** 实体列表（分页 + 类型 + 搜索）。 */
-export function listEntities(opts: {
-  limit?: number;
-  type?: string;
-  search?: string;
-} = {}): Promise<EntityListResult> {
+export function listEntities(
+  opts: {
+    limit?: number;
+    type?: string;
+    search?: string;
+  } = {},
+): Promise<EntityListResult> {
   const params = new URLSearchParams();
   if (opts.limit) params.set("limit", String(opts.limit));
   if (opts.type) params.set("type", opts.type);

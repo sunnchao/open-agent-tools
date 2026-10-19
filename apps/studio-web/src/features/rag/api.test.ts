@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { submitQueryFeedback, updateDocument, uploadDocuments } from "./api.js";
+import { getQualityReport, submitQueryFeedback, updateDocument, uploadDocuments } from "./api.js";
 
 describe("RAG Studio API", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -21,7 +21,7 @@ describe("RAG Studio API", () => {
     });
 
     const form = fetchMock.mock.calls[0]?.[1]?.body as FormData;
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("/rag-api/documents");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/admin/rag/documents");
     expect(form.get("chunkSize")).toBe("500");
     expect(form.get("chunkOverlap")).toBe("50");
     expect(form.get("chunkStrategy")).toBe("semantic");
@@ -36,7 +36,7 @@ describe("RAG Studio API", () => {
     await updateDocument("guide.md", { title: "部署指南", tags: ["生产"] });
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/rag-api/documents/guide.md",
+      "/api/admin/rag/documents/guide.md",
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({ title: "部署指南", tags: ["生产"] }),
@@ -46,11 +46,27 @@ describe("RAG Studio API", () => {
     await submitQueryFeedback("query/1", "negative", "来源错误");
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/rag-api/query/query%2F1/feedback",
+      "/api/admin/rag/query/query%2F1/feedback",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({ rating: "negative", comment: "来源错误" }),
       }),
+    );
+  });
+
+  it("loads the 7/30 day quality report through the admin proxy", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ periodDays: 30 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getQualityReport(30);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/rag/analytics/quality-report?days=30",
+      undefined,
     );
   });
 });

@@ -1,4 +1,5 @@
 import type { WorkflowSnapshot } from "./types.js";
+import { studioFetch } from "../../lib/client.js";
 
 export interface WorkflowAppRecord {
   id: string;
@@ -67,7 +68,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 export async function fetchWorkflows(): Promise<WorkflowAppRecord[]> {
-  const response = await fetch("/api/workflows");
+  const response = await studioFetch("/api/workflows");
   return (await parseResponse<{ workflows: WorkflowAppRecord[] }>(response)).workflows;
 }
 
@@ -75,7 +76,7 @@ export async function fetchWorkflow(workflowId: string): Promise<{
   workflow: WorkflowDetailRecord;
   apiKeys: WorkflowApiKeyRecord[];
 }> {
-  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`);
+  const response = await studioFetch(`/api/workflows/${encodeURIComponent(workflowId)}`);
   return parseResponse(response);
 }
 
@@ -84,7 +85,7 @@ export async function createWorkflow(input: {
   description?: string;
   graph?: WorkflowSnapshot;
 }): Promise<WorkflowDetailRecord> {
-  const response = await fetch("/api/workflows", {
+  const response = await studioFetch("/api/workflows", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -93,14 +94,14 @@ export async function createWorkflow(input: {
 }
 
 export async function duplicateWorkflow(workflowId: string): Promise<WorkflowDetailRecord> {
-  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/duplicate`, {
+  const response = await studioFetch(`/api/workflows/${encodeURIComponent(workflowId)}/duplicate`, {
     method: "POST",
   });
   return (await parseResponse<{ workflow: WorkflowDetailRecord }>(response)).workflow;
 }
 
 export async function deleteWorkflow(workflowId: string): Promise<void> {
-  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
+  const response = await studioFetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
     method: "DELETE",
   });
   if (!response.ok && response.status !== 404) await parseResponse(response);
@@ -111,7 +112,7 @@ export async function saveWorkflowDraft(
   expectedRevision: number,
   graph: WorkflowSnapshot,
 ): Promise<WorkflowDetailRecord> {
-  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/draft`, {
+  const response = await studioFetch(`/api/workflows/${encodeURIComponent(workflowId)}/draft`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ expectedRevision, graph }),
@@ -124,7 +125,7 @@ export async function publishWorkflow(
   expectedRevision: number,
   releaseNotes = "",
 ): Promise<WorkflowDetailRecord> {
-  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/publish`, {
+  const response = await studioFetch(`/api/workflows/${encodeURIComponent(workflowId)}/publish`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ expectedRevision, releaseNotes }),
@@ -136,7 +137,7 @@ export async function rollbackWorkflow(
   workflowId: string,
   versionId: string,
 ): Promise<WorkflowDetailRecord> {
-  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/rollback`, {
+  const response = await studioFetch(`/api/workflows/${encodeURIComponent(workflowId)}/rollback`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ versionId }),
@@ -148,7 +149,7 @@ export async function createWorkflowKey(
   workflowId: string,
   input: { name: string; rateLimitPerMinute: number },
 ): Promise<{ key: WorkflowApiKeyRecord; rawKey: string }> {
-  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/api-keys`, {
+  const response = await studioFetch(`/api/workflows/${encodeURIComponent(workflowId)}/api-keys`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -157,7 +158,7 @@ export async function createWorkflowKey(
 }
 
 export async function revokeWorkflowKey(workflowId: string, keyId: string): Promise<void> {
-  const response = await fetch(
+  const response = await studioFetch(
     `/api/workflows/${encodeURIComponent(workflowId)}/api-keys/${encodeURIComponent(keyId)}`,
     { method: "DELETE" },
   );
@@ -182,7 +183,9 @@ export async function fetchWorkflowRuns(
   workflowId: string,
   signal?: AbortSignal,
 ): Promise<WorkflowRunRecord[]> {
-  const response = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}/runs`, { signal });
+  const response = await studioFetch(`/api/workflows/${encodeURIComponent(workflowId)}/runs`, {
+    signal,
+  });
   return (await parseResponse<{ runs: WorkflowRunRecord[] }>(response)).runs;
 }
 
@@ -191,7 +194,7 @@ export async function fetchWorkflowRunEvents(
   runId: string,
   signal?: AbortSignal,
 ): Promise<WorkflowRunHistory> {
-  const response = await fetch(
+  const response = await studioFetch(
     `/api/workflows/${encodeURIComponent(workflowId)}/runs/${encodeURIComponent(runId)}/events`,
     { signal },
   );

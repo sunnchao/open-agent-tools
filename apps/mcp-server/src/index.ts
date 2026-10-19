@@ -5,6 +5,7 @@ import { createBullMqToolExecutor } from "./gateway/bullmq-tool-executor.js";
 import { createPostgresGatewayRepository } from "./gateway/postgres-repository.js";
 import type { ToolExecutor } from "./gateway/tool-executor.js";
 import { createPostgresGatewayAudit } from "./gateway/audit.js";
+import { GatewayQuotaService } from "./gateway/quota.js";
 
 loadEnv();
 
@@ -28,6 +29,7 @@ if (process.env.REDIS_URL) {
 
 const app = createGatewayApp({
   access: new GatewayAccessService(repository),
+  quota: new GatewayQuotaService(repository),
   audit: audit.audit,
   ...(execution === null ? {} : { executor: execution.executor }),
 });

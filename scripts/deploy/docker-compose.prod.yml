@@ -1,0 +1,81 @@
+# 生产基础设施编排:PostgreSQL + Redis + MinIO。
+#
+# ⚠️ 诚实声明(请先读完再用):
+#   1) 本仓库**没有**应用进程(server / rag-server / mcp-worker / mcp-server / studio-web)
+#      的官方镜像与 Dockerfile(只有 runtimes/nodejs/Dockerfile,那是 MCP 工具运行时的
+#      runner,不能用于跑应用)。所以应用进程请用 systemd 或裸进程运行,见:
+#        - scripts/deploy/systemd/
+#        - docs/deploy/private-deployment.md
+#   2) 本文件只负责「有状态的中间件」。它**不含**任何应用容器。
+#   3) 默认密码仅供本机/内网演示,生产请在 .env 覆盖后使用强口令,并限制端口暴露。
+#
+# 用法:
+#   docker compose -f scripts/deploy/docker-compose.prod.yml up -d
+#   docker compose -f scripts/deploy/docker-compose.prod.yml ps
+#   docker compose -f scripts/deploy/docker-compose.prod.yml logs -f postgres
+#
+# 变量覆盖(可选):在同目录放 .env,或在命令前导出,例如
+#   POSTGRES_PASSWORD=... MINIO_ROOT_PASSWORD=... docker compose ... up -d
+
+services:
+  postgres:
+    # mcp-worker / mcp-server 需要 PostgreSQL 15+
+    image: postgres:16-alpine
+    container_name: open-agent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-mcp_management}
+    ports:
+      # 仅绑定回环,避免直接对外暴露;如需跨主机访问改为内网地址并加防火墙。
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: open-agent-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    # minio/minio 已于 2026-09 从 Docker Hub 移除;Chainguard 维护了一个 fork。
+    # 与仓库既有 scripts/docker-compose.yml 保持一致。
+    image: cgr.dev/chainguard/minio:latest
+    container_name: open-agent-minio
+    restart: unless-stopped
+    user: "0:0"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "127.0.0.1:9000:9000" # S3 API
+      - "127.0.0.1:9001:9001" # Console
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

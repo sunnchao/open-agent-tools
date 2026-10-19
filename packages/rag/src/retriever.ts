@@ -10,6 +10,11 @@ export interface RetrieveOptions {
   rrfK?: number;
   /** 限定检索的文档来源；缺省为全部，空数组表示不检索。 */
   sources?: string[];
+  /**
+   * 请求方所属分组。缺省表示管理侧不启用文档 ACL；显式空数组只返回公开文档。
+   * 分组匹配在 `Rag.retrieve` 中转换为来源白名单后下推到检索器。
+   */
+  viewerGroups?: string[];
 }
 
 /**

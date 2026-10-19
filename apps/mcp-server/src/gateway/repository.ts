@@ -69,6 +69,35 @@ export interface ServiceSummary {
   prompts: PromptMetadata[];
 }
 
+export interface GatewayQuotaRecord {
+  clientId: string;
+  serviceId: string | null;
+  qpsLimit: number;
+  dailyCallLimit: number;
+}
+
+export interface ToolCallReservation {
+  clientId: string;
+  serviceId: string;
+  versionId: string;
+  toolName: string;
+  requestId: string;
+}
+
+export interface ToolCallReservationInput extends ToolCallReservation {
+  now: string;
+}
+
+export type ToolCallReservationResult =
+  { reserved: true } | { reserved: false; retryAfterSeconds: number };
+
+export interface ToolCallSettlement {
+  requestId: string;
+  status: "SUCCEEDED" | "FAILED";
+  durationMs: number;
+  finishedAt: string;
+}
+
 export interface GatewayRepository {
   getApiKey(keyId: string): Promise<ApiKeyRecord | null>;
   getClient(clientId: string): Promise<ApiClientRecord | null>;
@@ -77,6 +106,8 @@ export interface GatewayRepository {
   getServiceByServiceId(serviceId: string): Promise<ServiceSummary | null>;
   getGrant(clientId: string, serviceId: string): Promise<ClientGrantRecord | null>;
   markApiKeyUsed(keyId: string, usedAt: string): Promise<void>;
+  reserveToolCall(input: ToolCallReservationInput): Promise<ToolCallReservationResult>;
+  settleToolCall(input: ToolCallSettlement): Promise<void>;
 }
 
 export interface InMemoryGatewayRepositoryInput {
@@ -84,6 +115,7 @@ export interface InMemoryGatewayRepositoryInput {
   keys?: ApiKeyRecord[];
   grants?: ClientGrantRecord[];
   services?: ManagedServiceSnapshot[];
+  quotas?: GatewayQuotaRecord[];
 }
 
 function clone<T>(value: T): T {
@@ -96,6 +128,15 @@ export class InMemoryGatewayRepository implements GatewayRepository {
   readonly grants = new Map<string, ClientGrantRecord>();
   readonly services = new Map<string, ManagedServiceSnapshot>();
   readonly lastUsedAt = new Map<string, string>();
+  readonly quotas = new Map<string, GatewayQuotaRecord>();
+  readonly usageEvents = new Map<
+    string,
+    ToolCallReservationInput & {
+      status: "RESERVED" | "SUCCEEDED" | "FAILED";
+      durationMs?: number;
+      finishedAt?: string;
+    }
+  >();
 
   constructor(input: InMemoryGatewayRepositoryInput = {}) {
     for (const client of input.clients ?? []) this.clients.set(client.id, clone(client));
@@ -105,6 +146,9 @@ export class InMemoryGatewayRepository implements GatewayRepository {
     }
     for (const service of input.services ?? []) {
       this.services.set(service.serviceSlug, clone(service));
+    }
+    for (const quota of input.quotas ?? []) {
+      this.quotas.set(quotaKey(quota.clientId, quota.serviceId), clone(quota));
     }
   }
 
@@ -149,4 +193,66 @@ export class InMemoryGatewayRepository implements GatewayRepository {
   async markApiKeyUsed(keyId: string, usedAt: string): Promise<void> {
     this.lastUsedAt.set(keyId, usedAt);
   }
+
+  async reserveToolCall(input: ToolCallReservationInput): Promise<ToolCallReservationResult> {
+    const now = Date.parse(input.now);
+    const secondStart = now - 1_000;
+    const qpsLimit = this.quotas.get(quotaKey(input.clientId, null))?.qpsLimit ?? 0;
+    if (qpsLimit > 0) {
+      const recent = [...this.usageEvents.values()]
+        .filter((event) => event.clientId === input.clientId && Date.parse(event.now) > secondStart)
+        .sort((left, right) => Date.parse(left.now) - Date.parse(right.now));
+      if (recent.length >= qpsLimit) {
+        const oldest = recent[0];
+        return {
+          reserved: false,
+          retryAfterSeconds: retryAfter(oldest ? Date.parse(oldest.now) + 1_000 : now, now),
+        };
+      }
+    }
+
+    const dailyLimit =
+      this.quotas.get(quotaKey(input.clientId, input.serviceId))?.dailyCallLimit ?? 0;
+    if (dailyLimit > 0) {
+      const dayStart = utcDayStart(now);
+      const nextDay = dayStart + 86_400_000;
+      const used = [...this.usageEvents.values()].filter(
+        (event) =>
+          event.clientId === input.clientId &&
+          event.serviceId === input.serviceId &&
+          Date.parse(event.now) >= dayStart &&
+          Date.parse(event.now) < nextDay,
+      ).length;
+      if (used >= dailyLimit) {
+        return { reserved: false, retryAfterSeconds: retryAfter(nextDay, now) };
+      }
+    }
+
+    this.usageEvents.set(input.requestId, { ...clone(input), status: "RESERVED" });
+    return { reserved: true };
+  }
+
+  async settleToolCall(input: ToolCallSettlement): Promise<void> {
+    const event = this.usageEvents.get(input.requestId);
+    if (!event || event.status !== "RESERVED") return;
+    this.usageEvents.set(input.requestId, {
+      ...event,
+      status: input.status,
+      durationMs: input.durationMs,
+      finishedAt: input.finishedAt,
+    });
+  }
+}
+
+function quotaKey(clientId: string, serviceId: string | null): string {
+  return `${clientId}:${serviceId ?? "*"}`;
+}
+
+function utcDayStart(value: number): number {
+  const date = new Date(value);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+}
+
+function retryAfter(at: number, now: number): number {
+  return Math.max(1, Math.ceil((at - now) / 1_000));
 }

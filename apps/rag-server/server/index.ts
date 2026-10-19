@@ -16,7 +16,9 @@ import { RagAnalyticsStore, type QueryEventInput } from "./analytics.js";
 import { EvalRunner } from "./eval/runner.js";
 import { evalRouter } from "./eval/router.js";
 import { EvalStore } from "./eval/store.js";
-import { documentMetadataPatch, queryFeedback } from "./request-validation.js";
+import { accessGroups, documentMetadataPatch, queryFeedback } from "./request-validation.js";
+import { assertRagAuthConfigured, resolveRagAuth } from "./auth.js";
+import { qualityReportRouter } from "./quality-api.js";
 // Langfuse 必须在创建 LangChain 模型（llm/embeddings）之前初始化并附加 CallbackHandler。
 import { initLangfuse, runTraced, withTraceAttributes } from "@open-agent-tools/observability";
 initLangfuse({ serviceName: "open-agent-rag-server", envRoot: "../" });
@@ -117,7 +119,9 @@ const lifecycle = new GraphLifecycle({
 });
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: process.env.RAG_CORS_ORIGIN?.trim() || false }));
+// CORS 预检必须在业务鉴权前通过；真实数据面只允许服务间 bearer token。
+app.use(resolveRagAuth().middleware);
 app.use(express.json({ limit: "2mb" }));
 
 const upload = multer({
@@ -274,6 +278,7 @@ app.delete("/api/documents/:source", (req: Request, res: Response) => {
 app.get("/api/analytics/overview", (req: Request, res: Response) => {
   res.json(analytics.overview(Number(req.query.days) || 14));
 });
+app.use("/api/analytics", qualityReportRouter({ analytics }));
 
 app.put("/api/query/:queryId/feedback", (req: Request, res: Response) => {
   const raw = req.params.queryId;
@@ -298,6 +303,7 @@ app.post("/api/query", async (req: Request, res: Response) => {
     topK?: unknown;
     generate?: unknown;
     sources?: unknown;
+    viewerGroups?: unknown;
     crag?: unknown;
   };
   const query = typeof body.query === "string" ? body.query.trim() : "";
@@ -312,8 +318,20 @@ app.post("/api/query", async (req: Request, res: Response) => {
   const queryStartedAt = Date.now();
   let analyticsRecorded = false;
   let sources: string[] | undefined;
+  let viewerGroups: string[] | undefined;
+  let visibleSources: string[] | undefined;
+  let sourceCount = 0;
   try {
     sources = querySources(body.sources);
+    if (res.locals.ragScope === "runtime") {
+      // runtime 调用不传分组时只能看公开文档，绝不继承管理侧的全量语义。
+      viewerGroups =
+        body.viewerGroups === undefined ? [] : accessGroups(body.viewerGroups, "viewerGroups");
+    } else if (body.viewerGroups !== undefined) {
+      viewerGroups = accessGroups(body.viewerGroups, "viewerGroups");
+    }
+    visibleSources = rag.resolveVisibleSources(sources, viewerGroups);
+    sourceCount = visibleSources?.length ?? rag.listSources().length;
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     return;
@@ -333,7 +351,10 @@ app.post("/api/query", async (req: Request, res: Response) => {
           try {
             // CRAG 模式：评估 + 纠正 + 条带精炼
             if (useCrag) {
-              const result = await crag.retrieve(query, { sources });
+              // CRAG 控制器内部直接合并 block/graph 证据；此处先按文档 ACL 收窄来源。
+              const result = await crag.retrieve(query, {
+                ...(visibleSources !== undefined ? { sources: visibleSources } : {}),
+              });
               let answer: string | null = null;
               if (generate && llm && result.formatted) {
                 const resp = await llm.invoke([
@@ -361,11 +382,15 @@ app.post("/api/query", async (req: Request, res: Response) => {
                 id: queryId,
                 query,
                 sources,
+                sourceCount,
                 topK,
                 generate,
                 crag: true,
                 hits: result.citations,
                 answerGenerated: Boolean(answer),
+                answer,
+                assessment: result.assessment,
+                actions: result.actions,
                 latencyMs: Date.now() - queryStartedAt,
               });
               analyticsRecorded = true;
@@ -386,7 +411,10 @@ app.post("/api/query", async (req: Request, res: Response) => {
               return;
             }
 
-            const result = await rag.retrieve(query, { topK, sources });
+            const result = await rag.retrieve(query, {
+              topK,
+              sources: visibleSources,
+            });
             let answer: string | null = null;
             if (generate && llm && result.chunks.length > 0) {
               const resp = await llm.invoke([
@@ -411,11 +439,13 @@ app.post("/api/query", async (req: Request, res: Response) => {
               id: queryId,
               query,
               sources,
+              sourceCount,
               topK,
               generate,
               crag: false,
               hits: result.chunks,
               answerGenerated: Boolean(answer),
+              answer,
               latencyMs: Date.now() - queryStartedAt,
             });
             analyticsRecorded = true;
@@ -443,6 +473,7 @@ app.post("/api/query", async (req: Request, res: Response) => {
         id: queryId,
         query,
         sources,
+        sourceCount,
         topK,
         generate,
         crag: useCrag,
@@ -477,8 +508,14 @@ app.use("/api/graph", graphRouter({ rag, graph, lifecycle }));
 // 检索评估 API（评测集 CRUD + 运行 + 看板）
 app.use("/api/eval", evalRouter({ store: evalStore, runner: evalRunner }));
 
-app.listen(PORT, () => {
-  console.log(`[rag-server] api listening on http://localhost:${PORT}`);
+assertRagAuthConfigured();
+
+const host =
+  process.env.RAG_BIND_HOST?.trim() ||
+  (process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1");
+
+app.listen(PORT, host, () => {
+  console.log(`[rag-server] api listening on http://${host}:${PORT}`);
   console.log(`[rag-server] sqlite: ${dbPath}`);
   console.log(`[rag-server] graph: ${graphDbPath}`);
   console.log(

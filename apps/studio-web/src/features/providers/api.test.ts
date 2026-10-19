@@ -33,7 +33,8 @@ describe("provider api", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     await expect(fetchProviders({ includeDisabled: true })).resolves.toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledWith("/api/admin/providers");
+    // 统一经 studioFetch 调用，签名固定为 (url, init)。
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/providers", undefined);
   });
 
   it("saves and fetches model suggestions", async () => {

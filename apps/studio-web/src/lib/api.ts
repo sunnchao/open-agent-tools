@@ -1,21 +1,25 @@
 import type {
   ChatRequestMessage,
   ChatResourceBinding,
+  MessageUsage,
   RagCitation,
   Session,
   ToolCall,
   UiBlock,
 } from "../types.js";
 import type { ConditionWarning } from "@open-agent-tools/workflow-contracts";
+import { studioFetch } from "./client.js";
 
 interface StreamCallbacks {
   onDelta: (delta: string) => void;
-  onDone: (meta?: { assistantMessageId?: string }) => void;
+  onDone: (meta?: { assistantMessageId?: string; usage?: MessageUsage }) => void;
   onError: (error: string) => void;
   /** 用户主动停止。与 onError / onDone 互斥，避免停止后被标成 complete。 */
   onStopped?: () => void;
   onAssistantMessageId?: (id: string) => void;
   onRagCitations?: (citations: RagCitation[]) => void;
+  /** token / 工具用量（每轮结束与 done 各下发一次，后者为整轮累计）。 */
+  onUsage?: (usage: MessageUsage) => void;
   /** 收到一次“函数调用请求”（name + arguments）。 */
   onToolCall?: (call: ToolCall) => void;
   /** 收到“函数调用结果”（result / ui / error）。 */
@@ -34,14 +38,14 @@ async function parseError(res: Response): Promise<string> {
 }
 
 export async function fetchSessions(): Promise<Session[]> {
-  const res = await fetch("/api/sessions");
+  const res = await studioFetch("/api/sessions");
   if (!res.ok) throw new Error(await parseError(res));
   const body = (await res.json()) as { sessions: Session[] };
   return body.sessions;
 }
 
 export async function createSessionApi(input?: { id?: string; title?: string }): Promise<Session> {
-  const res = await fetch("/api/sessions", {
+  const res = await studioFetch("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input ?? {}),
@@ -52,7 +56,7 @@ export async function createSessionApi(input?: { id?: string; title?: string }):
 }
 
 export async function renameSessionApi(id: string, title: string): Promise<Session> {
-  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+  const res = await studioFetch(`/api/sessions/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
@@ -63,14 +67,14 @@ export async function renameSessionApi(id: string, title: string): Promise<Sessi
 }
 
 export async function deleteSessionApi(id: string): Promise<void> {
-  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+  const res = await studioFetch(`/api/sessions/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!res.ok && res.status !== 404) throw new Error(await parseError(res));
 }
 
 export async function deleteMessageApi(id: string): Promise<void> {
-  const res = await fetch(`/api/messages/${encodeURIComponent(id)}`, {
+  const res = await studioFetch(`/api/messages/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!res.ok && res.status !== 404) throw new Error(await parseError(res));
@@ -130,7 +134,7 @@ export function streamChat(
 
   (async () => {
     try {
-      const res = await fetch("/api/chat", {
+      const res = await studioFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -158,6 +162,7 @@ export function streamChat(
       const decoder = new TextDecoder();
       let buffer = "";
       let assistantMessageId: string | undefined;
+      let usage: MessageUsage | undefined;
 
       for (;;) {
         const { done, value } = await reader.read();
@@ -178,6 +183,11 @@ export function streamChat(
           if (Array.isArray(data.rag_citations)) {
             callbacks.onRagCitations?.(data.rag_citations as RagCitation[]);
           }
+          // 中途的 usage 事件即时回调；done 携带的终局用量只通过 onDone 给出，避免重复。
+          if (data.usage && typeof data.usage === "object" && !data.done) {
+            usage = data.usage as MessageUsage;
+            callbacks.onUsage?.(usage);
+          }
           if (data.tool_result) {
             callbacks.onToolResult?.(
               data.tool_result as Parameters<NonNullable<StreamCallbacks["onToolResult"]>>[0],
@@ -188,7 +198,9 @@ export function streamChat(
             return;
           }
           if (data.done) {
-            callbacks.onDone({ assistantMessageId });
+            const finalUsage =
+              data.usage && typeof data.usage === "object" ? (data.usage as MessageUsage) : usage;
+            callbacks.onDone({ assistantMessageId, ...(finalUsage ? { usage: finalUsage } : {}) });
             return;
           }
           if (data.delta) {
@@ -199,7 +211,7 @@ export function streamChat(
 
       // 流式连接正常关闭但未收到 done 事件时，兜底结束本次对话，
       // 避免前端一直停留在 loading 状态。
-      callbacks.onDone({ assistantMessageId });
+      callbacks.onDone({ assistantMessageId, ...(usage ? { usage } : {}) });
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         callbacks.onStopped?.();
@@ -288,7 +300,7 @@ export async function testWorkflowNode(
   inputs: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<WorkflowNodeTestResult> {
-  const response = await fetch("/api/workflow/node/test", {
+  const response = await studioFetch("/api/workflow/node/test", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ node, inputs }),
@@ -315,7 +327,7 @@ export function streamWorkflow(
   const controller = new AbortController();
   (async () => {
     try {
-      const response = await fetch("/api/workflow/run", {
+      const response = await studioFetch("/api/workflow/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(request),

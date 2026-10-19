@@ -19,6 +19,7 @@ import type {
   RetrievedChunk,
 } from "./eval/types.js";
 import { parseDatasetInput, parseRunOptions } from "./eval/validation.js";
+import { resolveRagAuth } from "./auth.js";
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "rag-eval-"));
@@ -38,6 +39,7 @@ function retriever(map: Record<string, RetrievedChunk[]>): RetrievalFn {
 
 async function startApi(options: { store: EvalStore; runner: EvalRunner }) {
   const app = express();
+  app.use(resolveRagAuth({ runtimeToken: "runtime-token", adminToken: "admin-token" }).middleware);
   app.use(express.json());
   app.use("/api/eval", evalRouter(options));
   const server = app.listen(0, "127.0.0.1");
@@ -390,12 +392,16 @@ test("看板列出最近一次运行的未命中用例", async () => {
 
 test("评估 API 覆盖 CRUD、运行与看板", async () => {
   const { store, cleanup } = setup();
-  const runner = new EvalRunner({ store, retrieve: retriever({ 部署: [{ source: "guide.md", content: "部署" }] }) });
+  const runner = new EvalRunner({
+    store,
+    retrieve: retriever({ 部署: [{ source: "guide.md", content: "部署" }] }),
+  });
   const api = await startApi({ store, runner });
+  const auth = { authorization: "Bearer admin-token" };
   try {
     const createResponse = await fetch(`${api.baseUrl}/api/eval/datasets`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({
         name: "回归集",
         cases: [{ query: "部署", expectedSources: ["guide.md"], expectedKeywords: ["部署"] }],
@@ -406,13 +412,13 @@ test("评估 API 覆盖 CRUD、运行与看板", async () => {
     const datasetId = created.dataset.id;
     assert.equal(created.dataset.cases.length, 1);
 
-    const listResponse = await fetch(`${api.baseUrl}/api/eval/datasets`);
+    const listResponse = await fetch(`${api.baseUrl}/api/eval/datasets`, { headers: auth });
     const list = (await listResponse.json()) as { datasets: EvalDatasetSummary[] };
     assert.equal(list.datasets.length, 1);
 
     const runResponse = await fetch(`${api.baseUrl}/api/eval/datasets/${datasetId}/run`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ topK: 4 }),
     });
     assert.equal(runResponse.status, 201);
@@ -420,28 +426,31 @@ test("评估 API 覆盖 CRUD、运行与看板", async () => {
     assert.equal(run.run.hitRate, 1);
     assert.equal(run.run.topK, 4);
 
-    const overviewResponse = await fetch(`${api.baseUrl}/api/eval/overview`);
+    const overviewResponse = await fetch(`${api.baseUrl}/api/eval/overview`, { headers: auth });
     const overview = (await overviewResponse.json()) as EvalOverview;
     assert.equal(overview.datasets, 1);
     assert.equal(overview.cases, 1);
     assert.equal(overview.latest?.runId, run.run.runId);
     assert.equal(overview.misses.length, 0);
 
-    const runsResponse = await fetch(`${api.baseUrl}/api/eval/runs`);
+    const runsResponse = await fetch(`${api.baseUrl}/api/eval/runs`, { headers: auth });
     const runs = (await runsResponse.json()) as { runs: EvalRunSummary[] };
     assert.equal(runs.runs.length, 1);
 
     const deleteResponse = await fetch(`${api.baseUrl}/api/eval/datasets/${datasetId}`, {
       method: "DELETE",
+      headers: auth,
     });
     assert.equal(deleteResponse.status, 200);
 
-    const missingResponse = await fetch(`${api.baseUrl}/api/eval/datasets/${datasetId}`);
+    const missingResponse = await fetch(`${api.baseUrl}/api/eval/datasets/${datasetId}`, {
+      headers: auth,
+    });
     assert.equal(missingResponse.status, 404);
 
     const badResponse = await fetch(`${api.baseUrl}/api/eval/datasets`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ name: "x", cases: [] }),
     });
     assert.equal(badResponse.status, 400);
@@ -455,10 +464,11 @@ test("对不存在的评测集触发运行返回 404", async () => {
   const { store, cleanup } = setup();
   const runner = new EvalRunner({ store, retrieve: retriever({}) });
   const api = await startApi({ store, runner });
+  const auth = { authorization: "Bearer admin-token" };
   try {
     const response = await fetch(`${api.baseUrl}/api/eval/datasets/missing/run`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({}),
     });
     assert.equal(response.status, 404);

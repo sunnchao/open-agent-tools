@@ -14,17 +14,89 @@ import {
 import { runSchemaText2Sql, type HistoryTurn } from "../oneapiDemo/text2sql.js";
 import {
   getQueryAudit,
+  getQueryAuditDetail,
   listQueryAudits,
+  resolveOperatorActor,
+  type QueryAuditFilters,
   type QueryAuditStatus,
+  type QueryAuditSource,
+  type QueryEntrypoint,
+  type QuerySqlSource,
 } from "../observatory/queryAudit.js";
+import { resolveWorkspace } from "../workspace.js";
+import { AUDIT_EXPORT_COLUMNS, listAuditExportRows } from "../export/auditExport.js";
+import { parseExportFormat, sendExport } from "../export/respond.js";
 
 export const observatoryRouter: Router = Router();
 
 observatoryRouter.get("/api/observatory/audits", (req: Request, res: Response) => {
-  const status = typeof req.query.status === "string" ? req.query.status : undefined;
-  if (status && !["running", "succeeded", "failed", "clarifying"].includes(status)) {
-    res.status(400).json({ error: "无效的审计状态" });
+  const parsed = parseAuditQuery(req);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
     return;
+  }
+  const { filters, limit, offset } = parsed.value;
+  res.json(listQueryAudits({ ...filters, limit, offset }));
+});
+
+/**
+ * 审计导出(等保/内审):复用列表页的筛选条件,把审计摘要导成 CSV/JSON。
+ *
+ * 筛选解析与列表接口共用 `parseAuditQuery`,保证「列表看到的」与「导出的」是同一批数据。
+ * 结果有条数硬上限,超限截断并通过 `x-export-truncated` 明示。
+ */
+observatoryRouter.get("/api/observatory/audits/export", (req: Request, res: Response) => {
+  const format = parseExportFormat(req.query.format);
+  if (!format) {
+    res.status(400).json({ error: "format 必须为 csv 或 json" });
+    return;
+  }
+  const parsed = parseAuditQuery(req);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+  const { rows, truncated } = listAuditExportRows(parsed.value.filters);
+  logTrace("observatory.audits_export", {
+    format,
+    workspace: parsed.value.filters.workspace,
+    rows: rows.length,
+    truncated,
+  });
+  sendExport(res, {
+    format,
+    columns: AUDIT_EXPORT_COLUMNS,
+    rows,
+    filenameBase: "query-audits",
+    truncated,
+  });
+});
+
+interface ParsedAuditQuery {
+  filters: Omit<QueryAuditFilters, "limit" | "offset">;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * 解析审计列表/导出的公共筛选条件。行为与历史列表接口保持一致:
+ * 校验顺序(status → from/to → limit/offset → 枚举 → workspace)与错误文案均不变。
+ */
+function parseAuditQuery(
+  req: Request,
+): { ok: true; value: ParsedAuditQuery } | { ok: false; error: string } {
+  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+  const from = optionalTimestamp(req.query.from);
+  const to = optionalTimestamp(req.query.to);
+  if (status && !["running", "succeeded", "failed", "clarifying"].includes(status)) {
+    return { ok: false, error: "无效的审计状态" };
+  }
+  if (
+    (req.query.from !== undefined && !from) ||
+    (req.query.to !== undefined && !to) ||
+    (from && to && from > to)
+  ) {
+    return { ok: false, error: "from/to 必须为有效且先后有序的 ISO 时间" };
   }
   const limit = req.query.limit === undefined ? 20 : Number(req.query.limit);
   const offset = req.query.offset === undefined ? 0 : Number(req.query.offset);
@@ -35,28 +107,113 @@ observatoryRouter.get("/api/observatory/audits", (req: Request, res: Response) =
     !Number.isInteger(offset) ||
     offset < 0
   ) {
-    res.status(400).json({ error: "limit 必须为 1–100，offset 必须为非负整数" });
-    return;
+    return { ok: false, error: "limit 必须为 1–100,offset 必须为非负整数" };
   }
-  res.json(
-    listQueryAudits({
-      sourceId: requestedSourceId(req),
-      status: status as QueryAuditStatus | undefined,
-      search: typeof req.query.search === "string" ? req.query.search.trim() : undefined,
+  const entrypoint = optionalEnum<QueryEntrypoint>(req.query.entrypoint, [
+    "observatory",
+    "chat",
+    "workflow",
+    "rerun",
+    "unknown",
+  ]);
+  const sqlSource = optionalEnum<QuerySqlSource>(req.query.sqlSource, [
+    "generated",
+    "edited",
+    "original",
+  ]);
+  const source = optionalEnum<QueryAuditSource>(req.query.source, [
+    "generated",
+    "rerun",
+    "workflow",
+    "chat",
+    "clarification",
+  ]);
+  if (
+    (req.query.entrypoint !== undefined && !entrypoint) ||
+    (req.query.source !== undefined && !source) ||
+    (req.query.sqlSource !== undefined && !sqlSource)
+  ) {
+    return { ok: false, error: "无效的审计筛选条件" };
+  }
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    return { ok: false, error: `workspace not found: ${workspace.requested}` };
+  }
+  return {
+    ok: true,
+    value: {
       limit,
       offset,
-    }),
-  );
-});
+      filters: {
+        sourceId: requestedSourceId(req),
+        status: status as QueryAuditStatus | undefined,
+        actor: typeof req.query.actor === "string" ? req.query.actor.trim() : undefined,
+        ...(entrypoint ? { entrypoint } : {}),
+        ...(source ? { source } : {}),
+        ...(sqlSource ? { sqlSource } : {}),
+        parentAuditId:
+          typeof req.query.parentAuditId === "string" ? req.query.parentAuditId.trim() : undefined,
+        workspace: workspace.workspaceId,
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
+        search: typeof req.query.search === "string" ? req.query.search.trim() : undefined,
+      },
+    },
+  };
+}
 
 observatoryRouter.get("/api/observatory/audits/:id", (req: Request, res: Response) => {
-  const record = getQueryAudit(String(req.params.id));
-  if (!record) {
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+    return;
+  }
+  const detail = getQueryAuditDetail(String(req.params.id), workspace.workspaceId);
+  if (!detail) {
     res.status(404).json({ error: "审计记录不存在" });
     return;
   }
-  res.json({ record });
+  res.json(detail);
 });
+
+function optionalEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === "string" && allowed.includes(value as T) ? (value as T) : undefined;
+}
+
+function optionalTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizedSql(sql: string | null | undefined): string {
+  return (sql ?? "")
+    .trim()
+    .replace(/;\s*$/, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*([(),=<>+\-*/])\s*/g, "$1")
+    .toLowerCase();
+}
+
+function rejectRerunContext(req: Request): string | undefined {
+  if (
+    req.body?.connectionString !== undefined ||
+    req.body?.permissionContext !== undefined ||
+    req.body?.industries !== undefined ||
+    req.body?.orgNos !== undefined ||
+    req.body?.sourceId !== undefined ||
+    req.body?.workspace !== undefined
+  ) {
+    return "重跑不接受连接串、数据源、workspace 或权限上下文";
+  }
+  return undefined;
+}
 
 function requestedSourceId(req: Request): string | undefined {
   if (typeof req.query.sourceId === "string" && req.query.sourceId.trim()) {
@@ -161,6 +318,12 @@ observatoryRouter.post(
       res.status(400).json({ error: "question 不能为空" });
       return;
     }
+    const workspace = resolveWorkspace(req);
+    if (!workspace.ok) {
+      res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+      return;
+    }
+    const actor = resolveOperatorActor(req, { allowExplicitOperator: false });
     const history: HistoryTurn[] = Array.isArray(req.body?.history)
       ? req.body.history
           .filter(
@@ -175,6 +338,11 @@ observatoryRouter.post(
           .map((turn: HistoryTurn) => ({ role: turn.role, content: turn.content.trim() }))
           .slice(-8)
       : [];
+    const suppliedOriginalQuestion = nonEmptyString(req.body?.originalQuestion);
+    const originalQuestion =
+      suppliedOriginalQuestion ?? history.find((turn) => turn.role === "user")?.content ?? question;
+    const turnQuestion =
+      suppliedOriginalQuestion && suppliedOriginalQuestion !== question ? question : undefined;
     try {
       const streaming =
         req.accepts(["text/event-stream", "application/json"]) === "text/event-stream" &&
@@ -204,6 +372,16 @@ observatoryRouter.post(
           question,
           history,
           streaming ? send : undefined,
+          {
+            audit: {
+              actor,
+              entrypoint: "observatory",
+              source: "generated",
+              workspace: workspace.workspaceId,
+              originalQuestion,
+            },
+            ...(turnQuestion ? { turnQuestion } : {}),
+          },
         );
         if (streaming) {
           send({ type: "result", result });
@@ -232,3 +410,126 @@ observatoryRouter.post(
     }
   },
 );
+
+observatoryRouter.post("/api/observatory/query/rerun", async (req: Request, res: Response) => {
+  const parentAuditId =
+    typeof req.body?.parentAuditId === "string" ? req.body.parentAuditId.trim() : "";
+  const sql = typeof req.body?.sql === "string" ? req.body.sql.trim() : "";
+  if (!parentAuditId) {
+    res.status(400).json({ error: "parentAuditId 不能为空" });
+    return;
+  }
+  if (!sql) {
+    res.status(400).json({ error: "sql 不能为空" });
+    return;
+  }
+  // 明确拒绝越权上下文：重跑只接受父审计 + SQL，其余一律由服务端解析。
+  const contextError = rejectRerunContext(req);
+  if (contextError) {
+    res.status(400).json({ error: contextError });
+    return;
+  }
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+    return;
+  }
+  const parent = getQueryAudit(parentAuditId);
+  if (!parent || parent.workspace !== workspace.workspaceId) {
+    res.status(404).json({ error: "父审计不存在" });
+    return;
+  }
+  if (parent.parentAuditId) {
+    res.status(400).json({ error: "仅允许从根审计创建重跑子记录，避免出现链式放大" });
+    return;
+  }
+  if (parent.status === "running") {
+    res.status(409).json({ error: "父审计仍在执行，不能重跑" });
+    return;
+  }
+  if (!parent.sourceId) {
+    res.status(400).json({ error: "父审计缺少数据源，无法重跑" });
+    return;
+  }
+  // 是否“原样重跑”只能由服务端比较得出；客户端传入的 sqlSource 一律忽略。
+  const expectedSql = parent.executedSql ?? parent.generatedSql ?? parent.sql;
+  const sqlSource: QuerySqlSource =
+    normalizedSql(sql) === normalizedSql(expectedSql) ? "original" : "edited";
+  const actor = resolveOperatorActor(req, { allowExplicitOperator: false });
+  const question = parent.originalQuestion || parent.question;
+  const clarificationHistory: HistoryTurn[] = parent.clarification
+    ? [
+        { role: "user", content: parent.originalQuestion || question },
+        {
+          role: "assistant",
+          content: JSON.stringify({ clarification: parent.clarification }),
+        },
+      ]
+    : [];
+  const streaming =
+    req.accepts(["text/event-stream", "application/json"]) === "text/event-stream" &&
+    req.get("accept")?.includes("text/event-stream");
+  const send = (event: unknown) => {
+    if (!res.destroyed && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+  };
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  if (streaming) {
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders();
+    heartbeat = setInterval(() => {
+      if (!res.destroyed && !res.writableEnded) res.write(": heartbeat\n\n");
+    }, 15_000);
+    res.on("close", () => clearInterval(heartbeat));
+  }
+  try {
+    const result = await runSchemaText2Sql(
+      parent.sourceId,
+      question,
+      clarificationHistory,
+      streaming ? send : undefined,
+      {
+        audit: {
+          actor,
+          entrypoint: "rerun",
+          source: "rerun",
+          sqlSource,
+          parentAuditId: parent.id,
+          workspace: workspace.workspaceId,
+          originalQuestion: question,
+          generatedSql: parent.generatedSql,
+          executedSql: sql,
+        },
+        rerun: {
+          sql,
+          generatedSql: parent.generatedSql,
+          sqlSource,
+        },
+      },
+    );
+    if (streaming) {
+      send({ type: "result", result });
+      res.end();
+    } else {
+      res.status(result.error ? 400 : 200).json(result);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (res.headersSent) {
+      if (!res.destroyed) {
+        res.write(`data: ${JSON.stringify({ type: "error", error: message })}\n\n`);
+        res.end();
+      }
+    } else {
+      res.status(400).json({ error: message });
+    }
+  } finally {
+    clearInterval(heartbeat);
+  }
+});

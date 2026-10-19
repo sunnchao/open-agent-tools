@@ -17,6 +17,7 @@ import type { AuthorizedService } from "./access.js";
 import { RemoteMcpProxy } from "./remote-proxy.js";
 import type { RemoteServiceConfig } from "@open-agent-tools/mcp-contracts";
 import type { ToolExecutor } from "./tool-executor.js";
+import type { GatewayQuotaService } from "./quota.js";
 
 export interface ManagedMcpServerOptions {
   executor?: ToolExecutor;
@@ -24,6 +25,7 @@ export interface ManagedMcpServerOptions {
   now?: () => string;
   /** 注入远程代理工厂便于测试；缺省用 RemoteMcpProxy。 */
   createRemoteProxy?: (config: RemoteServiceConfig) => RemoteMcpProxy;
+  quota?: GatewayQuotaService;
 }
 
 export function createManagedMcpServer(
@@ -127,56 +129,75 @@ function registerToolHandlers(
   server.server.setRequestHandler(
     CallToolRequestSchema,
     async (request): Promise<CallToolResult> => {
-      requireScope(authorized, "tools:call");
-      const tool = authorized.snapshot.tools.find(
-        (candidate) =>
-          candidate.name === request.params.name &&
-          (authorized.toolNames === null || authorized.toolNames.has(candidate.name)),
-      );
-      if (!tool) {
-        throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
-      }
-
-      const validate = validators.get(tool.name);
-      if (validate === null || validate === undefined) {
-        throw new McpError(ErrorCode.InternalError, "Published Tool schema is unavailable");
-      }
-      const argumentsValue = request.params.arguments ?? {};
-      if (!validate(argumentsValue)) {
-        throw new McpError(ErrorCode.InvalidParams, "Invalid Tool arguments");
-      }
-
       const requestId = (options.createRequestId ?? randomUUID)();
-      const imageDigest = authorized.snapshot.imageDigest;
-      const limits = authorized.snapshot.limits;
-      if (!options.executor || imageDigest === null || limits === null) {
-        throw new McpError(
-          ErrorCode.InternalError,
-          `Tool execution is unavailable (requestId: ${requestId})`,
-        );
-      }
-
+      const startedAt = Date.now();
       try {
-        return await options.executor.execute({
-          requestId,
-          serviceId: authorized.snapshot.serviceId,
-          versionId: authorized.snapshot.versionId,
-          imageDigest,
-          toolName: tool.name,
-          arguments: argumentsValue,
-          context: {
-            clientId: authorized.clientId,
-            deadlineAt: new Date(
-              Date.parse((options.now ?? (() => new Date().toISOString()))()) + limits.timeoutMs,
-            ).toISOString(),
-          },
-          limits,
-        });
-      } catch {
-        throw new McpError(
-          ErrorCode.InternalError,
-          `Tool execution failed (requestId: ${requestId})`,
+        requireScope(authorized, "tools:call");
+        const tool = authorized.snapshot.tools.find(
+          (candidate) =>
+            candidate.name === request.params.name &&
+            (authorized.toolNames === null || authorized.toolNames.has(candidate.name)),
         );
+        if (!tool) {
+          throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
+        }
+
+        const validate = validators.get(tool.name);
+        if (validate === null || validate === undefined) {
+          throw new McpError(ErrorCode.InternalError, "Published Tool schema is unavailable");
+        }
+        const argumentsValue = request.params.arguments ?? {};
+        if (!validate(argumentsValue)) {
+          throw new McpError(ErrorCode.InvalidParams, "Invalid Tool arguments");
+        }
+
+        const imageDigest = authorized.snapshot.imageDigest;
+        const limits = authorized.snapshot.limits;
+        if (!options.executor || imageDigest === null || limits === null) {
+          throw new McpError(
+            ErrorCode.InternalError,
+            `Tool execution is unavailable (requestId: ${requestId})`,
+          );
+        }
+
+        let result: CallToolResult;
+        try {
+          result = await options.executor.execute({
+            requestId,
+            serviceId: authorized.snapshot.serviceId,
+            versionId: authorized.snapshot.versionId,
+            imageDigest,
+            toolName: tool.name,
+            arguments: argumentsValue,
+            context: {
+              clientId: authorized.clientId,
+              deadlineAt: new Date(
+                Date.parse((options.now ?? (() => new Date().toISOString()))()) + limits.timeoutMs,
+              ).toISOString(),
+            },
+            limits,
+          });
+        } catch {
+          throw new McpError(
+            ErrorCode.InternalError,
+            `Tool execution failed (requestId: ${requestId})`,
+          );
+        }
+        await options.quota?.settle({
+          requestId,
+          status: result.isError === true ? "FAILED" : "SUCCEEDED",
+          durationMs: Date.now() - startedAt,
+        });
+        return result;
+      } catch (error) {
+        // A successful settle already moved the row out of RESERVED. Settling
+        // again is intentionally idempotent in the repository.
+        await options.quota?.settle({
+          requestId,
+          status: "FAILED",
+          durationMs: Date.now() - startedAt,
+        });
+        throw error;
       }
     },
   );
@@ -215,17 +236,30 @@ function registerRemoteToolHandlers(
   server.server.setRequestHandler(
     CallToolRequestSchema,
     async (request): Promise<CallToolResult> => {
-      requireScope(authorized, "tools:call");
-      if (authorized.toolNames !== null && !authorized.toolNames.has(request.params.name)) {
-        throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
-      }
+      const requestId = (options.createRequestId ?? randomUUID)();
+      const startedAt = Date.now();
       try {
+        requireScope(authorized, "tools:call");
+        if (authorized.toolNames !== null && !authorized.toolNames.has(request.params.name)) {
+          throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
+        }
         const result = await proxy.callTool(request.params.name, request.params.arguments ?? {});
+        await options.quota?.settle({
+          requestId,
+          status: result.isError === true ? "FAILED" : "SUCCEEDED",
+          durationMs: Date.now() - startedAt,
+        });
         return {
           content: result.content as CallToolResult["content"],
           ...(result.isError === true ? { isError: true } : {}),
         };
       } catch (error) {
+        await options.quota?.settle({
+          requestId,
+          status: "FAILED",
+          durationMs: Date.now() - startedAt,
+        });
+        if (error instanceof McpError) throw error;
         throw new McpError(
           ErrorCode.InternalError,
           `Remote Tool execution failed: ${error instanceof Error ? error.message : "unknown error"}`,

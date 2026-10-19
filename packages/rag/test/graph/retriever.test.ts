@@ -18,10 +18,18 @@ function setup() {
     ids.set(name, id);
     return id;
   };
-  const link = (a: string, b: string, relType = "supplies") => {
+  const link = (a: string, b: string, relType = "supplies", source = "") => {
     const src = ids.get(a)!;
     const dst = ids.get(b)!;
-    store.upsertRelation({ id: relationId(src, relType, dst), srcId: src, dstId: dst, relType, weight: 1, sourceChunk: "c:0" });
+    store.upsertRelation({
+      id: relationId(src, relType, dst),
+      srcId: src,
+      dstId: dst,
+      relType,
+      weight: 1,
+      sourceChunk: "c:0",
+      source,
+    });
   };
   return {
     store,
@@ -36,8 +44,8 @@ test("retrieve 种子定位命中并扩展子图", async () => {
   const openai = add("OpenAI");
   const azure = add("Azure");
   add("Microsoft"); // 只作为二跳扩展的终点，无需持有 id
-  link("OpenAI", "Azure");
-  link("Azure", "Microsoft");
+  link("OpenAI", "Azure", "supplies", "a.md");
+  link("Azure", "Microsoft", "supplies", "b.md");
   const retriever = new GraphRetriever(store);
   const result = await retriever.retrieve("OpenAI 的供应商");
   assert.equal(result.seeds.length, 1);
@@ -143,5 +151,54 @@ test("别名兜底:通过别名命中实体(共指)", async () => {
   const result = await retriever.retrieve("OpenAI 公司");
   assert.equal(result.seeds.length, 1);
   assert.equal(result.seeds[0]!.id, openai);
+  cleanup();
+});
+
+test("sources 白名单：种子与多跳邻居都不越过来源边界", async () => {
+  const { store, add, link, cleanup } = setup();
+  const openai = add("OpenAI");
+  const azure = add("Azure");
+  const microsoft = add("Microsoft");
+  link("OpenAI", "Azure", "supplies", "a.md");
+  link("Azure", "Microsoft", "supplies", "b.md");
+  store.linkEntitySource(openai, "a.md");
+  store.linkEntitySource(azure, "a.md");
+  store.linkEntitySource(microsoft, "b.md");
+
+  const scoped = new GraphRetriever(store);
+  const allowed = await scoped.retrieve("OpenAI 的供应商", { sources: ["a.md"] });
+  assert.equal(allowed.seeds.length, 1);
+  assert.ok(allowed.subgraph?.entities.some((entity) => entity.name === "Azure"));
+  assert.ok(
+    !allowed.subgraph?.entities.some((entity) => entity.name.toLowerCase() === "microsoft"),
+    "未授权来源中的二跳实体不得泄漏",
+  );
+
+  const denied = await scoped.retrieve("OpenAI", { sources: ["b.md"] });
+  assert.equal(denied.seeds.length, 0);
+  assert.equal(denied.subgraph, null);
+
+  const empty = await scoped.retrieve("OpenAI", { sources: [] });
+  assert.equal(empty.seeds.length, 0);
+  cleanup();
+});
+
+test("sources 白名单：关系两端实体都必须可见", async () => {
+  const { store, add, link, cleanup } = setup();
+  const openai = add("OpenAI");
+  const salesOnly = add("SalesOnly");
+  const hrOnly = add("HrOnly");
+  // 边本身被允许来源佐证，但一端实体只属于未授权文档，不能序列化出来。
+  link("OpenAI", "SalesOnly", "supplies", "public.md");
+  store.linkEntitySource(openai, "public.md");
+  store.linkEntitySource(salesOnly, "sales.md");
+  store.linkEntitySource(hrOnly, "hr.md");
+
+  const retriever = new GraphRetriever(store);
+  const result = await retriever.retrieve("OpenAI", { sources: ["public.md"] });
+  assert.equal(result.seeds.length, 1);
+  assert.ok(result.subgraph?.entities.some((entity) => entity.id === openai));
+  assert.ok(!result.subgraph?.entities.some((entity) => entity.id === salesOnly));
+  assert.ok(!result.subgraph?.relations.some((relation) => relation.dstId === salesOnly));
   cleanup();
 });

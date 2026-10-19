@@ -7,6 +7,12 @@ import { logDebugDuration } from "./trace.js";
 export type Role = "user" | "assistant" | "system" | "tool";
 export type MessageStatus = "streaming" | "complete" | "error" | "stopped";
 
+/**
+ * 默认 workspace：历史数据与未显式指定归属的资源都落在它下面。
+ * 用固定字符串而非随机 UUID，便于迁移与排障时人工辨认。
+ */
+export const DEFAULT_WORKSPACE_ID = "default";
+
 export interface Message {
   id: string;
   role: Role;
@@ -49,7 +55,8 @@ export function openDb(path = getDbPath()): DatabaseSync {
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New chat',
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'default'
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -161,14 +168,192 @@ export function openDb(path = getDbPath()): DatabaseSync {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_caliber_configs_default
       ON caliber_configs(is_default) WHERE is_default = 1;
+
+    -- 用量计量（商业化计费与成本对账的依据）：只做新增，不改动现有表。
+    -- kind='chat' 记录整轮对话的 token 与工具轮数；kind='tool' 记录单次工具调用。
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('chat', 'tool')),
+      workspace_id TEXT,
+      session_id TEXT,
+      provider_id TEXT,
+      model TEXT,
+      tool_kind TEXT,
+      tool_name TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      tool_calls INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'ok',
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_usage_events_created_at
+      ON usage_events(created_at);
+    CREATE INDEX IF NOT EXISTS idx_usage_events_kind_created_at
+      ON usage_events(kind, created_at);
+
+    -- workspace：只做「一层隔离」，不引入完整多租户。
+    -- 老数据一律归属 default，避免迁移期间出现无归属资源。
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    -- 发布态：把一个「知识库 + 资源绑定 + 提示词」打包成员工可用的入口。
+    -- 与 Studio 管理台分离：终端用户只看到问答，不需要理解 Provider/资源抽屉。
+    CREATE TABLE IF NOT EXISTS published_apps (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      slug TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      welcome TEXT NOT NULL DEFAULT '',
+      suggestions_json TEXT NOT NULL DEFAULT '[]',
+      resources_json TEXT NOT NULL DEFAULT '{}',
+      allowed_groups_json TEXT NOT NULL DEFAULT '[]',
+      provider_id TEXT,
+      model TEXT,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      -- 访问控制：public 任何人可访问；token 需要携带访问口令（分享链接即凭证）。
+      access_mode TEXT NOT NULL DEFAULT 'public',
+      access_token_hash TEXT,
+      access_token_hint TEXT,
+      -- 配额：每分钟请求数上限 + 每日 token 预算（0 表示不限）。
+      rate_limit_per_minute INTEGER NOT NULL DEFAULT 20,
+      daily_token_budget INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_published_apps_workspace
+      ON published_apps(workspace_id, created_at DESC);
+
+    -- 短时身份断言的重放防护。jti 全库唯一；过期行按需清理。
+    CREATE TABLE IF NOT EXISTS viewer_assertion_replays (
+      replay_key TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_viewer_assertion_replays_expires
+      ON viewer_assertion_replays(expires_at);
+
+    -- 文档同步连接器(SKU A6):管理员配置外部知识源并增量同步进知识库。
+    -- 只做新增表,不改动现有 schema;删除连接器时级联清理运行记录与去重台账。
+    CREATE TABLE IF NOT EXISTS connectors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      base_url TEXT,
+      credentials_enc TEXT,
+      credential_keys_json TEXT NOT NULL DEFAULT '[]',
+      filter_json TEXT NOT NULL DEFAULT '{}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_status TEXT,
+      last_synced_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS connector_sync_runs (
+      id TEXT PRIMARY KEY,
+      connector_id TEXT NOT NULL REFERENCES connectors(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      pulled INTEGER NOT NULL DEFAULT 0,
+      ingested INTEGER NOT NULL DEFAULT 0,
+      skipped INTEGER NOT NULL DEFAULT 0,
+      failed INTEGER NOT NULL DEFAULT 0,
+      failures_json TEXT NOT NULL DEFAULT '[]',
+      error TEXT,
+      started_at TEXT NOT NULL,
+      finished_at TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_connector_sync_runs_connector
+      ON connector_sync_runs(connector_id, started_at DESC);
+
+    -- 幂等台账:同一 (connector_id, external_id) 记录内容哈希,哈希未变即跳过。
+    CREATE TABLE IF NOT EXISTS connector_documents (
+      connector_id TEXT NOT NULL REFERENCES connectors(id) ON DELETE CASCADE,
+      external_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      rag_source TEXT NOT NULL,
+      byte_size INTEGER NOT NULL DEFAULT 0,
+      ingested_at TEXT NOT NULL,
+      PRIMARY KEY (connector_id, external_id)
+    );
   `);
 
   migrateMessagesTable(db);
   migrateProvidersTable(db);
   migrateSchemaSourcesTable(db);
+  migrateWorkspaceColumns(db);
+  ensureDefaultWorkspace(db);
 
   logDebugDuration("db.open", startedAt, { path });
   return db;
+}
+
+/** 为存量库补齐 workspace 归属列：新建库由 CREATE TABLE 直接带上，老库走 ALTER。 */
+function migrateWorkspaceColumns(database: DatabaseSync): void {
+  const additions: Array<[string, string, string]> = [
+    ["sessions", "workspace_id", `TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}'`],
+    ["usage_events", "workspace_id", "TEXT"],
+  ];
+  for (const [table, column, definition] of additions) {
+    const columns = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string;
+    }>;
+    if (columns.length === 0) continue;
+    if (!new Set(columns.map((row) => row.name)).has(column)) {
+      database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
+  database.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id)`);
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_usage_events_workspace ON usage_events(workspace_id, created_at)`,
+  );
+  migratePublishedAppColumns(database);
+}
+
+/** 发布应用新增的访问控制与配额列：老库走 ALTER，默认值保证行为向后兼容。 */
+function migratePublishedAppColumns(database: DatabaseSync): void {
+  const rows = database.prepare(`PRAGMA table_info(published_apps)`).all() as Array<{
+    name: string;
+  }>;
+  if (rows.length === 0) return;
+  const columns = new Set(rows.map((row) => row.name));
+  const additions = [
+    ["access_mode", "TEXT NOT NULL DEFAULT 'public'"],
+    ["access_token_hash", "TEXT"],
+    ["access_token_hint", "TEXT"],
+    ["rate_limit_per_minute", "INTEGER NOT NULL DEFAULT 20"],
+    ["daily_token_budget", "INTEGER NOT NULL DEFAULT 0"],
+    ["allowed_groups_json", "TEXT NOT NULL DEFAULT '[]'"],
+  ] as const;
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) {
+      database.exec(`ALTER TABLE published_apps ADD COLUMN ${name} ${definition}`);
+    }
+  }
+}
+
+/** 默认 workspace 必须存在，否则新会话与老数据的归属会落空。 */
+function ensureDefaultWorkspace(database: DatabaseSync): void {
+  const now = new Date().toISOString();
+  database
+    .prepare(
+      `INSERT INTO workspaces (id, name, description, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO NOTHING`,
+    )
+    .run(DEFAULT_WORKSPACE_ID, "默认空间", "存量数据与未指定归属的资源", now, now);
 }
 
 function messageColumns(database: DatabaseSync): Set<string> {
@@ -236,16 +421,25 @@ function autoTitle(content: string): string {
   return trimmed.length > 32 ? `${trimmed.slice(0, 32)}…` : trimmed || "New chat";
 }
 
-export function listSessions(): SessionSummary[] {
+export function listSessions(workspaceId?: string): SessionSummary[] {
   const database = openDb();
-  const rows = database
-    .prepare(
-      `SELECT id, title, updated_at AS updatedAt
-       FROM sessions
-       ORDER BY updated_at DESC`,
-    )
-    .all() as Array<{ id: string; title: string; updatedAt: number }>;
-  return rows;
+  const scoped = workspaceId
+    ? database
+        .prepare(
+          `SELECT id, title, updated_at AS updatedAt
+           FROM sessions
+           WHERE workspace_id = ?
+           ORDER BY updated_at DESC`,
+        )
+        .all(workspaceId)
+    : database
+        .prepare(
+          `SELECT id, title, updated_at AS updatedAt
+           FROM sessions
+           ORDER BY updated_at DESC`,
+        )
+        .all();
+  return scoped as Array<{ id: string; title: string; updatedAt: number }>;
 }
 
 export function getSession(id: string): Session | null {
@@ -294,24 +488,37 @@ export function getSession(id: string): Session | null {
   };
 }
 
-export function listSessionsWithMessages(): Session[] {
+/** 读取会话的 workspace 归属（计量归集用）；会话不存在时返回 null。 */
+export function getSessionWorkspaceId(id: string): string | null {
+  const row = openDb()
+    .prepare(`SELECT workspace_id AS workspaceId FROM sessions WHERE id = ?`)
+    .get(id) as { workspaceId: string | null } | undefined;
+  return row?.workspaceId ?? null;
+}
+
+export function listSessionsWithMessages(workspaceId?: string): Session[] {
   const startedAt = Date.now();
-  const summaries = listSessions();
+  const summaries = listSessions(workspaceId);
   const sessions = summaries.map((s) => getSession(s.id)).filter((s): s is Session => s !== null);
   // N+1 查询(每个会话单独取消息);会话数变大时耗时会明显上升,debug 下单独计时便于发现。
   logDebugDuration("db.list_sessions_with_messages", startedAt, { sessions: sessions.length });
   return sessions;
 }
 
-export function createSession(input?: { id?: string; title?: string }): Session {
+export function createSession(input?: {
+  id?: string;
+  title?: string;
+  workspaceId?: string;
+}): Session {
   const database = openDb();
   const id = input?.id ?? randomUUID();
   const title = input?.title ?? "New chat";
+  const workspaceId = input?.workspaceId ?? DEFAULT_WORKSPACE_ID;
   const updatedAt = Date.now();
 
   database
-    .prepare(`INSERT INTO sessions (id, title, updated_at) VALUES (?, ?, ?)`)
-    .run(id, title, updatedAt);
+    .prepare(`INSERT INTO sessions (id, title, updated_at, workspace_id) VALUES (?, ?, ?, ?)`)
+    .run(id, title, updatedAt, workspaceId);
 
   return { id, title, messages: [], updatedAt };
 }
@@ -491,8 +698,8 @@ export function deleteMessage(messageId: string): boolean {
   return true;
 }
 
-export function ensureSession(sessionId: string): Session {
+export function ensureSession(sessionId: string, workspaceId?: string): Session {
   const existing = getSession(sessionId);
   if (existing) return existing;
-  return createSession({ id: sessionId });
+  return createSession({ id: sessionId, ...(workspaceId ? { workspaceId } : {}) });
 }

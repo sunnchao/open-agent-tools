@@ -48,6 +48,11 @@ export const mcpAdminRoleEnum = pgEnum("mcp_admin_role", [
   "client",
 ]);
 export const mcpAuditOutcomeEnum = pgEnum("mcp_audit_outcome", ["SUCCEEDED", "FAILED"]);
+export const usageEventStatusEnum = pgEnum("usage_event_status", [
+  "RESERVED",
+  "SUCCEEDED",
+  "FAILED",
+]);
 
 const timestampColumn = (name: string) => timestamp(name, { withTimezone: true, mode: "string" });
 
@@ -220,6 +225,64 @@ export const clientGrants = pgTable(
   (table) => [
     unique("client_grants_client_service_unique").on(table.clientId, table.serviceId),
     index("client_grants_service_idx").on(table.serviceId),
+  ],
+);
+
+export const clientQuotas = pgTable(
+  "client_quotas",
+  {
+    id: uuid("id").primaryKey(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => apiClients.id, { onDelete: "cascade" }),
+    /** null 表示 client 级全局配额；非 null 表示 client + service 级配额。 */
+    serviceId: uuid("service_id").references(() => mcpServices.id, { onDelete: "cascade" }),
+    qpsLimit: integer("qps_limit").notNull().default(0),
+    dailyCallLimit: integer("daily_call_limit").notNull().default(0),
+    createdAt: timestampColumn("created_at").notNull(),
+    updatedAt: timestampColumn("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("client_quotas_client_global_unique")
+      .on(table.clientId)
+      .where(sql`${table.serviceId} IS NULL`),
+    uniqueIndex("client_quotas_client_service_unique")
+      .on(table.clientId, table.serviceId)
+      .where(sql`${table.serviceId} IS NOT NULL`),
+    index("client_quotas_service_idx").on(table.serviceId),
+  ],
+);
+
+export const usageEvents = pgTable(
+  "usage_events",
+  {
+    /** Gateway requestId，可直接关联执行队列与审计事件。 */
+    id: uuid("id").primaryKey(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => apiClients.id, { onDelete: "cascade" }),
+    serviceId: uuid("service_id")
+      .notNull()
+      .references(() => mcpServices.id, { onDelete: "cascade" }),
+    versionId: uuid("version_id")
+      .notNull()
+      .references(() => mcpServiceVersions.id, { onDelete: "restrict" }),
+    toolName: varchar("tool_name", { length: 64 }).notNull(),
+    requestId: varchar("request_id", { length: 120 }).notNull(),
+    status: usageEventStatusEnum("status").notNull().default("RESERVED"),
+    createdAt: timestampColumn("created_at").notNull(),
+    finishedAt: timestampColumn("finished_at"),
+    durationMs: integer("duration_ms"),
+  },
+  (table) => [
+    index("usage_events_client_created_idx").on(table.clientId, table.createdAt),
+    index("usage_events_client_service_created_idx").on(
+      table.clientId,
+      table.serviceId,
+      table.createdAt,
+    ),
+    index("usage_events_status_created_idx").on(table.status, table.createdAt),
+    index("usage_events_request_idx").on(table.requestId),
   ],
 );
 

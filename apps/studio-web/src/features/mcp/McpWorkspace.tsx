@@ -3,12 +3,14 @@ import { Input, Select } from "antd";
 import {
   ApiOutlined,
   AuditOutlined,
+  BarChartOutlined,
   BuildOutlined,
   CheckCircleFilled,
   CodeOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  ExperimentOutlined,
   FileTextOutlined,
   LoadingOutlined,
   PlayCircleOutlined,
@@ -17,6 +19,7 @@ import {
   RocketOutlined,
   SearchOutlined,
   SettingOutlined,
+  TagOutlined,
   TeamOutlined,
   ToolOutlined,
   UndoOutlined,
@@ -53,6 +56,9 @@ import {
 } from "./api.js";
 import { callGatewayTool } from "./gateway.js";
 import { AuditView, BuildsView, ClientsView, type McpManagementView } from "./McpOperations.js";
+import { MarketplaceView } from "./MarketplaceView.js";
+import { SlaPanel } from "./SlaPanel.js";
+import { DebugSandbox } from "./DebugSandbox.js";
 import { VersionLimits } from "./VersionLimits.js";
 
 type Asset = { kind: "tool"; value: McpTool } | { kind: "prompt"; value: McpPrompt };
@@ -198,11 +204,17 @@ export function McpWorkspace() {
           <h1>
             {view === "services"
               ? "MCP 服务"
-              : view === "builds"
-                ? "构建任务"
-                : view === "clients"
-                  ? "客户端授权"
-                  : "审计事件"}
+              : view === "marketplace"
+                ? "工具市场"
+                : view === "builds"
+                  ? "构建任务"
+                  : view === "clients"
+                    ? "客户端授权"
+                    : view === "audit"
+                      ? "审计事件"
+                      : view === "sla"
+                        ? "工具 SLA"
+                        : "调试沙箱"}
           </h1>
         </div>
         <nav className="mcp-management-tabs" aria-label="MCP 管理视图">
@@ -212,6 +224,13 @@ export function McpWorkspace() {
             onClick={() => setView("services")}
           >
             <ApiOutlined /> 服务
+          </button>
+          <button
+            type="button"
+            className={view === "marketplace" ? "is-active" : ""}
+            onClick={() => setView("marketplace")}
+          >
+            <TagOutlined /> 市场
           </button>
           <button
             type="button"
@@ -233,6 +252,20 @@ export function McpWorkspace() {
             onClick={() => setView("audit")}
           >
             <AuditOutlined /> 审计
+          </button>
+          <button
+            type="button"
+            className={view === "sla" ? "is-active" : ""}
+            onClick={() => setView("sla")}
+          >
+            <BarChartOutlined /> SLA
+          </button>
+          <button
+            type="button"
+            className={view === "sandbox" ? "is-active" : ""}
+            onClick={() => setView("sandbox")}
+          >
+            <ExperimentOutlined /> 沙箱
           </button>
         </nav>
         <div className="domain-header-actions">
@@ -552,10 +585,16 @@ export function McpWorkspace() {
             />
           ) : null}
         </>
+      ) : view === "marketplace" ? (
+        <MarketplaceView />
       ) : view === "builds" ? (
         <BuildsView />
       ) : view === "clients" ? (
         <ClientsView services={services} />
+      ) : view === "sla" ? (
+        <SlaPanel services={services} />
+      ) : view === "sandbox" ? (
+        <DebugSandbox services={services} />
       ) : (
         <AuditView />
       )}

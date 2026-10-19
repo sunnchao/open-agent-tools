@@ -27,10 +27,37 @@ export function documentMetadataPatch(value: unknown): DocumentMetadataPatch {
     }
     patch.tags = tags;
   }
-  if (patch.title === undefined && patch.tags === undefined) {
-    throw new Error("title or tags is required");
+  if (body.allowedGroups !== undefined) {
+    patch.allowedGroups = accessGroups(body.allowedGroups);
+  }
+  if (patch.title === undefined && patch.tags === undefined && patch.allowedGroups === undefined) {
+    throw new Error("title, tags or allowedGroups is required");
   }
   return patch;
+}
+
+/** 文档可见分组：空数组表示公开；最多 50 个、每个 1-60 字符。 */
+export function accessGroups(value: unknown, field = "allowedGroups"): string[] {
+  if (!Array.isArray(value) || value.length > 50) {
+    throw new Error(`${field} must be an array with at most 50 items`);
+  }
+  const groups: string[] = [];
+  for (const item of value) {
+    if (
+      typeof item !== "string" ||
+      !item.trim() ||
+      item.trim().length > 60 ||
+      item.trim() === "*"
+    ) {
+      if (typeof item === "string" && item.trim() === "*") {
+        throw new Error(`${field} cannot contain "*"`);
+      }
+      throw new Error(`each ${field} item must contain 1-60 characters`);
+    }
+    const group = item.trim();
+    if (!groups.includes(group)) groups.push(group);
+  }
+  return groups;
 }
 
 export function queryFeedback(value: unknown): {

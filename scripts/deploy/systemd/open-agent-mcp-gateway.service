@@ -1,0 +1,37 @@
+# MCP Gateway 数据面 (apps/mcp-server) —— 默认端口 4100
+#
+# 依赖 PostgreSQL + Redis。用法同 open-agent-server.service:替换占位符后安装。
+[Unit]
+Description=Open Agent Tools - MCP Gateway (data plane)
+Documentation=file://__REPO_ROOT__/docs/deploy/private-deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__REPO_ROOT__
+EnvironmentFile=__REPO_ROOT__/apps/mcp-server/.env
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# 需先执行:pnpm --filter @open-agent-tools/mcp-server build
+ExecStart=/usr/bin/env pnpm --filter @open-agent-tools/mcp-server start
+
+Restart=on-failure
+RestartSec=3
+
+# ---- 最小加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -69,9 +69,20 @@ export interface Message {
   uiBlocks?: UiBlock[];
   /** 本次回答实际检索到的 RAG 片段。 */
   ragCitations?: RagCitation[];
+  /** 本轮 token 与工具调用用量（服务端计量口径，用于成本展示与对账）。 */
+  usage?: MessageUsage;
   /** 兼容：来自服务端 DB 的历史 role:"tool" 行。 */
   tool_call_id?: string;
   tool_name?: string;
+}
+
+/** 与服务端 SSE `usage` 事件、`/api/admin/usage` 汇总保持同一口径。 */
+export interface MessageUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  toolCalls: number;
+  toolErrors: number;
 }
 
 export interface RagCitation {

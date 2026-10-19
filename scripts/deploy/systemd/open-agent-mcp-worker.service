@@ -1,0 +1,43 @@
+# MCP 后台 Worker (apps/mcp-worker, start:worker) —— 不监听 HTTP 端口
+#
+# 这是「后台 Worker」:消费构建队列、用 Docker 构建/运行工具容器、写 S3 制品。
+# 因此它**必须**能访问 Docker(默认 socket /var/run/docker.sock),加固项也随之放宽:
+#   - 不禁用 PrivateTmp(容器构建需要临时空间,保留默认);
+#   - 不设 ProtectSystem=strict(需要访问 docker.sock 与构建缓存);
+# 安全边界应改为「专用主机 + 最小特权账号 + 受限 registry 网络」。
+# 若不需要构建/运行工具容器(只演示 Control Plane),可以不部署本 unit。
+#
+# 用法:替换 __REPO_ROOT__ / __USER__ 后安装。
+[Unit]
+Description=Open Agent Tools - MCP Background Worker (container builds)
+Documentation=file://__REPO_ROOT__/docs/deploy/private-deployment.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__REPO_ROOT__
+EnvironmentFile=__REPO_ROOT__/apps/mcp-worker/.env
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# 若 docker socket 不在默认位置(如 OrbStack),在下方的 .env 里设置 DOCKER_SOCKET_PATH。
+SupplementaryGroups=docker
+
+# 需先执行:pnpm --filter @open-agent-tools/mcp-worker build
+ExecStart=/usr/bin/env pnpm --filter @open-agent-tools/mcp-worker start:worker
+
+Restart=on-failure
+RestartSec=5
+
+# ---- 最小加固(相对放宽,理由见文件头)----
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

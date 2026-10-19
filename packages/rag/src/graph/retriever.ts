@@ -15,6 +15,11 @@ export interface GraphRetrieverOptions {
   minWeight?: number;
   /** 种子定位的候选词上限，默认 20。 */
   seedLimit?: number;
+  /**
+   * 限定图谱来源白名单。为空数组时不检索；缺省表示不限来源。
+   * 过滤同时作用于种子定位与子图扩展，避免从相邻文档泄漏内容。
+   */
+  sources?: readonly string[];
 }
 
 /**
@@ -48,33 +53,53 @@ export class GraphRetriever {
   }
 
   /** 种子定位：返回去重后的候选实体。 */
-  async locateSeeds(query: string, limit = 20): Promise<Entity[]> {
+  async locateSeeds(query: string, limit = 20, sources?: readonly string[]): Promise<Entity[]> {
     const seen = new Map<string, Entity>();
+    if (sources?.length === 0) return [];
     const add = (entity: Entity | null) => {
       if (entity && !seen.has(entity.id)) seen.set(entity.id, entity);
     };
+    const byName = (name: string, max: number): Entity[] =>
+      sources
+        ? (this.store.findEntitiesByNameInSources?.(name, sources, max) ??
+          this.store
+            .findEntitiesByName(name, max)
+            .filter((entity) =>
+              this.store.entitySources?.(entity.id).some((source) => sources.includes(source)),
+            ))
+        : this.store.findEntitiesByName(name, max);
+    const byAlias = (name: string): Entity | null =>
+      sources
+        ? (this.store.findByAliasInSources?.(name, sources) ??
+          this.filterAliasHit(this.store.findByAlias(name), sources))
+        : this.store.findByAlias(name);
     // 1) 整体匹配
-    for (const entity of this.store.findEntitiesByName(query, limit)) add(entity);
+    for (const entity of byName(query, limit)) add(entity);
     // 2) 别名匹配（共指："OpenAI 公司" → openai）
     if (seen.size === 0) {
-      const aliasHit = this.store.findByAlias(query);
+      const aliasHit = byAlias(query);
       if (aliasHit) add(aliasHit);
     }
     // 3) 候选词逐个匹配
     for (const term of GraphRetriever.splitQueryTerms(query)) {
       if (seen.size >= limit) break;
-      for (const entity of this.store.findEntitiesByName(term, Math.max(1, limit - seen.size))) {
+      for (const entity of byName(term, Math.max(1, limit - seen.size))) {
         add(entity);
         if (seen.size >= limit) break;
       }
       if (seen.size === 0) {
-        const aliasHit = this.store.findByAlias(term);
+        const aliasHit = byAlias(term);
         if (aliasHit) add(aliasHit);
       }
     }
     // 4) 名称/别名匹配为空 → 向量兜底（口语化/同义表述可命中）
     if (seen.size === 0 && this.embeddings && limit > 0) {
-      const all = this.store.listEntities({ limit: Math.max(limit, 100) });
+      const all = this.store.listEntities({ limit: Math.max(limit, 100) }).filter((entity) => {
+        if (!sources) return true;
+        return (
+          this.store.entitySources?.(entity.id).some((source) => sources.includes(source)) ?? false
+        );
+      });
       if (all.length > 0) {
         const [qv, entityVectors] = await Promise.all([
           this.embeddings.embedDocuments([query]),
@@ -93,11 +118,23 @@ export class GraphRetriever {
     return [...seen.values()];
   }
 
+  private filterAliasHit(entity: Entity | null, sources: readonly string[]): Entity | null {
+    if (!entity) return null;
+    const scoped = this.store.entitySources?.(entity.id);
+    return scoped?.some((source) => sources.includes(source)) ? entity : null;
+  }
+
   /** 子图扩展：以种子为起点 BFS，去重合并各种子邻域。 */
   expand(seedIds: string[], opts: GraphRetrieverOptions = {}): Subgraph {
     const maxHops = opts.maxHops ?? 2;
     const maxNodes = opts.maxNodes ?? 64;
     const minWeight = opts.minWeight ?? 1;
+    const sources = opts.sources;
+    if (sources?.length === 0) return { entities: [], relations: [], formatted: () => "" };
+    const sourceSet = sources ? new Set(sources) : null;
+    const isAllowedEntity = (entityId: string): boolean =>
+      sourceSet === null ||
+      (this.store.entitySources?.(entityId).some((source) => sourceSet.has(source)) ?? false);
 
     const entityMap = new Map<string, Entity>();
     const relationMap = new Map<string, Relation>();
@@ -107,11 +144,15 @@ export class GraphRetriever {
       if (visited.has(id) || entityMap.size >= maxNodes) return;
       visited.add(id);
       const entity = this.store.findEntityById(id);
-      if (!entity) return;
+      if (!entity || !isAllowedEntity(id)) return;
       entityMap.set(id, entity);
       // 已到最大跳数：本层实体只入子图，不再展开其邻居
       if (hops >= maxHops || entityMap.size >= maxNodes) return;
-      const sub = this.store.neighbors(id, 1, { minWeight, maxNodes });
+      const sub = this.store.neighbors(id, 1, {
+        minWeight,
+        maxNodes,
+        ...(sources ? { sources } : {}),
+      });
       for (const rel of sub.relations) {
         if (!relationMap.has(rel.id)) relationMap.set(rel.id, rel);
       }
@@ -127,18 +168,24 @@ export class GraphRetriever {
     // 确保种子必然出现在子图（即使被 maxNodes 截断）
     for (const seedId of seedIds) {
       const entity = this.store.findEntityById(seedId);
-      if (entity && !entityMap.has(seedId)) entityMap.set(seedId, entity);
+      if (entity && isAllowedEntity(seedId) && !entityMap.has(seedId)) {
+        entityMap.set(seedId, entity);
+      }
     }
     return {
       entities: [...entityMap.values()],
       relations: [...relationMap.values()],
-      formatted: () => serializeSubgraphEntities([...entityMap.values()], [...relationMap.values()]),
+      formatted: () =>
+        serializeSubgraphEntities([...entityMap.values()], [...relationMap.values()]),
     };
   }
 
   /** 检索门面：定位种子 → 扩展子图。 */
   async retrieve(query: string, opts: GraphRetrieverOptions = {}): Promise<GraphQueryResult> {
-    const seeds = await this.locateSeeds(query, opts.seedLimit);
+    if (opts.sources?.length === 0) {
+      return { query, seeds: [], subgraph: null };
+    }
+    const seeds = await this.locateSeeds(query, opts.seedLimit, opts.sources);
     if (seeds.length === 0) {
       return { query, seeds: [], subgraph: null };
     }
@@ -150,10 +197,7 @@ export class GraphRetriever {
   }
 }
 
-function serializeSubgraphEntities(
-  entities: Entity[],
-  relations: Relation[],
-): string {
+function serializeSubgraphEntities(entities: Entity[], relations: Relation[]): string {
   const lines: string[] = [];
   if (relations.length > 0) {
     lines.push("相关实体与关系:");

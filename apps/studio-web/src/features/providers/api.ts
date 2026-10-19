@@ -1,3 +1,4 @@
+import { studioFetch } from "../../lib/client.js";
 export type ProviderFormat = "openai-chat" | "openai-response" | "anthropic-message";
 
 export const PROVIDER_FORMATS: ProviderFormat[] = [
@@ -33,7 +34,7 @@ async function parseError(response: Response): Promise<string> {
 export async function fetchProviders(options?: {
   includeDisabled?: boolean;
 }): Promise<ProviderMetadata[]> {
-  const response = await fetch(
+  const response = await studioFetch(
     options?.includeDisabled ? "/api/admin/providers" : "/api/providers",
   );
   if (!response.ok) throw new Error(await parseError(response));
@@ -50,7 +51,7 @@ export async function saveProvider(input: {
   enabled: boolean;
   format?: ProviderFormat;
 }): Promise<ProviderMetadata> {
-  const response = await fetch(
+  const response = await studioFetch(
     input.id ? `/api/admin/providers/${encodeURIComponent(input.id)}` : "/api/admin/providers",
     {
       method: input.id ? "PUT" : "POST",
@@ -64,14 +65,14 @@ export async function saveProvider(input: {
 }
 
 export async function removeProvider(id: string): Promise<void> {
-  const response = await fetch(`/api/admin/providers/${encodeURIComponent(id)}`, {
+  const response = await studioFetch(`/api/admin/providers/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!response.ok) throw new Error(await parseError(response));
 }
 
 export async function setDefaultProvider(id: string): Promise<ProviderMetadata> {
-  const response = await fetch(`/api/admin/providers/${encodeURIComponent(id)}/default`, {
+  const response = await studioFetch(`/api/admin/providers/${encodeURIComponent(id)}/default`, {
     method: "PUT",
   });
   if (!response.ok) throw new Error(await parseError(response));
@@ -80,9 +81,12 @@ export async function setDefaultProvider(id: string): Promise<ProviderMetadata> 
 }
 
 export async function fetchProviderModels(id: string): Promise<string[]> {
-  const response = await fetch(`/api/admin/providers/${encodeURIComponent(id)}/fetch-models`, {
-    method: "POST",
-  });
+  const response = await studioFetch(
+    `/api/admin/providers/${encodeURIComponent(id)}/fetch-models`,
+    {
+      method: "POST",
+    },
+  );
   if (!response.ok) throw new Error(await parseError(response));
   const body = (await response.json()) as { models: string[] };
   return body.models;
@@ -93,7 +97,7 @@ export async function probeProviderModels(params: {
   baseUrl: string;
   apiKey?: string;
 }): Promise<string[]> {
-  const response = await fetch("/api/admin/providers/fetch-models", {
+  const response = await studioFetch("/api/admin/providers/fetch-models", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(params),

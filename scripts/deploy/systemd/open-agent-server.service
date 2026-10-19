@@ -1,0 +1,45 @@
+# Agent Server / Studio 后端 (apps/server) —— 默认端口 3000
+#
+# 用法:
+#   1) 把下面所有 __REPO_ROOT__ 替换为仓库绝对路径(如 /opt/open-agent-tools);
+#   2) 把 __USER__ 替换为运行服务的系统账号(如 openagent);
+#   3) sudo cp open-agent-server.service /etc/systemd/system/
+#      sudo systemctl daemon-reload && sudo systemctl enable --now open-agent-server
+#
+# 说明:EnvironmentFile 走 systemd 语法——不支持 `export`、不做 shell 展开;
+#       值里若有 # 需加引号。详见同目录 README.md。
+[Unit]
+Description=Open Agent Tools - Agent Server (Studio backend)
+Documentation=file://__REPO_ROOT__/docs/deploy/private-deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__REPO_ROOT__
+EnvironmentFile=__REPO_ROOT__/apps/server/.env
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# 需先执行:pnpm --filter @open-agent-tools/server build
+ExecStart=/usr/bin/env pnpm --filter @open-agent-tools/server start
+
+Restart=on-failure
+RestartSec=3
+
+# ---- 最小加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=__REPO_ROOT__/apps/server/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

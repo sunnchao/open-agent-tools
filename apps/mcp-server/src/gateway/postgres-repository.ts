@@ -14,6 +14,9 @@ import type {
   ManagedServiceSnapshot,
   McpScope,
   ServiceSummary,
+  ToolCallReservationInput,
+  ToolCallReservationResult,
+  ToolCallSettlement,
 } from "./repository.js";
 
 const ClientStatusSchema = z.enum(["ACTIVE", "REVOKED"]);
@@ -265,6 +268,104 @@ export class PostgresGatewayRepository implements GatewayRepository {
       })),
     };
   }
+
+  async reserveToolCall(input: ToolCallReservationInput): Promise<ToolCallReservationResult> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      // 单 client 串行化，覆盖 QPS、日配额与使用量写入，避免多实例竞态。
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [input.clientId]);
+
+      const quotaResult = await client.query<{
+        service_id: string | null;
+        qps_limit: number;
+        daily_call_limit: number;
+      }>(
+        `SELECT service_id, qps_limit, daily_call_limit
+         FROM client_quotas
+         WHERE client_id = $1 AND (service_id IS NULL OR service_id = $2)`,
+        [input.clientId, input.serviceId],
+      );
+      const global = quotaResult.rows.find((row) => row.service_id === null);
+      const scoped = quotaResult.rows.find((row) => row.service_id === input.serviceId);
+      const now = new Date(input.now);
+      const secondStart = new Date(now.getTime() - 1_000).toISOString();
+      const dayStart = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+      ).toISOString();
+      const nextDay = new Date(Date.parse(dayStart) + 86_400_000).toISOString();
+
+      if ((global?.qps_limit ?? 0) > 0) {
+        const qps = await client.query<{ count: number; oldest: Date | string | null }>(
+          `SELECT count(*)::int AS count, min(created_at) AS oldest
+           FROM usage_events
+           WHERE client_id = $1 AND created_at > $2`,
+          [input.clientId, secondStart],
+        );
+        const usage = qps.rows[0];
+        if ((usage?.count ?? 0) >= global!.qps_limit) {
+          await client.query("ROLLBACK");
+          const oldest = usage?.oldest ? new Date(usage.oldest).getTime() : now.getTime();
+          return {
+            reserved: false,
+            retryAfterSeconds: retryAfter(oldest + 1_000, now.getTime()),
+          };
+        }
+      }
+
+      if ((scoped?.daily_call_limit ?? 0) > 0) {
+        const daily = await client.query<{ count: number }>(
+          `SELECT count(*)::int AS count
+           FROM usage_events
+           WHERE client_id = $1 AND service_id = $2
+             AND created_at >= $3 AND created_at < $4`,
+          [input.clientId, input.serviceId, dayStart, nextDay],
+        );
+        if ((daily.rows[0]?.count ?? 0) >= scoped!.daily_call_limit) {
+          await client.query("ROLLBACK");
+          return {
+            reserved: false,
+            retryAfterSeconds: retryAfter(Date.parse(nextDay), now.getTime()),
+          };
+        }
+      }
+
+      await client.query(
+        `INSERT INTO usage_events
+           (id, client_id, service_id, version_id, tool_name, request_id, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'RESERVED', $7)`,
+        [
+          input.requestId,
+          input.clientId,
+          input.serviceId,
+          input.versionId,
+          input.toolName,
+          input.requestId,
+          input.now,
+        ],
+      );
+      await client.query("COMMIT");
+      return { reserved: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async settleToolCall(input: ToolCallSettlement): Promise<void> {
+    await this.#pool.query(
+      `UPDATE usage_events
+       SET status = $2, duration_ms = $3, finished_at = $4
+       WHERE id = $1 AND status = 'RESERVED'`,
+      [input.requestId, input.status, input.durationMs, input.finishedAt],
+    );
+  }
+}
+
+function retryAfter(at: number, now: number): number {
+  return Math.max(1, Math.ceil((at - now) / 1_000));
 }
 
 export function createPostgresGatewayRepository(connectionString: string): {

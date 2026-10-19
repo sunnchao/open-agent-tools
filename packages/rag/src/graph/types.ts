@@ -84,11 +84,13 @@ export interface GraphStore {
   findEntityById(id: string): Entity | null;
   /** 名称匹配：精确优先，其次包含；规范化后比较。 */
   findEntitiesByName(name: string, limit?: number): Entity[];
+  /** 限定来源名称匹配：只返回至少被这些来源之一引用的实体。 */
+  findEntitiesByNameInSources?(name: string, sources: readonly string[], limit?: number): Entity[];
   /** BFS 多跳邻域扩展；hop=1 时只返回直接邻居。 */
   neighbors(
     entityId: string,
     hops: number,
-    opts?: { maxNodes?: number; minWeight?: number },
+    opts?: { maxNodes?: number; minWeight?: number; sources?: readonly string[] },
   ): Subgraph;
   /**
    * 级联删除某来源：删该来源的关系 → 解绑实体来源 → 删除不再被任何来源引用的实体及其别名。
@@ -110,7 +112,12 @@ export interface GraphStore {
   removeSourceRecord(source: string): void;
   /** 统计某来源实际关联的实体数与关系数（对账校验用）。 */
   countBySource(source: string): { entities: number; relations: number };
-  listEntities(opts?: { offset?: number; limit?: number; type?: string; search?: string }): Entity[];
+  listEntities(opts?: {
+    offset?: number;
+    limit?: number;
+    type?: string;
+    search?: string;
+  }): Entity[];
   stats(): { entities: number; relations: number };
   /** 关系类型分布统计（可视化图例用）。 */
   countRelationsByType(): { relType: string; count: number }[];
@@ -118,6 +125,10 @@ export interface GraphStore {
   addAlias(entityId: string, alias: string): void;
   /** 通过别名定位实体（规范化匹配）。 */
   findByAlias(alias: string): Entity | null;
+  /** 限定来源的别名定位。 */
+  findByAliasInSources?(alias: string, sources: readonly string[]): Entity | null;
+  /** 列出支撑某实体的全部文档来源（来源过滤用）。 */
+  entitySources?(entityId: string): string[];
   /** 列出实体的全部别名。 */
   aliasesOf(entityId: string): string[];
   close(): void;

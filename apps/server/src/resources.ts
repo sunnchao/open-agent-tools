@@ -128,6 +128,20 @@ function resourceConfig() {
     gatewayUrl: gateway.gatewayUrl,
     gatewayApiKey: gateway.gatewayApiKey,
     ragApiUrl: (process.env.RAG_API_URL ?? "http://localhost:4001/api").replace(/\/$/, ""),
+    ragRuntimeToken: process.env.RAG_RUNTIME_TOKEN?.trim() ?? "",
+    ragAdminToken: process.env.RAG_ADMIN_TOKEN?.trim() ?? "",
+  };
+}
+
+function ragHeaders(
+  config: ReturnType<typeof resourceConfig>,
+  scope: "runtime" | "admin",
+  contentType = false,
+): Record<string, string> {
+  const token = scope === "runtime" ? config.ragRuntimeToken : config.ragAdminToken;
+  return {
+    ...(contentType ? { "content-type": "application/json" } : {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
   };
 }
 
@@ -195,8 +209,10 @@ async function listMcpResources(): Promise<McpServiceResource[]> {
 }
 
 async function listRagSources(): Promise<RagSourceResource[]> {
-  const { ragApiUrl } = resourceConfig();
-  const response = await fetch(`${ragApiUrl}/documents`);
+  const config = resourceConfig();
+  const response = await fetch(`${config.ragApiUrl}/documents`, {
+    headers: ragHeaders(config, "admin"),
+  });
   if (!response.ok) throw new Error(`RAG resource request failed (${response.status})`);
   return ((await response.json()) as { sources: RagSourceResource[] }).sources;
 }
@@ -295,14 +311,15 @@ export async function retrieveRag(input: {
   query: string;
   sources: string[];
   topK: number;
+  viewerGroups?: string[];
   signal?: AbortSignal;
 }): Promise<{ chunks: Array<Record<string, unknown>>; formatted: string }> {
   if (input.sources.length === 0) return { chunks: [], formatted: "" };
-  const { ragApiUrl } = resourceConfig();
+  const config = resourceConfig();
   const { signal, ...payload } = input;
-  const response = await fetch(`${ragApiUrl}/query`, {
+  const response = await fetch(`${config.ragApiUrl}/query`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: ragHeaders(config, "runtime", true),
     body: JSON.stringify({ ...payload, generate: false }),
     signal,
   });
@@ -323,13 +340,20 @@ export async function retrieveRag(input: {
 /** 图谱子图检索（rag-server /api/graph/retrieve）。子图未命中时返回空。 */
 export async function retrieveRagGraph(input: {
   query: string;
+  sources?: string[];
+  viewerGroups?: string[];
   signal?: AbortSignal;
 }): Promise<{ formatted: string; seeds: Array<{ id: string; name: string }> }> {
-  const { ragApiUrl } = resourceConfig();
-  const response = await fetch(`${ragApiUrl}/graph/retrieve`, {
+  const config = resourceConfig();
+  const response = await fetch(`${config.ragApiUrl}/graph/retrieve`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ query: input.query, maxHops: 2 }),
+    headers: ragHeaders(config, "runtime", true),
+    body: JSON.stringify({
+      query: input.query,
+      maxHops: 2,
+      ...(input.sources ? { sources: input.sources } : {}),
+      ...(input.viewerGroups !== undefined ? { viewerGroups: input.viewerGroups } : {}),
+    }),
     signal: input.signal,
   });
   if (!response.ok) {

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { createPostgresConnection } from "@open-agent-tools/database/postgres";
 import type {
@@ -8,8 +8,21 @@ import type {
   McpScope,
   StoredApiKeyRecord,
 } from "../client-access-repository.js";
+import type {
+  ClientQuotaRecord,
+  UsageEventQuery,
+  UsageEventRecord,
+  UsageSummary,
+} from "../types.js";
 import * as schema from "./schema.js";
-import { apiClients, apiKeys, clientGrants, mcpServices } from "./schema.js";
+import {
+  apiClients,
+  apiKeys,
+  clientGrants,
+  clientQuotas,
+  mcpServices,
+  usageEvents,
+} from "./schema.js";
 
 type Database = NodePgDatabase<typeof schema>;
 
@@ -47,6 +60,42 @@ function mapGrant(row: typeof clientGrants.$inferSelect): ClientGrantRecord {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function mapQuota(row: typeof clientQuotas.$inferSelect): ClientQuotaRecord {
+  return {
+    id: row.id,
+    clientId: row.clientId,
+    serviceId: row.serviceId,
+    qpsLimit: row.qpsLimit,
+    dailyCallLimit: row.dailyCallLimit,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function mapUsageEvent(row: typeof usageEvents.$inferSelect): UsageEventRecord {
+  return {
+    id: row.id,
+    clientId: row.clientId,
+    serviceId: row.serviceId,
+    versionId: row.versionId,
+    toolName: row.toolName,
+    requestId: row.requestId,
+    status: row.status,
+    createdAt: row.createdAt,
+    finishedAt: row.finishedAt,
+    durationMs: row.durationMs,
+  };
+}
+
+function usageWhere(clientId: string, query: UsageEventQuery) {
+  return and(
+    eq(usageEvents.clientId, clientId),
+    query.serviceId === undefined ? undefined : eq(usageEvents.serviceId, query.serviceId),
+    query.from === undefined ? undefined : sql`${usageEvents.createdAt} >= ${query.from}`,
+    query.to === undefined ? undefined : sql`${usageEvents.createdAt} <= ${query.to}`,
+  );
 }
 
 export class PostgresClientAccessRepository implements ClientAccessRepository {
@@ -159,6 +208,66 @@ export class PostgresClientAccessRepository implements ClientAccessRepository {
       .where(eq(mcpServices.id, serviceId))
       .limit(1);
     return Boolean(row);
+  }
+
+  async listClientQuotas(clientId: string): Promise<ClientQuotaRecord[]> {
+    const rows = await this.#db
+      .select()
+      .from(clientQuotas)
+      .where(eq(clientQuotas.clientId, clientId))
+      .orderBy(asc(clientQuotas.serviceId));
+    return rows.map(mapQuota);
+  }
+
+  async upsertClientQuota(quota: ClientQuotaRecord): Promise<ClientQuotaRecord> {
+    const [existing] = await this.#db
+      .select({ id: clientQuotas.id })
+      .from(clientQuotas)
+      .where(
+        and(
+          eq(clientQuotas.clientId, quota.clientId),
+          quota.serviceId === null
+            ? sql`${clientQuotas.serviceId} IS NULL`
+            : eq(clientQuotas.serviceId, quota.serviceId),
+        ),
+      )
+      .limit(1);
+    const [row] = existing
+      ? await this.#db
+          .update(clientQuotas)
+          .set({
+            qpsLimit: quota.qpsLimit,
+            dailyCallLimit: quota.dailyCallLimit,
+            updatedAt: quota.updatedAt,
+          })
+          .where(eq(clientQuotas.id, existing.id))
+          .returning()
+      : await this.#db.insert(clientQuotas).values(quota).returning();
+    if (!row) throw new Error(`Failed to save quota for client: ${quota.clientId}`);
+    return mapQuota(row);
+  }
+
+  async listUsageEvents(clientId: string, query: UsageEventQuery): Promise<UsageEventRecord[]> {
+    const rows = await this.#db
+      .select()
+      .from(usageEvents)
+      .where(usageWhere(clientId, query))
+      .orderBy(desc(usageEvents.createdAt))
+      .limit(query.limit);
+    return rows.map(mapUsageEvent);
+  }
+
+  async summarizeUsage(clientId: string, query: UsageEventQuery): Promise<UsageSummary> {
+    const [row] = await this.#db
+      .select({
+        total: sql<number>`count(*)::int`,
+        reserved: sql<number>`count(*) filter (where ${usageEvents.status} = 'RESERVED')::int`,
+        succeeded: sql<number>`count(*) filter (where ${usageEvents.status} = 'SUCCEEDED')::int`,
+        failed: sql<number>`count(*) filter (where ${usageEvents.status} = 'FAILED')::int`,
+      })
+      .from(usageEvents)
+      .where(usageWhere(clientId, query));
+    return row ?? { total: 0, reserved: 0, succeeded: 0, failed: 0 };
   }
 }
 

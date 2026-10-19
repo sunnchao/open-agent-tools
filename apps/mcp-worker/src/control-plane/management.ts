@@ -24,6 +24,7 @@ import type {
   Actor,
   BuildJobRecord,
   BuildJobSummary,
+  MarketplaceService,
   McpServiceRecord,
   McpServiceEnvironment,
   McpServiceVersionRecord,
@@ -282,6 +283,11 @@ export class McpManagementService {
 
   async listServices(_actor: Actor): Promise<McpServiceRecord[]> {
     return this.#repository.listServices();
+  }
+
+  /** 市场只暴露 ACTIVE 服务且其 currentVersion 必须为 PUBLISHED。 */
+  async listMarketplaceServices(_actor: Actor, limit = 200): Promise<MarketplaceService[]> {
+    return this.#repository.listMarketplaceServices(limit);
   }
 
   async getService(id: string, _actor: Actor): Promise<McpServiceRecord> {

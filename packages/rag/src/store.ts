@@ -35,6 +35,7 @@ interface DocumentRow {
   source: string;
   title: string;
   tags_json: string;
+  allowed_groups_json: string;
   mime_type: string;
   byte_size: number;
   content_hash: string;
@@ -69,6 +70,7 @@ function toDocument(r: DocumentRow): DocumentInfo {
     source: r.source,
     title: r.title,
     tags: parseStringArray(r.tags_json),
+    allowedGroups: parseStringArray(r.allowed_groups_json ?? "[]"),
     mimeType: r.mime_type,
     byteSize: r.byte_size,
     contentHash: r.content_hash,
@@ -111,6 +113,7 @@ export class SqliteVectorStore implements VectorStore {
         source          TEXT PRIMARY KEY,
         title           TEXT NOT NULL,
         tags_json       TEXT NOT NULL DEFAULT '[]',
+        allowed_groups_json TEXT NOT NULL DEFAULT '[]',
         mime_type       TEXT NOT NULL DEFAULT 'application/octet-stream',
         byte_size       INTEGER NOT NULL DEFAULT 0,
         content_hash    TEXT NOT NULL DEFAULT '',
@@ -175,6 +178,7 @@ export class SqliteVectorStore implements VectorStore {
              semantic_threshold, created_at, updated_at
            ) VALUES (?, ?, '[]', ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(source) DO UPDATE SET
+           allowed_groups_json = documents.allowed_groups_json,
              mime_type = excluded.mime_type,
              byte_size = excluded.byte_size,
              content_hash = excluded.content_hash,
@@ -290,9 +294,21 @@ export class SqliteVectorStore implements VectorStore {
     if (!current) return null;
     const title = patch.title ?? current.title;
     const tags = patch.tags ?? parseStringArray(current.tags_json);
+    const allowedGroups =
+      patch.allowedGroups ?? parseStringArray(current.allowed_groups_json ?? "[]");
     this.db
-      .prepare(`UPDATE documents SET title = ?, tags_json = ?, updated_at = ? WHERE source = ?`)
-      .run(title, JSON.stringify(tags), new Date().toISOString(), source);
+      .prepare(
+        `UPDATE documents
+         SET title = ?, tags_json = ?, allowed_groups_json = ?, updated_at = ?
+         WHERE source = ?`,
+      )
+      .run(
+        title,
+        JSON.stringify(tags),
+        JSON.stringify(allowedGroups),
+        new Date().toISOString(),
+        source,
+      );
     const updated = this.db
       .prepare(`SELECT * FROM documents WHERE source = ?`)
       .get(source) as unknown as DocumentRow;
@@ -369,6 +385,11 @@ export class SqliteVectorStore implements VectorStore {
     }
     if (!names.has("semantic_threshold")) {
       this.db.exec(`ALTER TABLE documents ADD COLUMN semantic_threshold REAL`);
+    }
+    if (!names.has("allowed_groups_json")) {
+      this.db.exec(
+        `ALTER TABLE documents ADD COLUMN allowed_groups_json TEXT NOT NULL DEFAULT '[]'`,
+      );
     }
   }
 

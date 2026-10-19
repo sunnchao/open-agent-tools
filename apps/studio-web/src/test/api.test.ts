@@ -98,6 +98,60 @@ describe("parseSseBuffer", () => {
     });
   });
 
+  it("emits usage mid-stream and on done with the cumulative totals", async () => {
+    const encoder = new TextEncoder();
+    const roundUsage = {
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      toolCalls: 1,
+      toolErrors: 0,
+    };
+    const finalUsage = {
+      inputTokens: 240,
+      outputTokens: 45,
+      totalTokens: 285,
+      toolCalls: 2,
+      toolErrors: 1,
+    };
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ usage: roundUsage })}\n\n`),
+              );
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({ done: true, status: "complete", usage: finalUsage })}\n\n`,
+                ),
+              );
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const streamed: unknown[] = [];
+    let doneUsage: unknown;
+    await new Promise<void>((resolve, reject) => {
+      streamChat([{ role: "user", content: "hi" }], undefined, {
+        onDelta: () => undefined,
+        onUsage: (value) => streamed.push(value),
+        onDone: (meta) => {
+          doneUsage = meta?.usage;
+          resolve();
+        },
+        onError: reject,
+      });
+    });
+    expect(streamed).toEqual([roundUsage]);
+    expect(doneUsage).toEqual(finalUsage);
+  });
+
   it("calls onStopped and not onDone when the request is aborted", async () => {
     const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
       return new Promise((_resolve, reject) => {

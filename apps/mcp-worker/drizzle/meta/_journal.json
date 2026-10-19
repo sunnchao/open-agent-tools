@@ -57,6 +57,13 @@
       "when": 1791676802000,
       "tag": "0007_mcp_remote_service",
       "breakpoints": false
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791676803000,
+      "tag": "0008_mcp_usage_quotas",
+      "breakpoints": false
     }
   ]
 }

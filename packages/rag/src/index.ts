@@ -97,7 +97,41 @@ export class Rag {
 
   /** 混合检索：向量 kNN + FTS5 BM25 → RRF → Top-K。 */
   async retrieve(query: string, opts: RetrieveOptions = {}): Promise<RetrievalResult> {
-    return retrieve(this.store, this.ingestOpts.embeddings, query, opts);
+    const sources = this.resolveVisibleSources(opts.sources, opts.viewerGroups);
+    return retrieve(this.store, this.ingestOpts.embeddings, query, {
+      ...opts,
+      sources,
+    });
+  }
+
+  /**
+   * 将「请求来源 + 文档 ACL」收敛为实际可检索的来源白名单。
+   *
+   * - viewerGroups 缺省：管理侧上下文，不启用 ACL；
+   * - viewerGroups 为 []：只返回无分组限制的文档；
+   * - 分组含 "*"：等同管理侧，可见全部文档；
+   * - sources 缺省：全库范围内按 ACL 过滤；显式 [] 则仍为不检索。
+   */
+  resolveVisibleSources(
+    sources: readonly string[] | undefined,
+    viewerGroups: readonly string[] | undefined,
+  ): string[] | undefined {
+    if (sources?.length === 0) return [];
+    // 管理侧且未限定来源时保持原来的「全库」语义，不枚举文档。
+    if (viewerGroups === undefined && !sources) return undefined;
+    const unrestricted = viewerGroups === undefined || viewerGroups.includes("*");
+    const visible = this.store
+      .listDocuments()
+      .filter(
+        (document) =>
+          unrestricted ||
+          document.allowedGroups.length === 0 ||
+          document.allowedGroups.some((group) => viewerGroups?.includes(group)),
+      )
+      .map((document) => document.source);
+    if (!sources) return visible;
+    const visibleSet = new Set(visible);
+    return [...new Set(sources)].filter((source) => visibleSet.has(source));
   }
 
   /** 列出某来源的全部分块元信息（id、序号、原文、长度、是否含向量）。 */

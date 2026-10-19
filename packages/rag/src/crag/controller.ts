@@ -48,10 +48,16 @@ export class CragController {
     const trimmed = query.trim();
     if (!trimmed || trimmed.length < 2) return false;
     const greetings = ["你好", "hi", "hello", "hey", "谢谢", "再见", "拜拜"];
-    return !greetings.some((g) => trimmed.toLowerCase() === g || trimmed.toLowerCase().startsWith(`${g} `));
+    return !greetings.some(
+      (g) => trimmed.toLowerCase() === g || trimmed.toLowerCase().startsWith(`${g} `),
+    );
   }
 
-  private async runDomain(name: string, query: string, sources?: string[]): Promise<RetrievalEvidence | null> {
+  private async runDomain(
+    name: string,
+    query: string,
+    sources?: string[],
+  ): Promise<RetrievalEvidence | null> {
     const domain = this.domains.get(name);
     if (!domain) return null;
     try {
@@ -78,10 +84,30 @@ export class CragController {
 
     if (!CragController.shouldRetrieve(query)) {
       actions.push("trigger-skipped");
-      return { query, assessment: "incorrect", confidence: 0, formatted: "", actions, citations: [] };
+      return {
+        query,
+        assessment: "incorrect",
+        confidence: 0,
+        formatted: "",
+        actions,
+        citations: [],
+      };
     }
 
     // 第一轮：block 域（必选）+ graph 域（若有，并行）
+    // 显式空 sources 表示「不检索任何来源」，不能跳过过滤去查全库。
+    if (sources?.length === 0) {
+      actions.push("no-sources");
+      return {
+        query,
+        assessment: "incorrect",
+        confidence: 0,
+        formatted: "",
+        actions,
+        citations: [],
+      };
+    }
+
     const firstRound: Array<Promise<RetrievalEvidence | null>> = [
       Promise.resolve(this.runDomain("block", query, sources)),
       Promise.resolve(this.runDomain("graph", query, sources)),
@@ -92,7 +118,14 @@ export class CragController {
 
     if (evidence.length === 0) {
       actions.push("declared-uncovered");
-      return { query, assessment: "incorrect", confidence: 0, formatted: "", actions, citations: [] };
+      return {
+        query,
+        assessment: "incorrect",
+        confidence: 0,
+        formatted: "",
+        actions,
+        citations: [],
+      };
     }
 
     let evaluation = await this.evaluator.evaluate(query, evidence);
@@ -135,7 +168,14 @@ export class CragController {
 
     if (evaluation.assessment === "incorrect") {
       actions.push("declared-uncovered");
-      return { query, assessment: "incorrect", confidence: evaluation.confidence, formatted: "", actions, citations: [] };
+      return {
+        query,
+        assessment: "incorrect",
+        confidence: evaluation.confidence,
+        formatted: "",
+        actions,
+        citations: [],
+      };
     }
 
     const formatted = this.refiner.recompose(evaluation.strips);

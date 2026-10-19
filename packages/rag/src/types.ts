@@ -31,6 +31,8 @@ export interface DocumentInfo {
   source: string;
   title: string;
   tags: string[];
+  /** 可额外查看该文档的分组；空数组表示公开给所有调用方。 */
+  allowedGroups: string[];
   mimeType: string;
   byteSize: number;
   contentHash: string;
@@ -59,6 +61,7 @@ export interface DocumentWriteMetadata {
 export interface DocumentMetadataPatch {
   title?: string;
   tags?: string[];
+  allowedGroups?: string[];
 }
 
 export interface RetrievalResult {

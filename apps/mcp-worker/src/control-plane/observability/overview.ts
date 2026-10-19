@@ -1,4 +1,5 @@
 import type { AuditService } from "../audit.js";
+import type { AuditEventRecord } from "../audit-repository.js";
 import { ManagementError, type McpManagementService } from "../management.js";
 import type { Actor, BuildJobSummary } from "../types.js";
 import { summarizeAuditEvents, type AuditStats } from "./audit-stats.js";
@@ -9,6 +10,12 @@ import {
   type ObservabilityAlert,
 } from "./alerts.js";
 import { EMPTY_QUEUE_SNAPSHOT, type QueueMonitor, type QueueSnapshot } from "./queue-monitor.js";
+import {
+  resolveSlaWindow,
+  summarizeToolSla,
+  TOOL_CALL_ACTION,
+  type ToolSlaReport,
+} from "./tool-sla.js";
 
 export interface BuildJobStats {
   total: number;
@@ -65,6 +72,8 @@ export interface ObservabilityServiceOptions {
   auditWindowMs?: number;
   /** 读取的构建任务条数上限。 */
   buildJobLimit?: number;
+  /** 工具 SLA 聚合扫描的审计事件上限(AuditService.list 单次读取上限为 200)。 */
+  toolSlaScanLimit?: number;
 }
 
 /**
@@ -79,6 +88,7 @@ export class ObservabilityService {
   readonly #now: () => Date;
   readonly #auditWindowMs: number;
   readonly #buildJobLimit: number;
+  readonly #toolSlaScanLimit: number;
 
   constructor(options: ObservabilityServiceOptions) {
     this.#management = options.management;
@@ -88,11 +98,15 @@ export class ObservabilityService {
     this.#now = options.now ?? (() => new Date());
     this.#auditWindowMs = options.auditWindowMs ?? 24 * 60 * 60 * 1_000;
     this.#buildJobLimit = options.buildJobLimit ?? 100;
+    this.#toolSlaScanLimit = Math.min(options.toolSlaScanLimit ?? 200, 200);
   }
 
   async overview(actor: Actor): Promise<ObservabilityOverview> {
     if (actor.role === "operator") {
-      throw new ManagementError("FORBIDDEN", "Observability dashboard requires admin or auditor access");
+      throw new ManagementError(
+        "FORBIDDEN",
+        "Observability dashboard requires admin or auditor access",
+      );
     }
     const now = this.#now();
     const [events, jobs, queue] = await Promise.all([
@@ -115,5 +129,36 @@ export class ObservabilityService {
     );
 
     return { generatedAt: now.toISOString(), queue, audit, builds, alerts };
+  }
+
+  /**
+   * 工具 SLA 面板数据源:按「服务 + 工具」聚合成功/失败、时延分位与错误 Top N。
+   *
+   * 复用既有审计数据(每次 Gateway 请求都会落库),先按 action 过滤出工具调用,
+   * 再逐条读取完整事件以解析工具名与错误详情。单次扫描上限由 toolSlaScanLimit
+   * 控制(默认 200),因此窗口内的较早事件可能被截断,报告中会给出 scan.truncated。
+   */
+  async toolSla(
+    actor: Actor,
+    query: { window?: unknown; serviceSlug?: string | null } = {},
+  ): Promise<ToolSlaReport> {
+    if (actor.role === "operator") {
+      throw new ManagementError("FORBIDDEN", "Tool SLA requires admin or auditor access");
+    }
+    const window = resolveSlaWindow(query.window);
+    const limit = this.#toolSlaScanLimit;
+    const summaries = await this.#audit.list({ limit, action: TOOL_CALL_ACTION }, actor);
+    // list 与 get 之间事件可能已被清理,单条缺失不应让整块面板失败。
+    const events = (
+      await Promise.all(
+        summaries.map((summary) => this.#audit.get(summary.id, actor).catch(() => null)),
+      )
+    ).filter((event): event is AuditEventRecord => event !== null);
+    return summarizeToolSla(events, {
+      window,
+      now: this.#now(),
+      serviceSlug: query.serviceSlug ?? null,
+      scanLimit: limit,
+    });
   }
 }

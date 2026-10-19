@@ -36,7 +36,9 @@ test("启发式:覆盖率低判 incorrect、中等 ambiguous、高 correct", asy
   const e = new HeuristicRetrievalEvaluator();
   const low = await e.evaluate("苹果 香蕉 橙子 西瓜", [evidence([chunk("今天天气很好")])]);
   assert.equal(low.assessment, "incorrect");
-  const mid = await e.evaluate("苹果 香蕉 橙子 西瓜", [evidence([chunk("苹果和西瓜都是水果 今天天气好")])]);
+  const mid = await e.evaluate("苹果 香蕉 橙子 西瓜", [
+    evidence([chunk("苹果和西瓜都是水果 今天天气好")]),
+  ]);
   assert.equal(mid.assessment, "ambiguous");
   const high = await e.evaluate("苹果 香蕉 橙子 西瓜", [
     evidence([chunk("苹果 香蕉 橙子 西瓜 都是水果")]),
@@ -52,6 +54,26 @@ test("启发式:条带按关键词标注相关性", async () => {
   const strips = result.strips;
   assert.ok(strips[0]!.relevant);
   assert.ok(!strips[1]!.relevant);
+});
+
+test("带检索分数时不再用字面覆盖率否决语义相关结果", async () => {
+  const e = new HeuristicRetrievalEvaluator();
+  const scored = [
+    { ...chunk("员工出差住宿标准为一线城市每晚 600 元。"), score: 0.82 },
+    { ...chunk("今天天气很好。"), score: 0.12 },
+  ];
+  const result = await e.evaluate("员工出差住宿标准是多少", [evidence(scored)]);
+  assert.notEqual(result.assessment, "incorrect", "语义相关文档不能被字面覆盖率判死");
+  assert.ok(result.confidence > 0);
+  assert.ok(result.strips.some((strip) => strip.relevant && strip.text.includes("住宿标准")));
+
+  const unrelated = await e.evaluate("员工出差住宿标准是多少", [
+    evidence([
+      { ...chunk("今天天气很好。"), score: 0.11 },
+      { ...chunk("股票市场收盘。"), score: 0.1 },
+    ]),
+  ]);
+  assert.equal(unrelated.assessment, "ambiguous", "低分离度不应被抬成 correct");
 });
 
 test("KnowledgeRefiner 过滤无关条带并带引用重组", () => {

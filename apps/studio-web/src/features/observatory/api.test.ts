@@ -8,6 +8,7 @@ import {
   fetchQueryAudit,
   fetchQueryAudits,
   pendingQuerySteps,
+  rerunObservatoryQuery,
   runObservatoryQuery,
   saveSchemaSource,
   syncSchemaSource,
@@ -95,6 +96,100 @@ describe("observatory api", () => {
     await expect(runObservatoryQuery("ops", "问题", [], vi.fn())).rejects.toThrow("写入审计失败");
   });
 
+  it("surfaces structured clarification SSE and preserves originalQuestion", async () => {
+    const clarification = {
+      slots: [
+        {
+          key: "row_limit",
+          label: "返回条数",
+          candidates: [{ label: "最近 10 条", value: "10" }],
+        },
+      ],
+      candidates: [{ label: "最近 10 条", value: "10" }],
+      originalQuestion: "查看用户",
+      round: 1,
+      missingSlots: ["row_limit"],
+      canProceed: false,
+      clarifying: "请确认需要查询多少条？",
+    };
+    const result = {
+      auditId: "audit-clarify",
+      sourceId: "ops",
+      question: "10",
+      originalQuestion: "查看用户",
+      clarifying: clarification.clarifying,
+      clarification,
+      selectedTables: [],
+      schemaPrompt: "",
+      graph: { nodes: [], edges: [], stats: { entities: 0, relations: 0 } },
+      seeds: [],
+      formattedGraph: "",
+      durationMs: 2,
+    };
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(
+          [
+            `data: ${JSON.stringify({
+              type: "clarification",
+              auditId: "audit-clarify",
+              clarification,
+            })}\n\n`,
+            `data: ${JSON.stringify({ type: "result", result })}\n\n`,
+          ].join(""),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const progress = vi.fn();
+    await expect(
+      runObservatoryQuery("ops", "10", [], progress, undefined, "查看用户"),
+    ).resolves.toEqual(result);
+    expect(progress).toHaveBeenCalledWith({
+      type: "clarification",
+      auditId: "audit-clarify",
+      clarification,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toMatchObject({
+      question: "10",
+      originalQuestion: "查看用户",
+    });
+  });
+
+  it("reruns by parent audit with only parentAuditId and SQL", async () => {
+    const result = {
+      auditId: "child",
+      sourceId: "ops",
+      question: "查看用户",
+      originalQuestion: "查看用户",
+      selectedTables: ["users"],
+      schemaPrompt: "",
+      graph: { nodes: [], edges: [], stats: { entities: 0, relations: 0 } },
+      seeds: [],
+      formattedGraph: "",
+      executedSql: "SELECT id FROM users",
+      durationMs: 1,
+    };
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify(result), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(rerunObservatoryQuery("parent/id", "SELECT id FROM users")).resolves.toEqual(
+      result,
+    );
+    expect(fetchMock).toHaveBeenCalledWith("/api/observatory/query/rerun", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        parentAuditId: "parent/id",
+        sql: "SELECT id FROM users",
+      }),
+    });
+  });
+
   it("loads filtered paginated audit summaries and encoded audit details", async () => {
     const fetchMock = vi.fn(
       async (url: string) =>
@@ -109,7 +204,13 @@ describe("observatory api", () => {
     await expect(
       fetchQueryAudits({
         sourceId: "ops/source",
+        actor: "operator-token:abc",
+        entrypoint: "rerun",
+        source: "rerun",
+        sqlSource: "edited",
         status: "failed",
+        from: "2026-10-01T00:00:00.000Z",
+        to: "2026-10-31T23:59:59.999Z",
         search: "用户",
         limit: 20,
         offset: 20,
@@ -118,7 +219,13 @@ describe("observatory api", () => {
     const url = new URL(fetchMock.mock.calls[0]![0], "http://localhost");
     expect(Object.fromEntries(url.searchParams)).toEqual({
       sourceId: "ops/source",
+      actor: "operator-token:abc",
+      entrypoint: "rerun",
+      source: "rerun",
+      sqlSource: "edited",
       status: "failed",
+      from: "2026-10-01T00:00:00.000Z",
+      to: "2026-10-31T23:59:59.999Z",
       search: "用户",
       limit: "20",
       offset: "20",

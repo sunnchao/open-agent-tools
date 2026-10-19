@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addPrompt,
+  buildToolSlaQuery,
   buildVersion,
   createApiKey,
   createClient,
@@ -13,6 +14,11 @@ import {
   forkDraftVersion,
   getServiceEnvironment,
   getAuditEvent,
+  getToolSla,
+  McpApiError,
+  listClientQuotas,
+  listClientUsage,
+  listMarketplaceServices,
   listApiKeys,
   listAuditEvents,
   listBuilds,
@@ -27,6 +33,7 @@ import {
   updateServiceEnvironment,
   updateTool,
   updateVersionLimits,
+  upsertClientQuota,
   upsertGrant,
   uploadArtifact,
   validateVersion,
@@ -278,5 +285,152 @@ describe("MCP Studio API", () => {
       "/mcp-api/clients/client-1/grants/service-1",
       "/mcp-api/audit?limit=100&outcome=FAILED&action=service.publish",
     ]);
+  });
+
+  it("loads the marketplace catalog and persists client quotas", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const payload = url.includes("/marketplace")
+        ? {
+            services: [
+              {
+                id: "service-1",
+                name: "Remote Search",
+                slug: "remote-search",
+                type: "REMOTE_MCP",
+                versionId: "version-1",
+                versionNumber: 2,
+                toolCount: null,
+                promptCount: 0,
+                toolsUnknown: true,
+                tools: [],
+                prompts: [],
+              },
+            ],
+          }
+        : url.includes("/quotas")
+          ? {
+              quotas: [],
+              quota: {
+                id: "quota-1",
+                clientId: "client-1",
+                serviceId: "service-1",
+                qpsLimit: 5,
+                dailyCallLimit: 1_000,
+              },
+            }
+          : {
+              events: [],
+              summary: { total: 0, reserved: 0, succeeded: 0, failed: 0 },
+            };
+      return Promise.resolve({
+        ok: true,
+        status: init?.method === "PUT" ? 200 : 200,
+        json: async () => payload,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listMarketplaceServices()).resolves.toMatchObject([
+      { slug: "remote-search", toolsUnknown: true, toolCount: null },
+    ]);
+    await listClientQuotas("client-1");
+    await upsertClientQuota("client-1", {
+      serviceId: "service-1",
+      qpsLimit: 5,
+      dailyCallLimit: 1_000,
+    });
+    await listClientUsage("client-1", { serviceId: "service-1", limit: 25 });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/mcp-api/marketplace?limit=100",
+      "/mcp-api/clients/client-1/quotas",
+      "/mcp-api/clients/client-1/quotas",
+      "/mcp-api/clients/client-1/usage?limit=25&serviceId=service-1",
+    ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
+      serviceId: "service-1",
+      qpsLimit: 5,
+      dailyCallLimit: 1_000,
+    });
+  });
+
+  it("builds tool SLA queries for each window and optional service filter", () => {
+    expect(buildToolSlaQuery()).toBe("window=24h");
+    expect(buildToolSlaQuery({ window: "7d" })).toBe("window=7d");
+    expect(buildToolSlaQuery({ window: "7d", serviceSlug: "remote-search" })).toBe(
+      "window=7d&serviceSlug=remote-search",
+    );
+  });
+
+  it("parses the tool SLA report and switches the requested window", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const window = new URL(`http://localhost${url}`).searchParams.get("window");
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          window,
+          windowMinutes: 10080,
+          generatedAt: "2026-07-31T12:00:00.000Z",
+          serviceSlug: null,
+          scan: { events: 3, limit: 200, truncated: false },
+          totals: { calls: 3, succeeded: 2, failed: 1, successRate: 0.67, p95DurationMs: 400 },
+          services: [
+            {
+              serviceSlug: "search",
+              calls: 3,
+              succeeded: 2,
+              failed: 1,
+              successRate: 0.67,
+              p95DurationMs: 400,
+              tools: [
+                {
+                  toolName: "query",
+                  calls: 3,
+                  succeeded: 2,
+                  failed: 1,
+                  successRate: 0.67,
+                  p50DurationMs: 200,
+                  p95DurationMs: 400,
+                  maxDurationMs: 420,
+                  errors: [{ code: "TOOL_ERROR", message: "fetch failed", count: 1 }],
+                  lastFailure: {
+                    code: "TOOL_ERROR",
+                    message: "fetch failed",
+                    statusCode: 200,
+                    createdAt: "2026-07-31T11:30:00.000Z",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const report = await getToolSla({ window: "7d" });
+    expect(report.window).toBe("7d");
+    expect(report.services[0]?.tools[0]?.lastFailure?.message).toBe("fetch failed");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/mcp-api/observability/tools?window=7d",
+      expect.any(Object),
+    );
+  });
+
+  it("surfaces a readable error when the SLA request fails", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: { code: "INTERNAL_ERROR", message: "SLA unavailable" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getToolSla()).rejects.toBeInstanceOf(McpApiError);
+    await expect(getToolSla()).rejects.toMatchObject({
+      status: 500,
+      code: "INTERNAL_ERROR",
+      message: "SLA unavailable",
+    });
   });
 });

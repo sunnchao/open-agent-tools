@@ -1,16 +1,28 @@
 import { DatabaseSync } from "node:sqlite";
+import {
+  deriveQueryAttribution,
+  NO_ANSWER_ATTRIBUTIONS,
+  type NoAnswerAttributionValue,
+  type QualityReport,
+  type QueryEventAttribution,
+} from "./quality.js";
 
 export type QueryFeedbackRating = "positive" | "negative";
+export type { QueryEventAttribution } from "./quality.js";
 
 export interface QueryEventInput {
   id: string;
   query: string;
   sources?: string[];
+  sourceCount: number;
   topK: number;
   generate: boolean;
   crag: boolean;
   hits: Array<{ source: string }>;
   answerGenerated: boolean;
+  answer?: string | null;
+  assessment?: "correct" | "ambiguous" | "incorrect";
+  actions?: string[];
   latencyMs: number;
   error?: string;
   createdAt?: string;
@@ -37,6 +49,7 @@ export interface AnalyticsOverview {
     latencyMs: number;
     error: string | null;
     feedback: QueryFeedbackRating | null;
+    attribution: QueryEventAttribution;
     createdAt: string;
   }>;
 }
@@ -64,17 +77,21 @@ export class RagAnalyticsStore {
     );
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS rag_query_events (
-        id                 TEXT PRIMARY KEY,
-        query              TEXT NOT NULL,
-        source_filter_json TEXT NOT NULL,
-        top_k              INTEGER NOT NULL,
-        generate           INTEGER NOT NULL,
-        crag               INTEGER NOT NULL,
-        hit_count          INTEGER NOT NULL,
-        answer_generated   INTEGER NOT NULL,
-        latency_ms         INTEGER NOT NULL,
-        error              TEXT,
-        created_at         TEXT NOT NULL
+        id                  TEXT PRIMARY KEY,
+        query               TEXT NOT NULL,
+        source_filter_json  TEXT NOT NULL,
+        source_count        INTEGER NOT NULL DEFAULT 0,
+        top_k               INTEGER NOT NULL,
+        generate            INTEGER NOT NULL,
+        crag                INTEGER NOT NULL,
+        hit_count           INTEGER NOT NULL,
+        answer_generated    INTEGER NOT NULL,
+        attribution         TEXT NOT NULL DEFAULT 'unknown',
+        crag_assessment     TEXT,
+        crag_actions_json   TEXT NOT NULL DEFAULT '[]',
+        latency_ms          INTEGER NOT NULL,
+        error               TEXT,
+        created_at          TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_rag_query_events_created_at
         ON rag_query_events(created_at DESC);
@@ -93,6 +110,7 @@ export class RagAnalyticsStore {
         updated_at TEXT NOT NULL
       );
     `);
+    this.migrateQueryEvents();
     const days = Math.max(1, Math.min(3650, Math.floor(retentionDays) || 90));
     const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
     this.db.prepare(`DELETE FROM rag_query_events WHERE created_at < ?`).run(cutoff);
@@ -104,24 +122,41 @@ export class RagAnalyticsStore {
       if (!hit.source) continue;
       sourceHits.set(hit.source, (sourceHits.get(hit.source) ?? 0) + 1);
     }
+    const attribution = deriveQueryAttribution({
+      error: input.error,
+      crag: input.crag,
+      generate: input.generate,
+      hits: input.hits.length,
+      sourceCount: input.sourceCount,
+      answerGenerated: input.answerGenerated,
+      answer: input.answer ?? null,
+      generationAttempted: input.generate && input.hits.length > 0,
+      assessment: input.assessment,
+      actions: input.actions,
+    });
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db
         .prepare(
           `INSERT INTO rag_query_events (
-             id, query, source_filter_json, top_k, generate, crag, hit_count,
-             answer_generated, latency_ms, error, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             id, query, source_filter_json, source_count, top_k, generate, crag, hit_count,
+             answer_generated, attribution, crag_assessment, crag_actions_json,
+             latency_ms, error, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
           input.query,
           JSON.stringify(input.sources ?? []),
+          Math.max(0, Math.round(input.sourceCount)),
           input.topK,
           input.generate ? 1 : 0,
           input.crag ? 1 : 0,
           input.hits.length,
           input.answerGenerated ? 1 : 0,
+          attribution,
+          input.assessment ?? null,
+          JSON.stringify(input.actions ?? []),
           Math.max(0, Math.round(input.latencyMs)),
           input.error ?? null,
           input.createdAt ?? new Date().toISOString(),
@@ -226,7 +261,8 @@ export class RagAnalyticsStore {
       .all(start) as unknown as Array<{ source: string; hits: number; queries: number }>;
     const recentRows = this.db
       .prepare(
-        `SELECT q.id, q.query, q.hit_count, q.latency_ms, q.error, f.rating, q.created_at
+        `SELECT q.id, q.query, q.hit_count, q.latency_ms, q.error, q.attribution,
+                f.rating, q.created_at
          FROM rag_query_events q
          LEFT JOIN rag_query_feedback f ON f.query_id = q.id
          ORDER BY q.created_at DESC, q.rowid DESC
@@ -238,6 +274,7 @@ export class RagAnalyticsStore {
       hit_count: number;
       latency_ms: number;
       error: string | null;
+      attribution: QueryEventAttribution;
       rating: QueryFeedbackRating | null;
       created_at: string;
     }>;
@@ -273,13 +310,157 @@ export class RagAnalyticsStore {
         latencyMs: row.latency_ms,
         error: row.error,
         feedback: row.rating,
+        attribution: row.attribution,
         createdAt: row.created_at,
       })),
     };
   }
 
+  qualityReport(periodDays: 7 | 30): QualityReport {
+    const start = startOfUtcDay(Date.now() - (periodDays - 1) * 86_400_000);
+    const attributionRows = this.db
+      .prepare(
+        `SELECT attribution, COUNT(*) AS count
+         FROM rag_query_events
+         WHERE created_at >= ?
+         GROUP BY attribution`,
+      )
+      .all(start) as unknown as Array<{ attribution: QueryEventAttribution; count: number }>;
+    const attribution: QualityReport["attribution"] = {
+      answered: 0,
+      no_documents: 0,
+      retrieval_miss: 0,
+      low_relevance: 0,
+      model_refusal: 0,
+      error: 0,
+      unknown: 0,
+    };
+    let queries = 0;
+    for (const row of attributionRows) {
+      const count = Number(row.count ?? 0);
+      queries += count;
+      if (row.attribution in attribution) {
+        attribution[row.attribution] += count;
+      } else {
+        attribution.unknown += count;
+      }
+    }
+    const answered = attribution.answered;
+    const noAnswer = NO_ANSWER_ATTRIBUTIONS.reduce((sum, value) => sum + attribution[value], 0);
+    const hitRow = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM rag_query_events
+         WHERE created_at >= ? AND hit_count > 0`,
+      )
+      .get(start) as unknown as { count: number };
+    const hits = Number(hitRow.count ?? 0);
+    const topRows = this.db
+      .prepare(
+        `SELECT query, attribution, COUNT(*) AS count
+         FROM rag_query_events
+         WHERE created_at >= ? AND attribution IN (${NO_ANSWER_ATTRIBUTIONS.map(() => "?").join(", ")})
+         GROUP BY query, attribution
+         ORDER BY count DESC, MAX(created_at) DESC, query
+         LIMIT 10`,
+      )
+      .all(start, ...NO_ANSWER_ATTRIBUTIONS) as unknown as Array<{
+      query: string;
+      attribution: NoAnswerAttributionValue;
+      count: number;
+    }>;
+    const trendRows = this.db
+      .prepare(
+        `SELECT
+           substr(created_at, 1, 10) AS date,
+           COUNT(*) AS queries,
+           SUM(CASE WHEN attribution = 'answered' THEN 1 ELSE 0 END) AS answered,
+           SUM(CASE WHEN attribution IN (${NO_ANSWER_ATTRIBUTIONS.map(() => "?").join(", ")}) THEN 1 ELSE 0 END) AS no_answer,
+           SUM(CASE WHEN hit_count > 0 THEN 1 ELSE 0 END) AS hits
+         FROM rag_query_events
+         WHERE created_at >= ?
+         GROUP BY substr(created_at, 1, 10)
+         ORDER BY date`,
+      )
+      .all(...NO_ANSWER_ATTRIBUTIONS, start) as unknown as Array<{
+      date: string;
+      queries: number;
+      answered: number;
+      no_answer: number;
+      hits: number;
+    }>;
+    const trendMap = new Map(trendRows.map((row) => [row.date, row]));
+    const trend = Array.from({ length: periodDays }, (_, index) => {
+      const date = new Date(Date.parse(start) + index * 86_400_000).toISOString().slice(0, 10);
+      const row = trendMap.get(date);
+      const dailyAnswered = Number(row?.answered ?? 0);
+      const dailyNoAnswer = Number(row?.no_answer ?? 0);
+      const dailyQueries = Number(row?.queries ?? 0);
+      const dailyHits = Number(row?.hits ?? 0);
+      return {
+        date,
+        queries: dailyQueries,
+        answered: dailyAnswered,
+        noAnswer: dailyNoAnswer,
+        hitRate: dailyQueries > 0 ? dailyHits / dailyQueries : 0,
+        noAnswerRate: dailyQueries > 0 ? dailyNoAnswer / dailyQueries : 0,
+      };
+    });
+    return {
+      periodDays,
+      generatedAt: new Date().toISOString(),
+      totals: {
+        queries,
+        answered,
+        hits,
+        noAnswer,
+        hitRate: queries > 0 ? hits / queries : 0,
+        noAnswerRate: queries > 0 ? noAnswer / queries : 0,
+      },
+      attribution,
+      topUnanswered: topRows.map((row) => ({
+        query: row.query,
+        count: Number(row.count ?? 0),
+        attribution: row.attribution,
+      })),
+      trend,
+    };
+  }
+
   close(): void {
     this.db.close();
+  }
+
+  /** 兼容已有 SQLite：旧事件没有可回溯的判定，只能标记为 unknown。 */
+  private migrateQueryEvents(): void {
+    const columns = new Set(
+      (
+        this.db.prepare("PRAGMA table_info(rag_query_events)").all() as unknown as Array<{
+          name: string;
+        }>
+      ).map((column) => column.name),
+    );
+    const migrations = [
+      [
+        "source_count",
+        "ALTER TABLE rag_query_events ADD COLUMN source_count INTEGER NOT NULL DEFAULT 0",
+      ],
+      [
+        "attribution",
+        "ALTER TABLE rag_query_events ADD COLUMN attribution TEXT NOT NULL DEFAULT 'unknown'",
+      ],
+      ["crag_assessment", "ALTER TABLE rag_query_events ADD COLUMN crag_assessment TEXT"],
+      [
+        "crag_actions_json",
+        "ALTER TABLE rag_query_events ADD COLUMN crag_actions_json TEXT NOT NULL DEFAULT '[]'",
+      ],
+    ] as const;
+    for (const [column, sql] of migrations) {
+      if (!columns.has(column)) this.db.exec(sql);
+    }
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_rag_query_events_attribution ON rag_query_events(attribution)",
+    );
   }
 }
 

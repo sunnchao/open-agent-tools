@@ -8,22 +8,34 @@ import {
   renameSession,
 } from "../db.js";
 import { logTrace } from "../trace.js";
+import { resolveWorkspace } from "../workspace.js";
 
 export const sessionsRouter: ReturnType<typeof Router> = Router();
 
-sessionsRouter.get("/api/sessions", (_req: Request, res: Response) => {
-  const sessions = listSessionsWithMessages();
-  logTrace("sessions.list", { count: sessions.length });
+sessionsRouter.get("/api/sessions", (req: Request, res: Response) => {
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+    return;
+  }
+  const sessions = listSessionsWithMessages(workspace.workspaceId);
+  logTrace("sessions.list", { workspaceId: workspace.workspaceId, count: sessions.length });
   res.json({ sessions });
 });
 
 sessionsRouter.post("/api/sessions", (req: Request, res: Response) => {
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+    return;
+  }
   const body = req.body as { id?: string; title?: string } | undefined;
   const session = createSession({
     id: typeof body?.id === "string" ? body.id : undefined,
     title: typeof body?.title === "string" ? body.title : undefined,
+    workspaceId: workspace.workspaceId,
   });
-  logTrace("session.created", { sessionId: session.id });
+  logTrace("session.created", { sessionId: session.id, workspaceId: workspace.workspaceId });
   res.status(201).json({ session });
 });
 

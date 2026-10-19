@@ -198,6 +198,56 @@
   color: var(--studio-text);
 }
 
+.obs-audit-filter-input,
+.obs-audit-time-filter input {
+  height: 36px;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--studio-surface-subtle);
+  color: var(--studio-text);
+}
+
+.obs-audit-time-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
+.obs-audit-time-filter input {
+  color-scheme: light;
+}
+
+.obs-audit-link {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #854f0b;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.obs-audit-lineage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.obs-audit-lineage button {
+  padding: 2px 6px;
+  border: 1px solid var(--studio-line);
+  border-radius: 5px;
+  background: var(--studio-surface-subtle);
+  color: #854f0b;
+  cursor: pointer;
+}
+
 .obs-audit-count,
 .obs-audit-pagination {
   color: var(--studio-muted);
@@ -334,6 +384,78 @@
 .obs-audit-preview,
 .obs-audit-metadata details {
   font-size: 11px;
+}
+
+.obs-sql-source {
+  color: var(--studio-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.obs-sql-editor,
+.obs-audit-rerun textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--studio-line);
+  border-radius: 7px;
+  outline: 0;
+  background: var(--studio-surface-subtle);
+  color: var(--studio-text);
+  font-family: var(--studio-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.obs-sql-editor:focus,
+.obs-audit-rerun textarea:focus {
+  border-color: #d9822b;
+}
+
+.obs-rerun-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.obs-rerun-actions > span,
+.obs-rerun-notice {
+  color: var(--studio-muted);
+  font-size: 10px;
+}
+
+.obs-audit-rerun {
+  padding: 14px;
+  border-top: 1px solid var(--studio-line);
+}
+
+.obs-clarification-contract {
+  margin: 8px 0;
+  padding: 10px;
+  border-left: 2px solid #d9822b;
+  background: #faeeda;
+  font-size: 11px;
+}
+
+.obs-clarification-contract p {
+  margin: 0 0 7px;
+}
+
+.obs-clarify-candidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.obs-clarify-candidates > span {
+  padding: 3px 7px;
+  border: 1px solid #e8d4b4;
+  border-radius: 999px;
+  color: #854f0b;
 }
 
 .obs-step-payload summary,

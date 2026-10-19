@@ -1,3 +1,10 @@
+import type {
+  ClientQuotaRecord,
+  UsageEventQuery,
+  UsageEventRecord,
+  UsageSummary,
+} from "./types.js";
+
 export type McpScope = "mcp:connect" | "tools:list" | "tools:call" | "prompts:list" | "prompts:get";
 
 export interface ApiClientRecord {
@@ -45,6 +52,10 @@ export interface ClientAccessRepository {
   upsertGrant(grant: ClientGrantRecord): Promise<ClientGrantRecord>;
   deleteGrant(clientId: string, serviceId: string): Promise<boolean>;
   serviceExists(serviceId: string): Promise<boolean>;
+  listClientQuotas(clientId: string): Promise<ClientQuotaRecord[]>;
+  upsertClientQuota(quota: ClientQuotaRecord): Promise<ClientQuotaRecord>;
+  listUsageEvents(clientId: string, query: UsageEventQuery): Promise<UsageEventRecord[]>;
+  summarizeUsage(clientId: string, query: UsageEventQuery): Promise<UsageSummary>;
 }
 
 function clone<T>(value: T): T {
@@ -56,6 +67,8 @@ export class InMemoryClientAccessRepository implements ClientAccessRepository {
   readonly keys = new Map<string, StoredApiKeyRecord>();
   readonly grants = new Map<string, ClientGrantRecord>();
   readonly serviceIds = new Set<string>();
+  readonly clientQuotas = new Map<string, ClientQuotaRecord>();
+  readonly usageEvents = new Map<string, UsageEventRecord>();
 
   constructor(input: { serviceIds?: string[] } = {}) {
     for (const serviceId of input.serviceIds ?? []) this.serviceIds.add(serviceId);
@@ -125,5 +138,54 @@ export class InMemoryClientAccessRepository implements ClientAccessRepository {
 
   async serviceExists(serviceId: string): Promise<boolean> {
     return this.serviceIds.has(serviceId);
+  }
+
+  async listClientQuotas(clientId: string): Promise<ClientQuotaRecord[]> {
+    return [...this.clientQuotas.values()]
+      .filter((quota) => quota.clientId === clientId)
+      .sort((left, right) => {
+        if (left.serviceId === right.serviceId) return 0;
+        if (left.serviceId === null) return -1;
+        if (right.serviceId === null) return 1;
+        return left.serviceId.localeCompare(right.serviceId);
+      })
+      .map(clone);
+  }
+
+  async upsertClientQuota(quota: ClientQuotaRecord): Promise<ClientQuotaRecord> {
+    this.clientQuotas.set(quota.id, clone(quota));
+    return clone(quota);
+  }
+
+  async listUsageEvents(clientId: string, query: UsageEventQuery): Promise<UsageEventRecord[]> {
+    const from = query.from === undefined ? null : Date.parse(query.from);
+    const to = query.to === undefined ? null : Date.parse(query.to);
+    return [...this.usageEvents.values()]
+      .filter((event) => {
+        if (event.clientId !== clientId) return false;
+        if (query.serviceId !== undefined && event.serviceId !== query.serviceId) return false;
+        const createdAt = Date.parse(event.createdAt);
+        return (from === null || createdAt >= from) && (to === null || createdAt <= to);
+      })
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, query.limit)
+      .map(clone);
+  }
+
+  async summarizeUsage(clientId: string, query: UsageEventQuery): Promise<UsageSummary> {
+    const from = query.from === undefined ? null : Date.parse(query.from);
+    const to = query.to === undefined ? null : Date.parse(query.to);
+    const events = [...this.usageEvents.values()].filter((event) => {
+      if (event.clientId !== clientId) return false;
+      if (query.serviceId !== undefined && event.serviceId !== query.serviceId) return false;
+      const createdAt = Date.parse(event.createdAt);
+      return (from === null || createdAt >= from) && (to === null || createdAt <= to);
+    });
+    return {
+      total: events.length,
+      reserved: events.filter((event) => event.status === "RESERVED").length,
+      succeeded: events.filter((event) => event.status === "SUCCEEDED").length,
+      failed: events.filter((event) => event.status === "FAILED").length,
+    };
   }
 }

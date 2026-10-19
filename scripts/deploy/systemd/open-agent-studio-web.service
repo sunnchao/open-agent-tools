@@ -1,0 +1,38 @@
+# 前端静态站点 (apps/studio-web) —— `vite preview` 兜底方案
+#
+# 生产更推荐用 nginx 直接托管 apps/studio-web/dist(见 private-deployment.md
+# 「前端托管」小节),本 unit 只是不想引入 nginx 时的兜底。
+# `vite preview` 默认监听 4173;此处显式指定 5173 以对齐文档里的端口矩阵。
+#
+# 用法:替换 __REPO_ROOT__ / __USER__ 后安装(需先 pnpm --filter @open-agent-tools/studio-web build)。
+[Unit]
+Description=Open Agent Tools - Studio Web (static preview)
+Documentation=file://__REPO_ROOT__/docs/deploy/private-deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__REPO_ROOT__
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/usr/bin/env pnpm --filter @open-agent-tools/studio-web exec vite preview --host 127.0.0.1 --port 5173
+
+Restart=on-failure
+RestartSec=3
+
+# ---- 最小加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

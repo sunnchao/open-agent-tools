@@ -36,6 +36,36 @@ export interface Period {
   tz: string;
 }
 
+/**
+ * 结构化澄清契约。
+ *
+ * 与具体业务域解耦：问数、报表和工作流都只依赖 slot 标识、候选值和是否可继续，
+ * 不依赖某个提示词里的自由文本。`clarifying` 继续保留用于兼容旧客户端。
+ */
+export type ClarificationCandidate = {
+  label: string;
+  value: string;
+  description?: string;
+};
+
+export type ClarificationSlot = {
+  key: string;
+  label: string;
+  raw?: string;
+  value?: string;
+  candidates: ClarificationCandidate[];
+};
+
+export type Clarification = {
+  slots: ClarificationSlot[];
+  candidates: ClarificationCandidate[];
+  originalQuestion: string;
+  round: number;
+  missingSlots: string[];
+  canProceed: boolean;
+  clarifying: string;
+};
+
 /** 一次查询的完整口径，随结果返回、落日志，保证可复核 */
 export interface Caliber {
   intent: string;

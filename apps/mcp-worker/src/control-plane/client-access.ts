@@ -10,6 +10,12 @@ import type {
   McpScope,
   StoredApiKeyRecord,
 } from "./client-access-repository.js";
+import type {
+  ClientQuotaRecord,
+  UsageEventQuery,
+  UsageEventRecord,
+  UsageSummary,
+} from "./types.js";
 import { ManagementError, type Actor, type IdGenerator } from "./management.js";
 
 const CreateClientSchema = z.object({ name: z.string().trim().min(1).max(120) }).strict();
@@ -187,8 +193,67 @@ export class ClientAccessService {
   }
 
   async #client(clientId: string): Promise<ApiClientRecord> {
-    const client = await this.#repository.getClient(clientId);
-    if (!client) throw new ManagementError("NOT_FOUND", `API client not found: ${clientId}`);
-    return client;
+    return this.#repository.getClient(clientId).then((client) => {
+      if (!client) throw new ManagementError("NOT_FOUND", `API client not found: ${clientId}`);
+      return client;
+    });
+  }
+
+  async listClientQuotas(clientId: string, actor: Actor): Promise<ClientQuotaRecord[]> {
+    if (actor.role === "operator") {
+      throw new ManagementError("FORBIDDEN", "Quota reads require admin or auditor access");
+    }
+    await this.#client(clientId);
+    return this.#repository.listClientQuotas(clientId);
+  }
+
+  async upsertClientQuota(
+    clientId: string,
+    input: { serviceId?: string | null; qpsLimit: number; dailyCallLimit: number },
+    actor: Actor,
+  ): Promise<ClientQuotaRecord> {
+    requireAdmin(actor);
+    await this.#client(clientId);
+    const serviceId = input.serviceId ?? null;
+    if (serviceId !== null && !(await this.#repository.serviceExists(serviceId))) {
+      throw new ManagementError("NOT_FOUND", `Service not found: ${serviceId}`);
+    }
+    if (
+      !Number.isInteger(input.qpsLimit) ||
+      input.qpsLimit < 0 ||
+      !Number.isInteger(input.dailyCallLimit) ||
+      input.dailyCallLimit < 0
+    ) {
+      throw new ManagementError("VALIDATION_ERROR", "Quota limits must be non-negative integers");
+    }
+    const existing = (await this.#repository.listClientQuotas(clientId)).find(
+      (quota) => quota.serviceId === serviceId,
+    );
+    const now = this.#now();
+    return this.#repository.upsertClientQuota({
+      id: existing?.id ?? this.#createId(),
+      clientId,
+      serviceId,
+      qpsLimit: input.qpsLimit,
+      dailyCallLimit: input.dailyCallLimit,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
+  }
+
+  async listUsage(
+    clientId: string,
+    query: UsageEventQuery,
+    actor: Actor,
+  ): Promise<{ events: UsageEventRecord[]; summary: UsageSummary }> {
+    if (actor.role === "operator") {
+      throw new ManagementError("FORBIDDEN", "Usage reads require admin or auditor access");
+    }
+    await this.#client(clientId);
+    const [events, summary] = await Promise.all([
+      this.#repository.listUsageEvents(clientId, query),
+      this.#repository.summarizeUsage(clientId, query),
+    ]);
+    return { events, summary };
   }
 }

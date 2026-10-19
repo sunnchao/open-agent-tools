@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -19,6 +20,7 @@ import {
 import {
   deleteDocument,
   getAnalyticsOverview,
+  getQualityReport,
   listChunks,
   listDocuments,
   queryKnowledge,
@@ -32,7 +34,9 @@ import {
   type DocumentStats,
   type QueryFeedbackRating,
   type QueryResult,
+  type QualityReport,
 } from "./api.js";
+import { subscribeChunkTarget } from "./chunkTarget.js";
 
 interface RagSettings {
   chunkSize: number;
@@ -64,6 +68,7 @@ export function RagWorkspace() {
   const [stats, setStats] = useState<DocumentStats | null>(null);
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const [chunks, setChunks] = useState<ChunkInfo[]>([]);
+  const [highlightChunkIndex, setHighlightChunkIndex] = useState<number | null>(null);
   const [settings, setSettings] = useState<RagSettings>(defaultSettings);
   const [separatorText, setSeparatorText] = useState(() => separatorsToText(defaultSeparators));
   const [query, setQuery] = useState("");
@@ -71,6 +76,8 @@ export function RagWorkspace() {
   const [view, setView] = useState<"documents" | "analytics">("documents");
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
+  const [qualityDays, setQualityDays] = useState<7 | 30>(7);
   const [feedback, setFeedback] = useState<Record<string, QueryFeedbackRating>>({});
   const [busy, setBusy] = useState<"loading" | "upload" | "query" | null>("loading");
   const [dragging, setDragging] = useState(false);
@@ -103,15 +110,32 @@ export function RagWorkspace() {
   const refreshAnalytics = useCallback(async () => {
     setAnalyticsLoading(true);
     try {
-      setAnalytics(await getAnalyticsOverview());
+      const [overview, report] = await Promise.all([
+        getAnalyticsOverview(qualityDays),
+        getQualityReport(qualityDays),
+      ]);
+      setAnalytics(overview);
+      setQualityReport(report);
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
       setAnalyticsLoading(false);
     }
-  }, []);
+  }, [qualityDays]);
 
   useEffect(() => void refresh(), [refresh]);
+
+  // A4 引用定位:从「对话」工作区点引用跳过来时,定位到对应文档与分块。
+  useEffect(
+    () =>
+      subscribeChunkTarget((target) => {
+        setView("documents");
+        setResult(null);
+        setSelectedSource(target.source);
+        setHighlightChunkIndex(target.chunkIndex);
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (view === "analytics") void refreshAnalytics();
@@ -208,7 +232,10 @@ export function RagWorkspace() {
     }
   };
 
-  const saveDocumentMetadata = async (source: string, patch: { title: string; tags: string[] }) => {
+  const saveDocumentMetadata = async (
+    source: string,
+    patch: { title: string; tags: string[]; allowedGroups: string[] },
+  ) => {
     try {
       const response = await updateDocument(source, patch);
       setStats((current) =>
@@ -331,7 +358,13 @@ export function RagWorkspace() {
       ) : null}
 
       {view === "analytics" ? (
-        <RagAnalyticsDashboard overview={analytics} loading={analyticsLoading} />
+        <RagAnalyticsDashboard
+          overview={analytics}
+          report={qualityReport}
+          loading={analyticsLoading}
+          days={qualityDays}
+          onDaysChange={setQualityDays}
+        />
       ) : (
         <div className="domain-grid">
           <aside className="resource-panel">
@@ -349,7 +382,10 @@ export function RagWorkspace() {
                   type="button"
                   key={item.source}
                   className={`resource-item${selectedSource === item.source ? " is-active" : ""}`}
-                  onClick={() => setSelectedSource(item.source)}
+                  onClick={() => {
+                    setSelectedSource(item.source);
+                    setHighlightChunkIndex(null);
+                  }}
                 >
                   <span className="resource-icon rag-source">
                     <FileTextOutlined />
@@ -409,7 +445,11 @@ export function RagWorkspace() {
                 onFeedback={(rating) => void sendFeedback(result.queryId, rating)}
               />
             ) : (
-              <ChunkPreview source={selectedSource} chunks={chunks} />
+              <ChunkPreview
+                source={selectedSource}
+                chunks={chunks}
+                highlightChunkIndex={highlightChunkIndex}
+              />
             )}
           </div>
 
@@ -657,15 +697,17 @@ function DocumentMetadataEditor({
   onSave,
 }: {
   document: DocumentSource;
-  onSave: (patch: { title: string; tags: string[] }) => Promise<void>;
+  onSave: (patch: { title: string; tags: string[]; allowedGroups: string[] }) => Promise<void>;
 }) {
   const [title, setTitle] = useState(document.title);
   const [tagText, setTagText] = useState(document.tags.join(", "));
+  const [groupText, setGroupText] = useState(document.allowedGroups.join(", "));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setTitle(document.title);
     setTagText(document.tags.join(", "));
+    setGroupText(document.allowedGroups.join(", "));
   }, [document]);
 
   const tags = tagText
@@ -677,6 +719,11 @@ function DocumentMetadataEditor({
     title.trim().length > 160 ||
     tags.length > 20 ||
     tags.some((tag) => tag.length > 40);
+  const groups = groupText
+    .split(/[,，\n]/)
+    .map((group) => group.trim())
+    .filter((group, index, all) => Boolean(group) && all.indexOf(group) === index);
+  const groupsInvalid = groups.length > 50 || groups.some((group) => group.length > 60);
 
   return (
     <div className="settings-group document-profile">
@@ -690,6 +737,22 @@ function DocumentMetadataEditor({
       <label className="studio-field">
         <span>显示标题</span>
         <input value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} />
+      </label>
+      <label className="studio-field">
+        <span>
+          可见分组 <small>{groups.length}/50 · 留空公开</small>
+        </span>
+        <input
+          value={groupText}
+          placeholder="hr, finance, leadership"
+          onChange={(event) => setGroupText(event.target.value)}
+        />
+        <small className="field-help">
+          发布应用只会检索公开文档与调用方命中的分组；管理台检索不受此限制。
+        </small>
+        {groupsInvalid ? (
+          <small className="field-error">分组需为 1-60 字符，最多 50 个</small>
+        ) : null}
       </label>
       <label className="studio-field">
         <span>
@@ -735,11 +798,11 @@ function DocumentMetadataEditor({
       <button
         className="studio-button secondary full-width"
         type="button"
-        disabled={invalid || saving}
+        disabled={invalid || groupsInvalid || saving}
         onClick={async () => {
           setSaving(true);
           try {
-            await onSave({ title: title.trim(), tags });
+            await onSave({ title: title.trim(), tags, allowedGroups: groups });
           } finally {
             setSaving(false);
           }
@@ -753,23 +816,46 @@ function DocumentMetadataEditor({
 
 function RagAnalyticsDashboard({
   overview,
+  report,
   loading,
+  days,
+  onDaysChange,
 }: {
   overview: AnalyticsOverview | null;
+  report: QualityReport | null;
   loading: boolean;
+  days: 7 | 30;
+  onDaysChange: (days: 7 | 30) => void;
 }) {
   if (loading && !overview) return <div className="rag-analytics-state">正在汇总查询数据...</div>;
   if (!overview) return <div className="rag-analytics-state">暂无运营数据</div>;
-  const maxQueries = Math.max(1, ...overview.daily.map((day) => day.queries));
+  const maxQueries = Math.max(1, ...(report?.trend.map((day) => day.queries) ?? []));
   const helpful = overview.totals.helpfulRate;
+  const quality = report?.totals;
+  const attribution = report?.attribution;
+  const hasNoAnswerHistory = Boolean(attribution?.unknown);
   return (
     <div className="rag-analytics-dashboard">
       <header className="analytics-heading">
         <div>
-          <p>最近 {overview.periodDays} 天</p>
+          <p>最近 {days} 天</p>
           <h2>知识库服务质量</h2>
         </div>
-        <span>{loading ? "更新中" : "实时汇总"}</span>
+        <div className="analytics-heading-actions">
+          <div className="segmented-control analytics-range-switch" aria-label="报告周期">
+            {([7, 30] as const).map((period) => (
+              <button
+                type="button"
+                key={period}
+                className={days === period ? "is-active" : ""}
+                onClick={() => onDaysChange(period)}
+              >
+                {period} 天
+              </button>
+            ))}
+          </div>
+          <span>{loading ? "更新中" : "实时汇总"}</span>
+        </div>
       </header>
 
       <div className="analytics-metrics">
@@ -779,15 +865,30 @@ function RagAnalyticsDashboard({
           detail={`${overview.totals.failed} 次失败`}
         />
         <Metric
-          label="空召回率"
-          value={`${Math.round(overview.totals.noHitRate * 100)}%`}
-          detail={`${overview.totals.noHits} 次未命中`}
-          tone={overview.totals.noHitRate > 0.25 ? "warning" : "normal"}
+          label="检索命中率"
+          value={quality ? `${Math.round(quality.hitRate * 100)}%` : "--"}
+          detail={quality ? `${quality.hits} 次命中文档` : "正在汇总归因"}
+          tone={quality && quality.hitRate < 0.75 ? "warning" : "normal"}
         />
+        <Metric
+          label="无答案率"
+          value={quality ? `${Math.round(quality.noAnswerRate * 100)}%` : "--"}
+          detail={quality ? `${quality.noAnswer} 次无答案` : "正在汇总归因"}
+          tone={quality && quality.noAnswerRate > 0.25 ? "warning" : "normal"}
+        />
+      </div>
+
+      <div className="analytics-secondary-metrics">
         <Metric
           label="平均延迟"
           value={`${overview.totals.averageLatencyMs} ms`}
           detail="含检索与生成"
+        />
+        <Metric
+          label="空召回"
+          value={String(overview.totals.noHits)}
+          detail={`${Math.round(overview.totals.noHitRate * 100)}% 的成功请求`}
+          tone={overview.totals.noHitRate > 0.25 ? "warning" : "normal"}
         />
         <Metric
           label="用户好评"
@@ -796,18 +897,92 @@ function RagAnalyticsDashboard({
         />
       </div>
 
+      <div className="analytics-main-grid quality-grid">
+        <section className="analytics-section attribution-panel">
+          <div className="analytics-section-heading">
+            <h3>无答案归因</h3>
+            <span>按实际检索与生成结果</span>
+          </div>
+          {attribution ? (
+            <div className="attribution-list">
+              {(
+                [
+                  ["no_documents", "没有可见文档", "确认是否已上传文档或分组权限是否匹配"],
+                  ["retrieval_miss", "未检索到内容", "补充同义词、标题与问题表述"],
+                  ["low_relevance", "内容相关性不足", "补充直接回答该问题的段落"],
+                  ["model_refusal", "模型判定无法回答", "检查上下文是否覆盖答案"],
+                  ["error", "服务错误", "检查模型、检索服务与网关日志"],
+                  ["unknown", "历史未归因", "升级前事件缺少 CRAG 判定"],
+                ] as const
+              ).map(([key, label, hint]) => {
+                const count = attribution[key];
+                const total = Math.max(1, quality?.queries ?? 0);
+                return (
+                  <div className="attribution-row" key={key}>
+                    <div>
+                      <b>{label}</b>
+                      <small>{hint}</small>
+                    </div>
+                    <strong>{count}</strong>
+                    <div className="attribution-track">
+                      <i
+                        style={{ width: `${Math.max(count > 0 ? 4 : 0, (count / total) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="analytics-empty">暂无归因数据</div>
+          )}
+          {hasNoAnswerHistory ? (
+            <p className="analytics-footnote">
+              历史事件来源版本较旧，无法可靠补判 attribution，因此保留为“历史未归因”。
+            </p>
+          ) : null}
+        </section>
+
+        <section className="analytics-section unanswered-ranking">
+          <div className="analytics-section-heading">
+            <h3>Top 未覆盖问题</h3>
+            <span>按出现次数</span>
+          </div>
+          {!report || report.topUnanswered.length === 0 ? (
+            <div className="analytics-empty">暂无未覆盖问题</div>
+          ) : (
+            <ol>
+              {report.topUnanswered.map((item) => (
+                <li key={`${item.query}:${item.attribution}`}>
+                  <span>{String(item.count).padStart(2, "0")}</span>
+                  <b title={item.query}>{item.query}</b>
+                  <small>{attributionLabel(item.attribution)}</small>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      </div>
+
       <div className="analytics-main-grid">
         <section className="analytics-section query-trend">
           <div className="analytics-section-heading">
-            <h3>查询趋势</h3>
-            <span>柱高为每日查询量</span>
+            <h3>质量趋势</h3>
+            <span>柱高为每日查询量，橙色为无答案</span>
           </div>
-          <div className="query-bars">
-            {overview.daily.map((day) => (
+          <div
+            className="query-bars"
+            style={
+              {
+                "--trend-columns": (report?.trend ?? []).length || days,
+              } as CSSProperties
+            }
+          >
+            {(report?.trend ?? []).map((day, index) => (
               <div
                 className="query-bar-column"
                 key={day.date}
-                title={`${day.date}: ${day.queries} 次查询`}
+                title={`${day.date}: ${day.queries} 次查询，${day.noAnswer} 次无答案`}
               >
                 <span>{day.queries || ""}</span>
                 <div className="query-bar-track">
@@ -815,9 +990,15 @@ function RagAnalyticsDashboard({
                     style={{
                       height: `${Math.max(day.queries > 0 ? 8 : 2, (day.queries / maxQueries) * 100)}%`,
                     }}
-                  />
+                  >
+                    <em
+                      style={{
+                        height: `${day.queries > 0 ? (day.noAnswer / day.queries) * 100 : 0}%`,
+                      }}
+                    />
+                  </i>
                 </div>
-                <small>{day.date.slice(5)}</small>
+                <small>{days === 7 || index % 5 === 0 ? day.date.slice(5) : ""}</small>
               </div>
             ))}
           </div>
@@ -857,6 +1038,7 @@ function RagAnalyticsDashboard({
                 <th>命中</th>
                 <th>延迟</th>
                 <th>反馈</th>
+                <th>归因</th>
                 <th>时间</th>
               </tr>
             </thead>
@@ -873,6 +1055,9 @@ function RagAnalyticsDashboard({
                         ? "无用"
                         : "--"}
                   </td>
+                  <td className={`attribution-${item.attribution}`}>
+                    {attributionLabel(item.attribution)}
+                  </td>
                   <td>{formatDateTime(item.createdAt)}</td>
                 </tr>
               ))}
@@ -885,6 +1070,25 @@ function RagAnalyticsDashboard({
       </section>
     </div>
   );
+}
+
+function attributionLabel(attribution: AnalyticsOverview["recent"][number]["attribution"]): string {
+  switch (attribution) {
+    case "no_documents":
+      return "没有文档";
+    case "retrieval_miss":
+      return "未检索到";
+    case "low_relevance":
+      return "相关不足";
+    case "model_refusal":
+      return "模型拒答";
+    case "error":
+      return "服务错误";
+    case "answered":
+      return "已回答";
+    default:
+      return "历史未归因";
+  }
 }
 
 function Metric({
@@ -925,7 +1129,21 @@ function formatDateTime(value: string): string {
   }).format(date);
 }
 
-function ChunkPreview({ source, chunks }: { source: string | null; chunks: ChunkInfo[] }) {
+function ChunkPreview({
+  source,
+  chunks,
+  highlightChunkIndex,
+}: {
+  source: string | null;
+  chunks: ChunkInfo[];
+  highlightChunkIndex?: number | null;
+}) {
+  const highlightRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (highlightChunkIndex == null) return;
+    highlightRef.current?.scrollIntoView({ block: "nearest" });
+  }, [highlightChunkIndex, chunks]);
+
   return (
     <div className="preview-content">
       <div className="preview-heading">
@@ -942,18 +1160,26 @@ function ChunkPreview({ source, chunks }: { source: string | null; chunks: Chunk
         </div>
       ) : null}
       <div className="chunk-preview-list">
-        {chunks.map((chunk) => (
-          <article className="knowledge-chunk" key={chunk.id}>
-            <header>
-              <span>#{String(chunk.chunkIndex + 1).padStart(2, "0")}</span>
-              <span>{chunk.length} 字符</span>
-              <span className={chunk.hasEmbedding ? "vector-on" : "vector-off"}>
-                {chunk.hasEmbedding ? "VECTOR" : "BM25"}
-              </span>
-            </header>
-            <p>{chunk.content}</p>
-          </article>
-        ))}
+        {chunks.map((chunk) => {
+          const isHighlighted =
+            highlightChunkIndex != null && chunk.chunkIndex === highlightChunkIndex;
+          return (
+            <article
+              className={`knowledge-chunk${isHighlighted ? " is-highlighted" : ""}`}
+              key={chunk.id}
+              ref={isHighlighted ? highlightRef : undefined}
+            >
+              <header>
+                <span>#{String(chunk.chunkIndex + 1).padStart(2, "0")}</span>
+                <span>{chunk.length} 字符</span>
+                <span className={chunk.hasEmbedding ? "vector-on" : "vector-off"}>
+                  {chunk.hasEmbedding ? "VECTOR" : "BM25"}
+                </span>
+              </header>
+              <p>{chunk.content}</p>
+            </article>
+          );
+        })}
       </div>
     </div>
   );

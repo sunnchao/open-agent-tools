@@ -1,7 +1,16 @@
+import { useState } from "react";
 import { Alert, Button, Card } from "antd";
 import { CopyOutlined, ReloadOutlined } from "../lib/icons.js";
-import type { Message, RagCitation, SqlResultProps, ToolCall, UiBlock } from "../types.js";
+import type {
+  Message,
+  MessageUsage,
+  RagCitation,
+  SqlResultProps,
+  ToolCall,
+  UiBlock,
+} from "../types.js";
 import { MarkdownView } from "./MarkdownView.js";
+import { CitationViewer } from "./CitationViewer.js";
 import { FinancialReportCard } from "./FinancialReportCard.js";
 import { SqlResultCard } from "./SqlResultCard.js";
 import { ToolCalls } from "./ToolCalls.js";
@@ -17,7 +26,13 @@ function formatTime(ts?: number) {
   return new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
-function MessageActions({ message, onRegenerate }: { message: Message; onRegenerate?: () => void }) {
+function MessageActions({
+  message,
+  onRegenerate,
+}: {
+  message: Message;
+  onRegenerate?: () => void;
+}) {
   const handleCopy = () => {
     void navigator.clipboard?.writeText(message.content).catch(() => undefined);
   };
@@ -95,7 +110,15 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
   const isError = message.status === "error";
 
   // 空消息不渲染（思考中、已停止、出错除外，否则用户看不到终态）
-  if (!hasContent && !hasToolCalls && !hasUi && !hasCitations && !isThinking && !isStopped && !isError) {
+  if (
+    !hasContent &&
+    !hasToolCalls &&
+    !hasUi &&
+    !hasCitations &&
+    !isThinking &&
+    !isStopped &&
+    !isError
+  ) {
     return <></>;
   }
 
@@ -141,6 +164,7 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
         <div className="msg-meta">
           <span>{formatTime(message.createdAt)}</span>
           {isStopped ? <span>已停止生成</span> : null}
+          <MessageUsageTag usage={message.usage} />
           {canRegenerate ? (
             <Button
               type="link"
@@ -159,21 +183,56 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
   );
 }
 
+/** token 与工具用量标签：与 `/api/admin/usage` 同口径，便于成本对账。 */
+function MessageUsageTag({ usage }: { usage?: MessageUsage }) {
+  if (!usage || usage.totalTokens <= 0) return null;
+  const parts = [`${formatTokens(usage.totalTokens)} tokens`];
+  if (usage.toolCalls > 0) {
+    parts.push(
+      usage.toolErrors > 0
+        ? `工具 ${usage.toolCalls} 次（${usage.toolErrors} 失败）`
+        : `工具 ${usage.toolCalls} 次`,
+    );
+  }
+  return (
+    <span title={`输入 ${usage.inputTokens} · 输出 ${usage.outputTokens}`}>
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
+function formatTokens(value: number): string {
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return String(value);
+}
+
 function RagCitations({ citations }: { citations?: RagCitation[] }) {
+  const [expanded, setExpanded] = useState<number | null>(null);
   if (!citations || citations.length === 0) return null;
   return (
-    <details className="rag-citations">
-      <summary>引用文档 · {citations.length} 个片段</summary>
-      <div>
-        {citations.map((citation, index) => (
-          <article key={`${citation.source}-${citation.chunkIndex}-${index}`}>
-            <b>{citation.source}</b>
-            <span>第 {Number(citation.chunkIndex) + 1} 段</span>
-            <p>{citation.content}</p>
-          </article>
-        ))}
-      </div>
-    </details>
+    <section className="rag-citations" aria-label="引用文档">
+      <p className="rag-citations__title">引用文档 · {citations.length} 个片段</p>
+      <ul className="rag-citations__list">
+        {citations.map((citation, index) => {
+          const isOpen = expanded === index;
+          return (
+            <li className="rag-citation" key={`${citation.source}-${citation.chunkIndex}-${index}`}>
+              <button
+                type="button"
+                className="rag-citation__toggle"
+                aria-expanded={isOpen}
+                onClick={() => setExpanded(isOpen ? null : index)}
+              >
+                <span className="rag-citation__source">{citation.source}</span>
+                <span className="rag-citation__index">第 {Number(citation.chunkIndex) + 1} 段</span>
+                <span className="rag-citation__snippet">{citation.content}</span>
+              </button>
+              {isOpen ? <CitationViewer citation={citation} /> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -186,9 +245,8 @@ function UiBlocks({ blocks }: { blocks?: UiBlock[] }) {
           return <SqlResultCard key={index} {...(block.props as SqlResultProps)} />;
         }
         if (block.type !== "financial_report_card") return null;
-        const reports = (
-          block as Extract<UiBlock, { type: "financial_report_card" }>
-        ).props.reports;
+        const reports = (block as Extract<UiBlock, { type: "financial_report_card" }>).props
+          .reports;
         return <FinancialReportCard key={index} reports={reports} />;
       })}
     </div>

@@ -92,10 +92,17 @@ export function useChatStream({
               updateMessage(sessionId, assistantId, { id: meta.assistantMessageId });
               assistantId = meta.assistantMessageId;
             }
-            updateMessage(sessionId, assistantId, { status: "complete" });
+            updateMessage(sessionId, assistantId, {
+              status: "complete",
+              ...(meta?.usage ? { usage: meta.usage } : {}),
+            });
             activeRef.current = null;
             setIsStreaming(false);
             controllerRef.current = null;
+          },
+          onUsage: (usage) => {
+            // 每轮结束先落一次，用户无需等整轮完成即可看到成本。
+            updateMessage(sessionId, assistantId, { usage });
           },
           onError: (error) => {
             // 保留已收到的 partial，错误文案单独展示。

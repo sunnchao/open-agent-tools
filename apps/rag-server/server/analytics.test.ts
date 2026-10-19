@@ -23,6 +23,7 @@ test("查询指标聚合命中来源、空召回和反馈", () => {
     id: "q1",
     query: "如何部署",
     sources: ["guide.md"],
+    sourceCount: 1,
     topK: 5,
     generate: true,
     crag: false,
@@ -33,6 +34,7 @@ test("查询指标聚合命中来源、空召回和反馈", () => {
   store.recordQuery({
     id: "q2",
     query: "未知问题",
+    sourceCount: 1,
     topK: 3,
     generate: false,
     crag: false,
@@ -43,6 +45,7 @@ test("查询指标聚合命中来源、空召回和反馈", () => {
   store.recordQuery({
     id: "q3",
     query: "服务异常",
+    sourceCount: 1,
     topK: 5,
     generate: true,
     crag: true,
@@ -76,6 +79,7 @@ test("反馈可更新且不存在的 queryId 返回 null", () => {
   store.recordQuery({
     id: "q1",
     query: "test",
+    sourceCount: 1,
     topK: 5,
     generate: false,
     crag: false,

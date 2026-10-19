@@ -1,7 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from "react";
+import { DEFAULT_BRANDING, type BrandingConfig } from "./features/branding/api.js";
 import {
   ApiOutlined,
   ApartmentOutlined,
+  BarChartOutlined,
+  BranchesOutlined,
   DatabaseOutlined,
   MessageOutlined,
   NodeIndexOutlined,
@@ -45,8 +48,27 @@ const ObservatoryWorkspace = lazy(() =>
     default: module.ObservatoryWorkspaceWithProvider,
   })),
 );
+const ConnectorsWorkspace = lazy(() =>
+  import("./features/connectors/ConnectorsWorkspace.js").then((module) => ({
+    default: module.ConnectorsWorkspace,
+  })),
+);
+const ReportsWorkspace = lazy(() =>
+  import("./features/reports/ReportsWorkspace.js").then((module) => ({
+    default: module.ReportsWorkspace,
+  })),
+);
 
-type Workspace = "chat" | "mcp" | "rag" | "graph" | "observatory" | "workflow" | "settings";
+type Workspace =
+  | "chat"
+  | "mcp"
+  | "rag"
+  | "connectors"
+  | "graph"
+  | "observatory"
+  | "reports"
+  | "workflow"
+  | "settings";
 
 const workspaces: Array<{
   id: Workspace;
@@ -57,8 +79,10 @@ const workspaces: Array<{
   { id: "chat", label: "对话", en: "Chat", icon: <MessageOutlined /> },
   { id: "mcp", label: "MCP", en: "Toolkit", icon: <ApiOutlined /> },
   { id: "rag", label: "知识库", en: "Knowledge", icon: <DatabaseOutlined /> },
+  { id: "connectors", label: "连接器", en: "Connectors", icon: <BranchesOutlined /> },
   { id: "graph", label: "图谱", en: "Graph", icon: <NodeIndexOutlined /> },
   { id: "observatory", label: "问数", en: "Schema", icon: <TableOutlined /> },
+  { id: "reports", label: "报表", en: "Reports", icon: <BarChartOutlined /> },
   { id: "workflow", label: "工作流", en: "Workflow", icon: <ApartmentOutlined /> },
   { id: "settings", label: "设置", en: "Settings", icon: <SettingOutlined /> },
 ];
@@ -69,14 +93,20 @@ function workspaceFromHash(): Workspace {
 }
 
 /** 沉浸式品牌加载动画 */
-function StudioLoading({ name = "" }: { name?: string }) {
+function StudioLoading({
+  name = "",
+  branding = DEFAULT_BRANDING,
+}: {
+  name?: string;
+  branding?: BrandingConfig;
+}) {
   return (
     <div className="studio-loading" role="status" aria-live="polite">
       <div className="studio-loading__inner">
         <div className="studio-loading__wordmark">
-          <span className="studio-loading__badge">OA</span>
+          <span className="studio-loading__badge">{branding.markText}</span>
           <p className="studio-loading__name">
-            Open Agent Studio
+            {branding.productName}
             <em>{name || "Loading Workspace"}</em>
           </p>
         </div>
@@ -89,7 +119,8 @@ function StudioLoading({ name = "" }: { name?: string }) {
   );
 }
 
-export function App() {
+/** `branding` 由 main.tsx 在启动时读取并注入,App 自身不再重复请求。 */
+export function App({ branding = DEFAULT_BRANDING }: { branding?: BrandingConfig }) {
   const [workspace, setWorkspace] = useState<Workspace>(workspaceFromHash);
 
   useEffect(() => {
@@ -113,11 +144,17 @@ export function App() {
           <button
             type="button"
             className="studio-mark"
-            aria-label="Open Agent Studio"
+            aria-label={`${branding.productName} Studio`}
             onClick={() => navigate("workflow")}
           >
-            <span className="studio-mark__glyph">OA</span>
-            <span className="studio-mark__title">Open Agent Studio</span>
+            <span className="studio-mark__glyph">
+              {branding.logoUrl ? (
+                <img src={branding.logoUrl} alt="" width={22} height={22} />
+              ) : (
+                branding.markText
+              )}
+            </span>
+            <span className="studio-mark__title">{branding.productName}</span>
           </button>
 
           <div className="studio-nav-items">
@@ -140,6 +177,16 @@ export function App() {
         </div>
 
         <div className="studio-rail__foot">
+          {branding.footerText ? (
+            <p className="studio-rail__footer-text" title={branding.footerText}>
+              {branding.footerText}
+            </p>
+          ) : null}
+          {branding.partnerCode ? (
+            <span className="studio-rail__partner" title="渠道归属">
+              {branding.partnerCode}
+            </span>
+          ) : null}
           <div className="studio-environment" title="本地开发环境">
             <span />
             DEV
@@ -149,12 +196,16 @@ export function App() {
 
       <main className="studio-workspace">
         <div key={workspace} className="studio-workspace__panel">
-          <Suspense fallback={<StudioLoading name={active?.en ?? "Workflow"} />}>
+          <Suspense
+            fallback={<StudioLoading name={active?.en ?? "Workflow"} branding={branding} />}
+          >
             {workspace === "chat" ? <ChatWorkspace /> : null}
             {workspace === "mcp" ? <McpWorkspace /> : null}
             {workspace === "rag" ? <RagWorkspace /> : null}
+            {workspace === "connectors" ? <ConnectorsWorkspace /> : null}
             {workspace === "graph" ? <GraphWorkspace /> : null}
             {workspace === "observatory" ? <ObservatoryWorkspace /> : null}
+            {workspace === "reports" ? <ReportsWorkspace /> : null}
             {workspace === "workflow" ? <WorkflowWorkspace /> : null}
             {workspace === "settings" ? <SettingsWorkspace /> : null}
           </Suspense>

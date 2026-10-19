@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { documentMetadataPatch, queryFeedback } from "./request-validation.js";
+import { accessGroups, documentMetadataPatch, queryFeedback } from "./request-validation.js";
 
 test("documentMetadataPatch 规范化标题和标签", () => {
   assert.deepEqual(
@@ -17,6 +17,16 @@ test("documentMetadataPatch 拒绝空更新和越界字段", () => {
   assert.throws(() => documentMetadataPatch({}), /required/);
   assert.throws(() => documentMetadataPatch({ title: " " }), /1-160/);
   assert.throws(() => documentMetadataPatch({ tags: ["x".repeat(41)] }), /1-40/);
+});
+
+test("documentMetadataPatch 校验文档可见分组", () => {
+  assert.deepEqual(documentMetadataPatch({ allowedGroups: [" hr ", "hr", "finance"] }), {
+    allowedGroups: ["hr", "finance"],
+  });
+  assert.deepEqual(documentMetadataPatch({ allowedGroups: [] }), { allowedGroups: [] });
+  assert.throws(() => accessGroups("hr"), /array/);
+  assert.throws(() => accessGroups(["x".repeat(61)]), /1-60/);
+  assert.throws(() => accessGroups(["*"]), /cannot contain/);
 });
 
 test("queryFeedback 校验评分和可选说明", () => {

@@ -1,3 +1,4 @@
+import { studioFetch } from "../../lib/client.js";
 export interface McpToolResource {
   serviceSlug: string;
   name: string;
@@ -32,7 +33,7 @@ export interface ResourceCatalog {
 }
 
 export async function fetchResourceCatalog(): Promise<ResourceCatalog> {
-  const response = await fetch("/api/resources");
+  const response = await studioFetch("/api/resources");
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `资源目录请求失败（${response.status}）`);

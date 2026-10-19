@@ -8,6 +8,7 @@ import {
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { GatewayAccessError, type GatewayAccessService } from "./access.js";
 import { createManagedMcpServer } from "./managed-server.js";
+import type { GatewayQuotaService } from "./quota.js";
 import type { ToolExecutor } from "./tool-executor.js";
 import type { AuthorizedService } from "./access.js";
 import type { GatewayAuditSink } from "./audit.js";
@@ -16,6 +17,7 @@ export interface GatewayAppOptions {
   access: GatewayAccessService;
   executor?: ToolExecutor;
   audit?: GatewayAuditSink;
+  quota?: GatewayQuotaService;
 }
 
 function bearerToken(request: Request): string | null {
@@ -54,6 +56,7 @@ export function createGatewayApp(options: GatewayAppOptions): Express {
       const services = await options.access.listAuthorizedServices(rawKey);
       response.json({ services });
     } catch (error) {
+      console.error("MCP gateway request failed", error);
       if (error instanceof GatewayAccessError) {
         const status = error.code === "UNAUTHORIZED" ? 401 : 503;
         response.status(status).json({ error: { code: error.code, message: error.message } });
@@ -74,6 +77,7 @@ export function createGatewayApp(options: GatewayAppOptions): Express {
     const requestId = randomUUID();
     const startedAt = Date.now();
     let authorized: AuthorizedService | undefined;
+    let reserved = false;
     response.setHeader("x-request-id", requestId);
     if (options.audit) {
       const output = captureAuditResponse(response);
@@ -124,9 +128,34 @@ export function createGatewayApp(options: GatewayAppOptions): Express {
 
     try {
       authorized = await options.access.authorize(rawKey, request.params.serviceSlug as string);
+      const method = typeof request.body?.method === "string" ? request.body.method : null;
+      if (method === "tools/call" && options.quota) {
+        const toolName =
+          typeof request.body?.params?.name === "string" ? request.body.params.name : "";
+        const reservation = await options.quota.reserve({
+          requestId,
+          clientId: authorized.clientId,
+          serviceId: authorized.snapshot.serviceId,
+          versionId: authorized.snapshot.versionId,
+          toolName,
+        });
+        if (!reservation.reserved) {
+          response.setHeader("retry-after", String(reservation.retryAfterSeconds));
+          response.status(429).json({
+            error: {
+              code: "RATE_LIMITED",
+              message: "MCP client quota exceeded",
+              retryAfterSeconds: reservation.retryAfterSeconds,
+            },
+          });
+          return;
+        }
+        reserved = true;
+      }
       const server = createManagedMcpServer(authorized, {
         executor: options.executor,
         createRequestId: () => requestId,
+        quota: options.quota,
       });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
@@ -139,6 +168,14 @@ export function createGatewayApp(options: GatewayAppOptions): Express {
       await server.connect(transport);
       await transport.handleRequest(request, response, request.body);
     } catch (error) {
+      if (reserved && options.quota) {
+        reserved = false;
+        await options.quota.settle({
+          requestId,
+          status: "FAILED",
+          durationMs: Date.now() - startedAt,
+        });
+      }
       if (error instanceof GatewayAccessError) {
         const status =
           error.code === "UNAUTHORIZED"

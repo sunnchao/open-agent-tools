@@ -9,6 +9,7 @@ import { getDbPath, openDb } from "./db.js";
 import { initializeProviders } from "./providers/store.js";
 import { logTrace } from "./trace.js";
 import { startImIfConfigured } from "./im/index.js";
+import { startReportScheduler } from "./reports/scheduler.js";
 
 loadEnv({ path: resolve(import.meta.dirname, "../.env") });
 loadEnv({ path: resolve(import.meta.dirname, "../.env.local"), override: true });
@@ -30,5 +31,7 @@ if (process.env.NODE_ENV !== "test") {
       env: process.env.NODE_ENV ?? "development",
     });
     void startImIfConfigured();
+    // C6 定时报表:进程内分钟级 tick(REPORT_SCHEDULER=off 可关闭)。
+    startReportScheduler();
   });
 }

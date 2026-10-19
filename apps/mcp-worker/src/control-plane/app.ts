@@ -93,6 +93,35 @@ const AuditQuerySchema = z.object({
   outcome: z.enum(["SUCCEEDED", "FAILED"]).optional(),
   action: z.string().trim().min(1).max(120).optional(),
 });
+const ListMarketplaceSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+});
+const ToolSlaQuerySchema = z.object({
+  window: z.enum(["24h", "7d"]).default("24h"),
+  serviceSlug: z.string().trim().min(1).max(64).optional(),
+});
+const QuotaBodySchema = z
+  .object({
+    serviceId: z.uuid().nullable().optional(),
+    qpsLimit: z.number().int().min(0).max(1_000_000),
+    dailyCallLimit: z.number().int().min(0).max(100_000_000),
+  })
+  .strict();
+const UsageQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(200).default(100),
+    serviceId: z.uuid().optional(),
+    from: z.iso.datetime({ offset: true }).optional(),
+    to: z.iso.datetime({ offset: true }).optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.from === undefined ||
+      value.to === undefined ||
+      Date.parse(value.from) <= Date.parse(value.to),
+    { message: "from must not be after to", path: ["from"] },
+  );
 
 function actorFrom(response: Response): Actor {
   return response.locals.actor as Actor;
@@ -182,6 +211,13 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
     response.json({ builds: await management.listBuildJobs(limit, actorFrom(response)) });
   });
 
+  app.get("/api/admin/mcp/marketplace", async (request, response) => {
+    const { limit } = ListMarketplaceSchema.parse(request.query);
+    response.json({
+      services: await management.listMarketplaceServices(actorFrom(response), limit),
+    });
+  });
+
   if (options.audit) {
     app.get("/api/admin/mcp/audit", async (request, response) => {
       const query = AuditQuerySchema.parse(request.query);
@@ -197,6 +233,10 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
   if (options.observability) {
     app.get("/api/admin/mcp/observability/overview", async (_request, response) => {
       response.json(await options.observability!.overview(actorFrom(response)));
+    });
+    app.get("/api/admin/mcp/observability/tools", async (request, response) => {
+      const query = ToolSlaQuerySchema.parse(request.query);
+      response.json(await options.observability!.toolSla(actorFrom(response), query));
     });
   }
 
@@ -673,6 +713,33 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
         actorFrom(response),
       );
       response.status(204).end();
+    });
+
+    app.get("/api/admin/mcp/clients/:clientId/quotas", async (request, response) => {
+      response.json({
+        quotas: await clientAccess.listClientQuotas(
+          request.params.clientId as string,
+          actorFrom(response),
+        ),
+      });
+    });
+
+    app.put("/api/admin/mcp/clients/:clientId/quotas", async (request, response) => {
+      const body = QuotaBodySchema.parse(request.body);
+      response.json({
+        quota: await clientAccess.upsertClientQuota(
+          request.params.clientId as string,
+          body,
+          actorFrom(response),
+        ),
+      });
+    });
+
+    app.get("/api/admin/mcp/clients/:clientId/usage", async (request, response) => {
+      const query = UsageQuerySchema.parse(request.query);
+      response.json(
+        await clientAccess.listUsage(request.params.clientId as string, query, actorFrom(response)),
+      );
     });
   }
 

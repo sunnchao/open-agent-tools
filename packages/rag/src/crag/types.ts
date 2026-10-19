@@ -15,6 +15,8 @@ export interface EvidenceChunk {
   source: string;
   chunkIndex: number;
   content: string;
+  /** 检索器给出的相似度 / 融合分。缺省表示该域没有可比较的分数。 */
+  score?: number;
 }
 
 /** 检索域产出。 */

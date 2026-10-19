@@ -12,6 +12,7 @@ export type VersionStatus =
   "DRAFT" | "VALIDATING" | "BUILDING" | "READY" | "FAILED" | "PUBLISHED" | "SUPERSEDED";
 export type BuildJobKind = "INSPECT" | "BUILD";
 export type BuildJobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+export type UsageEventStatus = "RESERVED" | "SUCCEEDED" | "FAILED";
 
 export interface Actor {
   id: string;
@@ -94,4 +95,65 @@ export interface BuildJobSummary extends BuildJobRecord {
   serviceId: string;
   serviceName: string;
   versionNumber: number;
+}
+
+export interface ClientQuotaRecord {
+  id: string;
+  clientId: string;
+  serviceId: string | null;
+  qpsLimit: number;
+  dailyCallLimit: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UsageEventRecord {
+  id: string;
+  clientId: string;
+  serviceId: string;
+  versionId: string;
+  toolName: string;
+  requestId: string;
+  status: UsageEventStatus;
+  createdAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+}
+
+export interface UsageSummary {
+  total: number;
+  reserved: number;
+  succeeded: number;
+  failed: number;
+}
+
+export interface UsageEventQuery {
+  limit: number;
+  serviceId?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface MarketplaceTool {
+  name: string;
+  description?: string;
+}
+
+export interface MarketplacePrompt {
+  name: string;
+  title?: string;
+}
+
+export interface MarketplaceService {
+  id: string;
+  name: string;
+  slug: string;
+  type: ServiceType;
+  versionId: string;
+  versionNumber: number;
+  toolCount: number | null;
+  promptCount: number;
+  toolsUnknown: boolean;
+  tools: MarketplaceTool[];
+  prompts: MarketplacePrompt[];
 }

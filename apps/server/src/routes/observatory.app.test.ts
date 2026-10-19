@@ -137,6 +137,17 @@ async function query(body: Record<string, unknown>, streaming = false) {
   });
 }
 
+async function rerun(body: Record<string, unknown>, workspaceHeader?: string) {
+  return fetch(`${origin}/api/observatory/query/rerun`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(workspaceHeader ? { "x-workspace-id": workspaceHeader } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 describe("observatory execution and audit API", () => {
   it("exposes persisted in-flight progress while the model is still generating SQL", async () => {
     let release!: () => void;
@@ -232,9 +243,10 @@ describe("observatory execution and audit API", () => {
     generated = { clarifying: "请补充时间范围" };
     const result = (await (
       await query({
+        question: "查看用户 50 条",
         history: [
           { role: "user", content: "查看用户" },
-          { role: "assistant", content: "哪个时间？" },
+          { role: "assistant", content: "请确认需要查询多少条？" },
         ],
       })
     ).json()) as ObservatoryQueryResult;
@@ -247,6 +259,24 @@ describe("observatory execution and audit API", () => {
     assert.equal(executionCount, 0);
   });
 
+  it("does not ask the same clarification slot twice", async () => {
+    generated = { clarifying: "请补充时间范围" };
+    const result = (await (
+      await query({
+        question: "查看用户 20 条",
+        originalQuestion: "查看用户",
+        history: [
+          { role: "user", content: "查看用户" },
+          { role: "assistant", content: "请补充时间范围" },
+        ],
+      })
+    ).json()) as ObservatoryQueryResult;
+    assert.match(result.error ?? "", /已追问/);
+    assert.equal(result.clarification, undefined);
+    assert.equal(getQueryAudit(result.auditId)?.status, "failed");
+    assert.equal(executionCount, 0);
+  });
+
   it("records model failures with secrets removed and the failing stage", async () => {
     generationError = "provider-secret failed; database-secret failed";
     const result = (await (await query({})).json()) as ObservatoryQueryResult;
@@ -256,6 +286,98 @@ describe("observatory execution and audit API", () => {
     assert.equal(JSON.stringify(record).includes("provider-secret"), false);
     assert.equal(JSON.stringify(record).includes("database-secret"), false);
     assert.equal(executionCount, 0);
+  });
+
+  it("rejects forged rerun context and non-read-only SQL before execution", async () => {
+    const original = (await (await query({})).json()) as ObservatoryQueryResult;
+    for (const forged of [
+      { connectionString: "mysql://attacker/db" },
+      { permissionContext: { orgNos: ["other"] } },
+      { sourceId: "another-source" },
+      { workspace: "another-workspace" },
+    ]) {
+      const response = await rerun({
+        parentAuditId: original.auditId,
+        sql: "SELECT id FROM users",
+        ...forged,
+      });
+      assert.equal(response.status, 400);
+    }
+
+    const before = executionCount;
+    const writeResponse = await rerun({
+      parentAuditId: original.auditId,
+      sql: "DELETE FROM users",
+      sqlSource: "original",
+    });
+    assert.equal(writeResponse.status, 400);
+    const rejected = (await writeResponse.json()) as ObservatoryQueryResult;
+    assert.match(rejected.error ?? "", /禁止/);
+    assert.equal(executionCount, before);
+    assert.equal(getQueryAudit(rejected.auditId)?.status, "failed");
+    assert.equal(getQueryAudit(rejected.auditId)?.parentAuditId, original.auditId);
+  });
+
+  it("creates an immutable child audit and derives original/edited SQL source server-side", async () => {
+    const parent = (await (await query({})).json()) as ObservatoryQueryResult;
+    const parentBefore = getQueryAudit(parent.auditId)!;
+    const original = (await (
+      await rerun({
+        parentAuditId: parent.auditId,
+        sql: "SELECT id FROM users",
+        sqlSource: "edited",
+      })
+    ).json()) as ObservatoryQueryResult;
+    const originalRecord = getQueryAudit(original.auditId)!;
+    assert.notEqual(original.auditId, parent.auditId);
+    assert.equal(originalRecord.parentAuditId, parent.auditId);
+    assert.equal(originalRecord.entrypoint, "rerun");
+    assert.equal(originalRecord.source, "rerun");
+    assert.equal(originalRecord.sqlSource, "original");
+    assert.equal(originalRecord.originalQuestion, parentBefore.originalQuestion);
+    assert.equal(originalRecord.executedSql, "SELECT id FROM users");
+    assert.equal(originalRecord.steps.find((step) => step.id === "generation")?.status, "skipped");
+    assert.equal(originalRecord.question, "查询前 100 条 users");
+    assert.deepEqual(getQueryAudit(parent.auditId), parentBefore);
+
+    const edited = (await (
+      await rerun({
+        parentAuditId: parent.auditId,
+        sql: "SELECT id AS user_id FROM users",
+        sqlSource: "edited",
+      })
+    ).json()) as ObservatoryQueryResult;
+    assert.equal(getQueryAudit(edited.auditId)?.sqlSource, "edited");
+
+    const detail = (await fetch(`${origin}/api/observatory/audits/${parent.auditId}`).then((res) =>
+      res.json(),
+    )) as {
+      record: { id: string };
+      parent: null;
+      children: Array<{ id: string; parentAuditId: string }>;
+    };
+    assert.equal(detail.record.id, parent.auditId);
+    assert.equal(detail.parent, null);
+    assert.deepEqual(
+      new Set(detail.children.map((child) => child.id)),
+      new Set([original.auditId, edited.auditId]),
+    );
+    assert.ok(detail.children.every((child) => child.parentAuditId === parent.auditId));
+
+    const chained = await rerun({
+      parentAuditId: edited.auditId,
+      sql: "SELECT id AS user_id FROM users",
+    });
+    assert.equal(chained.status, 400);
+
+    const filtered = listQueryAudits({
+      parentAuditId: parent.auditId,
+      entrypoint: "rerun",
+      source: "rerun",
+      sqlSource: "edited",
+    });
+    assert.equal(filtered.total, 1);
+    assert.equal(filtered.records[0]?.id, edited.auditId);
   });
 
   it("marks database errors at execution and skips output", async () => {
@@ -294,7 +416,7 @@ describe("observatory execution and audit API", () => {
       records: { id: string; status: string }[];
       total: number;
     };
-    assert.equal(page.total, 3);
+    assert.ok(page.total >= 3);
     assert.equal(page.records.length, 1);
     assert.equal(page.records[0]?.status, "failed");
     assert.equal("steps" in page.records[0]!, false);

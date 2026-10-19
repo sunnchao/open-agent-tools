@@ -1,6 +1,7 @@
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { webOrigin } from "./config.js";
+import { resolveStudioAuth, type StudioAuthOptions } from "./studioAuth.js";
 import { logTrace } from "./trace.js";
 import { healthRouter } from "./routes/health.js";
 import { resourcesRouter } from "./routes/resources.js";
@@ -18,13 +19,34 @@ import { mcpGatewayRouter } from "./routes/mcpGateway.js";
 import { workflowsRouter } from "./routes/workflows.js";
 import { metricsRouter } from "./routes/metrics.js";
 import { caliberRouter } from "./routes/caliber.js";
+import { usageRouter } from "./routes/usage.js";
+import { workspacesRouter } from "./routes/workspaces.js";
+import { publishedAppsRouter } from "./routes/publishedApps.js";
+import { appChatRouter } from "./routes/appChat.js";
+import { ragAdminRouter } from "./routes/ragAdmin.js";
+import { connectorsRouter } from "./routes/connectors.js";
+import { reportsRouter } from "./routes/reports.js";
+import { brandingRouter } from "./routes/branding.js";
+import { identityRouter } from "./routes/identity.js";
 
-export function createApp(): express.Express {
+export interface CreateAppOptions {
+  studioAuth?: StudioAuthOptions;
+}
+
+export function createApp(options: CreateAppOptions = {}): express.Express {
   const app: express.Express = express();
 
   app.use(cors({ origin: webOrigin }));
   app.use("/v1", express.json({ limit: "2mb" }));
-  app.use(express.json({ limit: "100mb" }));
+  // 身份断言绑定原始 body 字节；绝不能从解析后的 JSON 重新序列化计算摘要。
+  app.use(
+    express.json({
+      limit: "100mb",
+      verify: (req, _res, buffer) => {
+        (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+      },
+    }),
+  );
 
   // 请求级 trace：所有端点进出、状态码与耗时（health 探活静默，避免刷屏）。
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -47,6 +69,8 @@ export function createApp(): express.Express {
   });
 
   app.use(healthRouter);
+  // OIDC 优先验证；未配置或验签失败时，显式回退到部署 token（若配置）。
+  app.use(resolveStudioAuth(options.studioAuth).middleware);
   app.use(resourcesRouter);
   app.use(sessionsRouter);
   app.use(providersRouter);
@@ -62,6 +86,15 @@ export function createApp(): express.Express {
   app.use(oneapiDemoRouter);
   app.use(metricsRouter);
   app.use(caliberRouter);
+  app.use(usageRouter);
+  app.use(workspacesRouter);
+  app.use(publishedAppsRouter);
+  app.use(appChatRouter);
+  app.use(ragAdminRouter);
+  app.use(connectorsRouter);
+  app.use(reportsRouter);
+  app.use(brandingRouter);
+  app.use(identityRouter);
 
   return app;
 }

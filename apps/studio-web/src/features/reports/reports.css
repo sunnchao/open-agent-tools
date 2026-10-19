@@ -1,0 +1,230 @@
+/* C6 定时报表:问数工作区的报表清单、周期表单与运行历史。 */
+
+.reports-grid {
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+}
+
+.reports-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.reports-item {
+  align-items: center;
+}
+
+.reports-dot {
+  flex: 0 0 8px;
+  height: 8px;
+  margin-right: 10px;
+  border-radius: 50%;
+  background: var(--studio-line-strong);
+}
+
+.reports-dot.is-enabled {
+  background: var(--studio-success);
+  box-shadow: 0 0 0 3px var(--studio-success-soft);
+}
+
+.reports-dot.is-paused {
+  background: var(--studio-faint);
+}
+
+.reports-form-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reports-form-heading h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.reports-form-heading p {
+  margin: 0;
+  color: var(--studio-muted);
+  font-family: var(--studio-mono);
+  font-size: 10px;
+}
+
+.reports-schedule {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  align-items: end;
+  gap: 12px;
+}
+
+.reports-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+  color: var(--studio-text);
+  font-size: 12px;
+}
+
+.reports-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--studio-rag);
+}
+
+.reports-hint {
+  margin: 0;
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
+.reports-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--studio-line);
+}
+
+.reports-delete {
+  margin-left: auto;
+  color: var(--studio-danger);
+}
+
+.reports-empty {
+  text-align: center;
+}
+
+.reports-empty h2 {
+  font-size: 14px;
+}
+
+.reports-empty p {
+  margin: 6px 0 0;
+  color: var(--studio-muted);
+  font-size: 12px;
+}
+
+.reports-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--studio-mono);
+  font-size: 10px;
+}
+
+.reports-status.is-succeeded {
+  background: var(--studio-success-soft);
+  color: var(--studio-success);
+}
+
+.reports-status.is-failed {
+  background: var(--studio-danger-soft);
+  color: var(--studio-danger);
+}
+
+.reports-status.is-running {
+  background: var(--studio-blue-soft);
+  color: var(--studio-blue);
+}
+
+.reports-status.is-clarifying {
+  background: var(--studio-rag-soft);
+  color: #854f0b;
+}
+
+.reports-runs-head,
+.reports-runs-row {
+  grid-template-columns: minmax(120px, 1.2fr) 70px 90px 80px 70px 76px;
+  align-items: center;
+}
+
+.reports-runs-row time {
+  color: var(--studio-muted);
+  font-family: var(--studio-mono);
+  font-size: 10px;
+}
+
+.reports-run-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--studio-line);
+  border-radius: var(--studio-radius);
+  background: var(--studio-surface-subtle);
+}
+
+.reports-run-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--studio-danger-soft);
+  color: var(--studio-danger);
+  font-size: 11px;
+}
+
+.reports-run-sql {
+  margin: 0;
+  padding: 10px;
+  overflow-x: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.reports-checks {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+
+.reports-checks li.is-warning {
+  color: #854f0b;
+}
+
+.reports-preview {
+  overflow-x: auto;
+}
+
+.reports-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.reports-preview th,
+.reports-preview td {
+  max-width: 220px;
+  padding: 6px 8px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--studio-line);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reports-preview th {
+  color: var(--studio-muted);
+  font-weight: 600;
+}
+
+@media (max-width: 920px) {
+  .reports-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .reports-runs-head,
+  .reports-runs-row {
+    grid-template-columns: minmax(110px, 1fr) 60px 84px 70px;
+  }
+
+  .reports-runs-head span:nth-child(5),
+  .reports-runs-row span:nth-child(5) {
+    display: none;
+  }
+}

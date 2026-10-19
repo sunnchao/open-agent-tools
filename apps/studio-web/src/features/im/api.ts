@@ -1,3 +1,4 @@
+import { studioFetch } from "../../lib/client.js";
 export type ImPlatform = "feishu" | "dingtalk";
 
 export const IM_PLATFORMS: ImPlatform[] = ["feishu", "dingtalk"];
@@ -36,7 +37,7 @@ async function parseError(response: Response): Promise<string> {
 }
 
 export async function fetchImChannels(): Promise<ImChannelMetadata[]> {
-  const response = await fetch("/api/admin/im/channels");
+  const response = await studioFetch("/api/admin/im/channels");
   if (!response.ok) throw new Error(await parseError(response));
   const body = (await response.json()) as { channels: ImChannelMetadata[] };
   return body.channels;
@@ -54,7 +55,7 @@ export async function saveImChannel(input: {
   requireMention: boolean;
   enabled: boolean;
 }): Promise<ImChannelMetadata> {
-  const response = await fetch(
+  const response = await studioFetch(
     input.id ? `/api/admin/im/channels/${encodeURIComponent(input.id)}` : "/api/admin/im/channels",
     {
       method: input.id ? "PUT" : "POST",
@@ -68,14 +69,14 @@ export async function saveImChannel(input: {
 }
 
 export async function removeImChannel(id: string): Promise<void> {
-  const response = await fetch(`/api/admin/im/channels/${encodeURIComponent(id)}`, {
+  const response = await studioFetch(`/api/admin/im/channels/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!response.ok) throw new Error(await parseError(response));
 }
 
 export async function restartImChannel(id: string): Promise<ImStatus> {
-  const response = await fetch(`/api/admin/im/channels/${encodeURIComponent(id)}/restart`, {
+  const response = await studioFetch(`/api/admin/im/channels/${encodeURIComponent(id)}/restart`, {
     method: "POST",
   });
   if (!response.ok) throw new Error(await parseError(response));
@@ -84,7 +85,7 @@ export async function restartImChannel(id: string): Promise<ImStatus> {
 }
 
 export async function fetchImStatus(): Promise<ImStatus> {
-  const response = await fetch("/api/im/status");
+  const response = await studioFetch("/api/im/status");
   if (!response.ok) throw new Error(await parseError(response));
   return (await response.json()) as ImStatus;
 }

@@ -511,3 +511,13 @@ Docker E2E 还需要本机 Docker daemon 和已构建的测试 Runner 镜像。
 
 - [MCP 管理平台 Node.js 设计方案](./docs/superpowers/specs/2026-07-31-mcp-management-platform-nodejs-design.md)
 - [MCP 管理平台测试方案](./docs/superpowers/plans/2026-07-31-mcp-management-platform-nodejs-test-plan.md)
+
+## 部署与演示
+
+- [私有化部署总览(30 分钟安装路径)](./docs/deploy/README.md)
+- [私有化部署手册(前置条件 / 端口与环境变量矩阵 / 备份 / 排障 / 安全基线)](./docs/deploy/private-deployment.md)
+- [内网 / 离线安装](./docs/deploy/offline-install.md)
+- [三个 SKU 的 10 分钟演示脚本](./docs/demo/README.md)
+- 脚本入口:`scripts/deploy/bootstrap.sh`(一键引导)、`scripts/deploy/verify.sh`(只读健康检查)、
+  `scripts/demo/seed.sh`(演示数据准备)、`scripts/deploy/docker-compose.prod.yml`(基础设施编排)、
+  `scripts/deploy/systemd/`(常驻服务 unit 模板)。

@@ -26,7 +26,17 @@ describe("PostgreSQL client access repository", { skip: !databaseUrl }, () => {
   before(async () => {
     pool = new Pool({ connectionString: databaseUrl });
     await pool.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
-    for (const migrationName of ["0000_mcp_management.sql", "0001_mcp_client_access.sql"]) {
+    for (const migrationName of [
+      "0000_mcp_management.sql",
+      "0001_mcp_client_access.sql",
+      "0002_mcp_build_jobs.sql",
+      "0003_mcp_audit_events.sql",
+      "0004_mcp_service_environment.sql",
+      "0005_mcp_service_slug_reuse.sql",
+      "0006_mcp_audit_payloads.sql",
+      "0007_mcp_remote_service.sql",
+      "0008_mcp_usage_quotas.sql",
+    ]) {
       const migration = await readFile(
         resolve(import.meta.dirname, `../../../drizzle/${migrationName}`),
         "utf8",

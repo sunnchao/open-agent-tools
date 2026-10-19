@@ -1,0 +1,40 @@
+# RAG 服务 (apps/rag-server) —— 默认端口 4001
+#
+# 用法同 open-agent-server.service:替换 __REPO_ROOT__ / __USER__ 后安装。
+# 注意:apps/rag-server 的 start 用 tsx 直接跑 TypeScript(src 无需 dist 产物),
+#       生产若要求纯 JS 运行,请自行评估迁移(本仓库当前不提供预编译产物)。
+[Unit]
+Description=Open Agent Tools - RAG Server
+Documentation=file://__REPO_ROOT__/docs/deploy/private-deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__REPO_ROOT__/apps/rag-server
+EnvironmentFile=__REPO_ROOT__/apps/rag-server/.env
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/usr/bin/env pnpm --filter @open-agent-tools/rag-server start
+
+Restart=on-failure
+RestartSec=3
+
+# ---- 最小加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# 知识库与图谱 SQLite 默认落在 apps/rag-server(../rag.db / ../rag-graph.db)
+ReadWritePaths=__REPO_ROOT__/apps/rag-server
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

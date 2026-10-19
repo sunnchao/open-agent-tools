@@ -134,6 +134,112 @@ export interface AuditEventRecord extends AuditEventSummary {
   context: unknown;
 }
 
+export type SlaWindow = "24h" | "7d";
+
+export interface SlaErrorBucket {
+  code: string;
+  message: string;
+  count: number;
+}
+
+export interface ToolSlaStat {
+  toolName: string;
+  calls: number;
+  succeeded: number;
+  failed: number;
+  successRate: number;
+  p50DurationMs: number;
+  p95DurationMs: number;
+  maxDurationMs: number;
+  errors: SlaErrorBucket[];
+  lastFailure: {
+    code: string;
+    message: string;
+    statusCode: number;
+    createdAt: string;
+  } | null;
+}
+
+export interface ServiceSlaStat {
+  serviceSlug: string;
+  calls: number;
+  succeeded: number;
+  failed: number;
+  successRate: number;
+  p95DurationMs: number;
+  tools: ToolSlaStat[];
+}
+
+export interface ToolSlaReport {
+  window: SlaWindow;
+  windowMinutes: number;
+  generatedAt: string;
+  serviceSlug: string | null;
+  scan: { events: number; limit: number; truncated: boolean };
+  totals: {
+    calls: number;
+    succeeded: number;
+    failed: number;
+    successRate: number;
+    p95DurationMs: number;
+  };
+  services: ServiceSlaStat[];
+}
+
+export interface MarketplaceTool {
+  name: string;
+  description?: string;
+}
+
+export interface MarketplacePrompt {
+  name: string;
+  title?: string;
+}
+
+export interface MarketplaceService {
+  id: string;
+  name: string;
+  slug: string;
+  type: "MANAGED_MCP" | "REMOTE_MCP";
+  versionId: string;
+  versionNumber: number;
+  toolCount: number | null;
+  promptCount: number;
+  toolsUnknown: boolean;
+  tools: MarketplaceTool[];
+  prompts: MarketplacePrompt[];
+}
+
+export interface ClientQuotaRecord {
+  id: string;
+  clientId: string;
+  serviceId: string | null;
+  qpsLimit: number;
+  dailyCallLimit: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UsageEventRecord {
+  id: string;
+  clientId: string;
+  serviceId: string;
+  versionId: string;
+  toolName: string;
+  requestId: string;
+  status: "RESERVED" | "SUCCEEDED" | "FAILED";
+  createdAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+}
+
+export interface UsageSummary {
+  total: number;
+  reserved: number;
+  succeeded: number;
+  failed: number;
+}
+
 interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }
@@ -182,6 +288,10 @@ async function sha256(file: File): Promise<string> {
 
 export async function listServices(): Promise<McpService[]> {
   return (await request<{ services: McpService[] }>("/services")).services;
+}
+
+export async function listMarketplaceServices(): Promise<MarketplaceService[]> {
+  return (await request<{ services: MarketplaceService[] }>("/marketplace?limit=100")).services;
 }
 
 export async function getService(serviceId: string): Promise<McpService> {
@@ -532,6 +642,33 @@ export async function deleteGrant(clientId: string, serviceId: string): Promise<
   await request(`/clients/${clientId}/grants/${serviceId}`, { method: "DELETE" });
 }
 
+export async function listClientQuotas(clientId: string): Promise<ClientQuotaRecord[]> {
+  return (await request<{ quotas: ClientQuotaRecord[] }>(`/clients/${clientId}/quotas`)).quotas;
+}
+
+export async function upsertClientQuota(
+  clientId: string,
+  input: { serviceId: string | null; qpsLimit: number; dailyCallLimit: number },
+): Promise<ClientQuotaRecord> {
+  return (
+    await request<{ quota: ClientQuotaRecord }>(`/clients/${clientId}/quotas`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    })
+  ).quota;
+}
+
+export async function listClientUsage(
+  clientId: string,
+  filters: { serviceId?: string; from?: string; to?: string; limit?: number } = {},
+): Promise<{ events: UsageEventRecord[]; summary: UsageSummary }> {
+  const query = new URLSearchParams({ limit: String(filters.limit ?? 100) });
+  if (filters.serviceId) query.set("serviceId", filters.serviceId);
+  if (filters.from) query.set("from", filters.from);
+  if (filters.to) query.set("to", filters.to);
+  return request(`/clients/${clientId}/usage?${query}`);
+}
+
 export async function listAuditEvents(
   filters: { outcome?: AuditEventSummary["outcome"]; action?: string } = {},
 ): Promise<AuditEventSummary[]> {
@@ -544,4 +681,19 @@ export async function listAuditEvents(
 export async function getAuditEvent(eventId: string): Promise<AuditEventRecord> {
   return (await request<{ event: AuditEventRecord }>(`/audit/${encodeURIComponent(eventId)}`))
     .event;
+}
+
+/** 构造工具 SLA 查询串:窗口缺省 24h,serviceSlug 仅在提供时拼入。 */
+export function buildToolSlaQuery(
+  options: { window?: SlaWindow; serviceSlug?: string } = {},
+): string {
+  const query = new URLSearchParams({ window: options.window ?? "24h" });
+  if (options.serviceSlug) query.set("serviceSlug", options.serviceSlug);
+  return query.toString();
+}
+
+export async function getToolSla(
+  options: { window?: SlaWindow; serviceSlug?: string } = {},
+): Promise<ToolSlaReport> {
+  return request<ToolSlaReport>(`/observability/tools?${buildToolSlaQuery(options)}`);
 }

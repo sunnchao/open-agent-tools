@@ -209,6 +209,41 @@ test("replaceSource 原子更新文档目录并递增版本", () => {
   cleanup();
 });
 
+test("文档 ACL：更新 allowedGroups 后重传不覆盖人工策略", () => {
+  const { dbPath, cleanup } = tmpDb();
+  const s = new SqliteVectorStore({ dbPath });
+  s.replaceSource(
+    "hr.md",
+    [
+      {
+        chunk: { id: "hr:0", source: "hr.md", chunkIndex: 0, content: "年假" },
+        embedding: fakeEmbedding(1),
+      },
+    ],
+    metadata,
+  );
+  assert.deepEqual(s.listDocuments()[0]?.allowedGroups, [], "存量文档默认公开");
+  s.updateDocument("hr.md", { allowedGroups: ["hr", "leadership"] });
+  assert.deepEqual(s.listDocuments()[0]?.allowedGroups, ["hr", "leadership"]);
+  s.replaceSource(
+    "hr.md",
+    [
+      {
+        chunk: { id: "hr:0", source: "hr.md", chunkIndex: 0, content: "新年假" },
+        embedding: fakeEmbedding(2),
+      },
+    ],
+    metadata,
+  );
+  assert.deepEqual(
+    s.listDocuments()[0]?.allowedGroups,
+    ["hr", "leadership"],
+    "重传文档不能把 ACL 重置为公开",
+  );
+  s.close();
+  cleanup();
+});
+
 test("旧 documents 表自动补齐切分策略字段", () => {
   const { dbPath, cleanup } = tmpDb();
   const legacy = new DatabaseSync(dbPath);
@@ -248,6 +283,7 @@ test("旧 documents 表自动补齐切分策略字段", () => {
   const upgraded = new SqliteVectorStore({ dbPath });
   assert.equal(upgraded.listDocuments()[0]?.chunkStrategy, "fixed");
   assert.equal(upgraded.listDocuments()[0]?.semanticThreshold, null);
+  assert.deepEqual(upgraded.listDocuments()[0]?.allowedGroups, []);
   upgraded.close();
   cleanup();
 });

@@ -30,15 +30,16 @@
     "@open-agent-tools/query-resolver": "workspace:*",
     "@open-agent-tools/rag": "workspace:*",
     "@open-agent-tools/schema-catalog": "workspace:*",
+    "@open-agent-tools/workflow-contracts": "workspace:*",
     "chalk": "catalog:",
     "cors": "catalog:",
     "dotenv": "catalog:",
     "express": "catalog:",
+    "jose": "^6.1.0",
     "langchain": "^1.5.4",
     "openai": "^6.48.0",
     "pdf-parse": "^1.1.4",
-    "zod": "catalog:",
-    "@open-agent-tools/workflow-contracts": "workspace:*"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/cors": "catalog:",

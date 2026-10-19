@@ -19,18 +19,24 @@ import {
   listApiKeys,
   listAuditEvents,
   listBuilds,
+  listClientQuotas,
+  listClientUsage,
   listClients,
   listGrants,
   listVersions,
   revokeApiKey,
+  upsertClientQuota,
   upsertGrant,
   type ApiClientRecord,
   type ApiKeyRecord,
   type AuditEventSummary,
   type BuildJobSummary,
   type ClientGrantRecord,
+  type ClientQuotaRecord,
   type McpScope,
   type McpService,
+  type UsageEventRecord,
+  type UsageSummary,
 } from "./api.js";
 import {
   constrainGrantScopes,
@@ -40,7 +46,8 @@ import {
 } from "./grantCapabilities.js";
 import { AuditEventDetails } from "./AuditEventDetails.js";
 
-export type McpManagementView = "services" | "builds" | "clients" | "audit";
+export type McpManagementView =
+  "services" | "marketplace" | "builds" | "clients" | "audit" | "sla" | "sandbox";
 
 function messageFrom(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
@@ -433,6 +440,14 @@ export function ClientsView({ services }: { services: McpService[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
   const [grants, setGrants] = useState<ClientGrantRecord[]>([]);
+  const [quotas, setQuotas] = useState<ClientQuotaRecord[]>([]);
+  const [usage, setUsage] = useState<{ events: UsageEventRecord[]; summary: UsageSummary }>({
+    events: [],
+    summary: { total: 0, reserved: 0, succeeded: 0, failed: 0 },
+  });
+  const [quotaServiceId, setQuotaServiceId] = useState<string>("");
+  const [quotaQps, setQuotaQps] = useState("0");
+  const [quotaDaily, setQuotaDaily] = useState("0");
   const [dialog, setDialog] = useState<"client" | "key" | "grant" | null>(null);
   const [editingGrant, setEditingGrant] = useState<ClientGrantRecord | undefined>();
   const [rawKey, setRawKey] = useState<string | null>(null);
@@ -457,12 +472,19 @@ export function ClientsView({ services }: { services: McpService[] }) {
 
   const loadAccess = useCallback(async (clientId: string) => {
     try {
-      const [nextKeys, nextGrants] = await Promise.all([
+      const [nextKeys, nextGrants, nextQuotas, nextUsage] = await Promise.all([
         listApiKeys(clientId),
         listGrants(clientId),
+        listClientQuotas(clientId),
+        listClientUsage(clientId),
       ]);
       setKeys(nextKeys);
       setGrants(nextGrants);
+      setQuotas(nextQuotas);
+      setUsage(nextUsage);
+      const global = nextQuotas.find((quota) => quota.serviceId === null);
+      setQuotaQps(String(global?.qpsLimit ?? 0));
+      setQuotaDaily(String(global?.dailyCallLimit ?? 0));
       setError("");
     } catch (reason) {
       setError(messageFrom(reason));
@@ -475,8 +497,19 @@ export function ClientsView({ services }: { services: McpService[] }) {
     else {
       setKeys([]);
       setGrants([]);
+      setQuotas([]);
+      setUsage({ events: [], summary: { total: 0, reserved: 0, succeeded: 0, failed: 0 } });
+      setQuotaServiceId("");
+      setQuotaQps("0");
+      setQuotaDaily("0");
     }
   }, [loadAccess, selectedId]);
+
+  useEffect(() => {
+    setQuotaServiceId("");
+    setQuotaQps("0");
+    setQuotaDaily("0");
+  }, [selectedId]);
 
   const perform = async (success: string, action: () => Promise<void>) => {
     setBusy(true);
@@ -595,6 +628,114 @@ export function ClientsView({ services }: { services: McpService[] }) {
                     </div>
                   ))}
                   {keys.length === 0 ? <div className="inline-empty">暂无 API Key</div> : null}
+                </div>
+              </section>
+              <section className="access-section quota-section">
+                <header>
+                  <div>
+                    <h2>配额与用量</h2>
+                    <p>
+                      今日 {usage.summary.total} 次 · 成功 {usage.summary.succeeded} · 失败{" "}
+                      {usage.summary.failed}
+                    </p>
+                  </div>
+                  <button
+                    className="studio-button secondary compact"
+                    type="button"
+                    onClick={() => {
+                      const selected = quotas.find((quota) => quota.serviceId === quotaServiceId);
+                      setQuotaQps(String(selected?.qpsLimit ?? 0));
+                      setQuotaDaily(String(selected?.dailyCallLimit ?? 0));
+                    }}
+                  >
+                    读取当前值
+                  </button>
+                </header>
+                <div className="quota-grid">
+                  <label className="studio-field">
+                    <span>作用范围</span>
+                    <select
+                      value={quotaServiceId}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        setQuotaServiceId(next);
+                        const selected = quotas.find((quota) => quota.serviceId === (next || null));
+                        setQuotaQps(String(selected?.qpsLimit ?? 0));
+                        setQuotaDaily(String(selected?.dailyCallLimit ?? 0));
+                      }}
+                    >
+                      <option value="">客户端全局 QPS</option>
+                      {services.map((service) => (
+                        <option key={service.id} value={service.id}>
+                          {service.name} · 日调用
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="studio-field">
+                    <span>QPS 上限</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={quotaQps}
+                      onChange={(event) => setQuotaQps(event.target.value)}
+                    />
+                  </label>
+                  <label className="studio-field">
+                    <span>日调用上限</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={quotaDaily}
+                      onChange={(event) => setQuotaDaily(event.target.value)}
+                    />
+                  </label>
+                  <button
+                    className="studio-button primary compact"
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void perform("配额已保存", async () => {
+                        await upsertClientQuota(client.id, {
+                          serviceId: quotaServiceId || null,
+                          qpsLimit: Number(quotaQps) || 0,
+                          dailyCallLimit: Number(quotaDaily) || 0,
+                        });
+                        await loadAccess(client.id);
+                      })
+                    }
+                  >
+                    保存配额
+                  </button>
+                </div>
+                <p className="muted-copy">
+                  0 表示不限；QPS 为客户端全局，日调用上限按 client + service 生效。
+                </p>
+                <div className="operations-table usage-table" role="table" aria-label="最近用量">
+                  <div className="operations-table-head">
+                    <span>时间</span>
+                    <span>服务</span>
+                    <span>Tool</span>
+                    <span>状态</span>
+                    <span>耗时</span>
+                  </div>
+                  {usage.events.slice(0, 20).map((event) => (
+                    <div className="operations-table-row" key={event.id}>
+                      <time>{formatDate(event.createdAt)}</time>
+                      <code>
+                        {services.find((service) => service.id === event.serviceId)?.name ??
+                          event.serviceId.slice(0, 8)}
+                      </code>
+                      <code>{event.toolName}</code>
+                      <span className={`operation-status status-${event.status.toLowerCase()}`}>
+                        {event.status}
+                      </span>
+                      <span>{event.durationMs === null ? "—" : `${event.durationMs} ms`}</span>
+                    </div>
+                  ))}
+                  {usage.events.length === 0 ? (
+                    <div className="inline-empty">暂无用量记录</div>
+                  ) : null}
                 </div>
               </section>
               <section className="access-section">

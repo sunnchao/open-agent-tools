@@ -1,7 +1,11 @@
+import { studioFetch } from "../../lib/client.js";
+
 export interface DocumentSource {
   source: string;
   title: string;
   tags: string[];
+  /** 可查看该文档的分组；空数组表示公开。 */
+  allowedGroups: string[];
   mimeType: string;
   byteSize: number;
   contentHash: string;
@@ -55,6 +59,41 @@ export interface QueryResult {
 }
 
 export type QueryFeedbackRating = "positive" | "negative";
+export type QueryAttribution =
+  | "no_documents"
+  | "retrieval_miss"
+  | "low_relevance"
+  | "model_refusal"
+  | "error"
+  | "answered"
+  | "unknown";
+
+export interface QualityReport {
+  periodDays: 7 | 30;
+  generatedAt: string;
+  totals: {
+    queries: number;
+    answered: number;
+    hits: number;
+    noAnswer: number;
+    hitRate: number;
+    noAnswerRate: number;
+  };
+  attribution: Record<QueryAttribution, number>;
+  topUnanswered: Array<{
+    query: string;
+    count: number;
+    attribution: Exclude<QueryAttribution, "answered" | "unknown">;
+  }>;
+  trend: Array<{
+    date: string;
+    queries: number;
+    answered: number;
+    noAnswer: number;
+    hitRate: number;
+    noAnswerRate: number;
+  }>;
+}
 
 export interface AnalyticsOverview {
   periodDays: number;
@@ -77,12 +116,14 @@ export interface AnalyticsOverview {
     latencyMs: number;
     error: string | null;
     feedback: QueryFeedbackRating | null;
+    attribution: QueryAttribution;
     createdAt: string;
   }>;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/rag-api${path}`, init);
+  // 经 Agent Server 管理 BFF 转发；浏览器永远不持有 RAG_ADMIN_TOKEN。
+  const response = await studioFetch(`/api/admin/rag${path}`, init);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `RAG request failed (${response.status})`);
@@ -107,7 +148,7 @@ export function deleteDocument(
 
 export function updateDocument(
   source: string,
-  patch: { title?: string; tags?: string[] },
+  patch: { title?: string; tags?: string[]; allowedGroups?: string[] },
 ): Promise<{ document: DocumentSource }> {
   return request(`/documents/${encodeURIComponent(source)}`, {
     method: "PATCH",
@@ -151,6 +192,10 @@ export function queryKnowledge(input: {
 
 export function getAnalyticsOverview(days = 14): Promise<AnalyticsOverview> {
   return request(`/analytics/overview?days=${days}`);
+}
+
+export function getQualityReport(days: 7 | 30): Promise<QualityReport> {
+  return request(`/analytics/quality-report?days=${days}`);
 }
 
 export function submitQueryFeedback(

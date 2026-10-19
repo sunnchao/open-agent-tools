@@ -1,3 +1,4 @@
+import { studioFetch } from "../../lib/client.js";
 export interface GraphNode {
   id: string;
   name: string;
@@ -58,6 +59,11 @@ export interface ObservatoryQueryResult {
   seeds: string[];
   formattedGraph: string;
   sql?: string;
+  originalQuestion?: string;
+  generatedSql?: string;
+  turnQuestion?: string;
+  executedSql?: string;
+  clarification?: Clarification;
   clarifying?: string;
   rows?: Record<string, unknown>[];
   truncated?: boolean;
@@ -65,7 +71,34 @@ export interface ObservatoryQueryResult {
   durationMs: number;
 }
 
+export interface ClarificationCandidate {
+  label: string;
+  value: string;
+  description?: string;
+}
+
+export interface ClarificationSlot {
+  key: string;
+  label: string;
+  raw?: string;
+  value?: string;
+  candidates: ClarificationCandidate[];
+}
+
+export interface Clarification {
+  slots: ClarificationSlot[];
+  candidates: ClarificationCandidate[];
+  originalQuestion: string;
+  round: number;
+  missingSlots: string[];
+  canProceed: boolean;
+  clarifying: string;
+}
+
 export type QueryAuditStatus = "running" | "succeeded" | "failed" | "clarifying";
+export type QueryEntrypoint = "observatory" | "chat" | "workflow" | "rerun" | "unknown";
+export type QueryAuditSource = "generated" | "rerun" | "workflow" | "chat" | "clarification";
+export type QuerySqlSource = "generated" | "edited" | "original";
 export interface QueryStep {
   id: string;
   label: string;
@@ -103,6 +136,16 @@ export interface QueryAuditSummary {
   durationMs: number;
   rowCount: number | null;
   error: string | null;
+  actor: string;
+  actorType?: "operator" | "legacy";
+  entrypoint: QueryEntrypoint;
+  source: QueryAuditSource;
+  sqlSource: QuerySqlSource;
+  parentAuditId: string | null;
+  /** 重跑子审计会带出 SQL；普通摘要为保持体积可省略。 */
+  executedSql?: string | null;
+  generatedSql?: string | null;
+  workspace: string;
 }
 
 export interface QueryAuditRecord extends QueryAuditSummary {
@@ -110,24 +153,44 @@ export interface QueryAuditRecord extends QueryAuditSummary {
   steps: QueryStep[];
   selectedTables: string[];
   sql: string | null;
+  originalQuestion: string;
+  generatedSql: string | null;
+  executedSql: string | null;
+  clarification: Clarification | null;
   clarifying: string | null;
   providerId: string | null;
   model: string | null;
   resultPreview: Record<string, unknown>[];
 }
 
+export interface QueryAuditDetail {
+  record: QueryAuditRecord;
+  parent: QueryAuditSummary | null;
+  children: QueryAuditSummary[];
+}
+
 export type QueryProgressEvent =
   | { type: "start"; auditId: string; steps: QueryStep[] }
-  | { type: "step"; auditId: string; step: QueryStep };
+  | { type: "step"; auditId: string; step: QueryStep }
+  | { type: "clarification"; auditId: string; clarification: Clarification };
+
+export interface QueryAuditFilters {
+  sourceId?: string;
+  actor?: string;
+  entrypoint?: QueryEntrypoint;
+  source?: QueryAuditSource;
+  sqlSource?: QuerySqlSource;
+  status?: QueryAuditStatus;
+  parentAuditId?: string;
+  from?: string;
+  to?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
 
 export function fetchQueryAudits(
-  filters: {
-    sourceId?: string;
-    status?: QueryAuditStatus;
-    search?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
+  filters: QueryAuditFilters = {},
 ): Promise<{ records: QueryAuditSummary[]; total: number }> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
@@ -136,10 +199,12 @@ export function fetchQueryAudits(
   return request(`/api/observatory/audits?${params}`);
 }
 
-export function fetchQueryAudit(id: string): Promise<QueryAuditRecord> {
-  return request<{ record: QueryAuditRecord }>(
-    `/api/observatory/audits/${encodeURIComponent(id)}`,
-  ).then((body) => body.record);
+export function fetchQueryAuditDetail(id: string): Promise<QueryAuditDetail> {
+  return request<QueryAuditDetail>(`/api/observatory/audits/${encodeURIComponent(id)}`);
+}
+
+export async function fetchQueryAudit(id: string): Promise<QueryAuditRecord> {
+  return (await fetchQueryAuditDetail(id)).record;
 }
 
 export type SchemaSemanticProfile = "generic" | "oneapi";
@@ -204,7 +269,7 @@ export interface SchemaSourceDraft {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const response = await studioFetch(path, init);
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `HTTP ${response.status}`);
@@ -315,6 +380,7 @@ export async function runObservatoryQuery(
   history: HistoryTurn[] = [],
   onProgress?: (event: QueryProgressEvent) => void,
   signal?: AbortSignal,
+  originalQuestion?: string,
 ): Promise<ObservatoryQueryResult> {
   const init: RequestInit = {
     method: "POST",
@@ -322,14 +388,54 @@ export async function runObservatoryQuery(
       "content-type": "application/json",
       ...(onProgress ? { accept: "text/event-stream" } : {}),
     },
-    body: JSON.stringify({ sourceId, question, history }),
+    body: JSON.stringify({
+      sourceId,
+      question,
+      history,
+      ...(originalQuestion ? { originalQuestion } : {}),
+    }),
     ...(signal ? { signal } : {}),
   };
   if (!onProgress) return request("/api/observatory/query", init);
-  const response = await fetch("/api/observatory/query", init);
+  return streamQuery(
+    "/api/observatory/query",
+    { sourceId, question, history, ...(originalQuestion ? { originalQuestion } : {}) },
+    onProgress,
+    signal,
+  );
+}
+
+export async function rerunObservatoryQuery(
+  parentAuditId: string,
+  sql: string,
+  onProgress?: (event: QueryProgressEvent) => void,
+  signal?: AbortSignal,
+): Promise<ObservatoryQueryResult> {
+  if (!onProgress) {
+    return request("/api/observatory/query/rerun", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ parentAuditId, sql }),
+    });
+  }
+  return streamQuery("/api/observatory/query/rerun", { parentAuditId, sql }, onProgress, signal);
+}
+
+async function streamQuery(
+  path: string,
+  body: Record<string, unknown>,
+  onProgress: (event: QueryProgressEvent) => void,
+  signal?: AbortSignal,
+): Promise<ObservatoryQueryResult> {
+  const response = await studioFetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "text/event-stream" },
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
+  });
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `HTTP ${response.status}`);
+    const errorBody = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errorBody.error ?? `HTTP ${response.status}`);
   }
   if (!response.headers.get("content-type")?.includes("text/event-stream")) {
     return (await response.json()) as ObservatoryQueryResult;
@@ -345,7 +451,7 @@ export async function runObservatoryQuery(
       const parsed = parseSseBuffer(buffer.replace(/\r\n/g, "\n"));
       buffer = parsed.rest;
       for (const event of parsed.events) {
-        if (event.type === "start" || event.type === "step") {
+        if (event.type === "start" || event.type === "step" || event.type === "clarification") {
           onProgress(event as QueryProgressEvent);
         } else if (event.type === "result") {
           return event.result as ObservatoryQueryResult;

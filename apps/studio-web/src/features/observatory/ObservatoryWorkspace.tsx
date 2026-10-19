@@ -18,6 +18,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   AuditOutlined,
+  BranchesOutlined,
   ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -29,6 +30,7 @@ import {
   fetchSchemaSources,
   pendingQuerySteps,
   rebuildObservatoryGraph,
+  rerunObservatoryQuery,
   runObservatoryQuery,
   walkChain,
   type GraphExport,
@@ -37,7 +39,9 @@ import {
   type ObservatoryTable,
   type SchemaSourceOption,
   type QueryStep,
+  type Clarification,
 } from "./api.js";
+import { appendTurn, assistantSummary, carriedUserTurns } from "./followUp.js";
 import { QueryExecution, formatDuration } from "./QueryExecution.js";
 import { QueryAuditView } from "./QueryAuditView.js";
 import { RelationEdge } from "../graph/RelationEdge.js";
@@ -343,6 +347,10 @@ export function ObservatoryWorkspace() {
   const [steps, setSteps] = useState<QueryStep[]>(pendingQuerySteps);
   const [auditId, setAuditId] = useState<string>();
   const [liveSql, setLiveSql] = useState("");
+  const [sqlDraft, setSqlDraft] = useState("");
+  const [activeClarification, setActiveClarification] = useState<Clarification | null>(null);
+  const [originalQuestion, setOriginalQuestion] = useState("");
+  const [activeParentAuditId, setActiveParentAuditId] = useState("");
   const [liveSchema, setLiveSchema] = useState("");
   const queryController = useRef<AbortController | null>(null);
 
@@ -409,6 +417,10 @@ export function ObservatoryWorkspace() {
     setSteps(pendingQuerySteps());
     setAuditId(undefined);
     setLiveSql("");
+    setSqlDraft("");
+    setActiveClarification(null);
+    setOriginalQuestion("");
+    setActiveParentAuditId("");
     setLiveSchema("");
     setHistory([]);
     setHotNames(new Set());
@@ -456,6 +468,14 @@ export function ObservatoryWorkspace() {
     setChainRef("");
   };
 
+  // 开一个新的追问线程:清掉上下文与澄清状态,下一次提问从零开始。
+  const resetThread = () => {
+    setHistory([]);
+    setOriginalQuestion("");
+    setActiveClarification(null);
+    setClarify("");
+  };
+
   const runQuery = async (text: string, fromClarify = false) => {
     const trimmed = text.trim();
     if (!trimmed || !selectedSourceId || busy || queryController.current) return;
@@ -467,6 +487,7 @@ export function ObservatoryWorkspace() {
     setSteps(pendingQuerySteps());
     setAuditId(undefined);
     setLiveSql("");
+    setSqlDraft("");
     setLiveSchema("");
     setHotNames(new Set());
     setHotEdgeIds(new Set());
@@ -474,7 +495,11 @@ export function ObservatoryWorkspace() {
     setChainTitle("查询执行中");
     setChainRef("");
     try {
-      const nextHistory = fromClarify ? history : [];
+      // C7 多轮追问:同一线程内始终带上上下文,指代型追问(「那 3 月呢」)才能接得上。
+      const nextHistory = history;
+      const nextOriginalQuestion = fromClarify
+        ? originalQuestion || activeClarification?.originalQuestion || text
+        : originalQuestion || text;
       const next = await runObservatoryQuery(
         selectedSourceId,
         trimmed,
@@ -484,12 +509,15 @@ export function ObservatoryWorkspace() {
           setAuditId(event.auditId);
           if (event.type === "start") {
             setSteps(event.steps);
+          } else if (event.type === "clarification") {
+            setActiveClarification(event.clarification);
           } else {
             setSteps((current) =>
               current.map((step) => (step.id === event.step.id ? event.step : step)),
             );
             if (event.step.id === "generation" && typeof event.step.output?.sql === "string") {
               setLiveSql(event.step.output.sql);
+              setSqlDraft(event.step.output.sql);
             }
             if (event.step.id === "retrieval" && event.step.status === "succeeded") {
               if (typeof event.step.output?.schemaPrompt === "string") {
@@ -510,11 +538,16 @@ export function ObservatoryWorkspace() {
           }
         },
         controller.signal,
+        nextOriginalQuestion,
       );
       if (controller.signal.aborted) return;
       setResult(next);
       if (next.steps) setSteps(next.steps);
       setAuditId(next.auditId);
+      setOriginalQuestion(next.originalQuestion || nextOriginalQuestion);
+      setActiveParentAuditId(next.auditId ?? "");
+      setActiveClarification(next.clarification ?? null);
+      setSqlDraft(next.executedSql || next.sql || "");
       setChainTitle(
         next.error ? "查询失败" : next.clarifying ? "等待补充查询口径" : "本次查询相关表",
       );
@@ -525,14 +558,11 @@ export function ObservatoryWorkspace() {
       );
       setSelectedEdgeId(null);
       if (next.clarifying) {
-        setHistory([
-          ...nextHistory,
-          { role: "user", content: trimmed },
-          { role: "assistant", content: next.clarifying },
-        ]);
+        setHistory((current) => appendTurn(current, trimmed, next.clarifying ?? ""));
         setClarify("");
       } else {
-        setHistory([]);
+        // 成功的一轮也留在上下文里,后续追问可以在这条 SQL 上改口径。
+        setHistory((current) => appendTurn(current, trimmed, assistantSummary(next)));
         setClarify("");
       }
     } catch (reason) {
@@ -545,6 +575,81 @@ export function ObservatoryWorkspace() {
             : step,
         ),
       );
+    } finally {
+      queryController.current = null;
+      if (!controller.signal.aborted) setBusy(null);
+    }
+  };
+
+  const rerun = async (sql: string, parentAuditId = auditId) => {
+    if (!parentAuditId || !sql.trim() || busy || queryController.current) return;
+    const controller = new AbortController();
+    queryController.current = controller;
+    setBusy("query");
+    setNotice(null);
+    setSteps(pendingQuerySteps());
+    setLiveSql(sql);
+    setResult({
+      sourceId: selectedSourceId,
+      question: originalQuestion || question,
+      originalQuestion: originalQuestion || question,
+      selectedTables: hotNames.size ? [...hotNames] : [],
+      schemaPrompt: liveSchema,
+      graph: payload?.graph ?? { nodes: [], edges: [], stats: { entities: 0, relations: 0 } },
+      seeds: [],
+      formattedGraph: "",
+      executedSql: sql,
+      generatedSql: result?.generatedSql,
+      durationMs: 0,
+    });
+    setActiveParentAuditId(parentAuditId);
+    try {
+      const next = await rerunObservatoryQuery(
+        parentAuditId,
+        sql,
+        (event) => {
+          if (controller.signal.aborted) return;
+          setAuditId(event.auditId);
+          if (event.type === "start") {
+            setSteps(event.steps);
+          } else if (event.type === "clarification") {
+            setActiveClarification(event.clarification);
+          } else {
+            setSteps((current) =>
+              current.map((step) => (step.id === event.step.id ? event.step : step)),
+            );
+            if (event.step.id === "validation") {
+              setLiveSql(sql);
+              setSqlDraft(sql);
+            }
+          }
+        },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      setResult(next);
+      if (next.steps) setSteps(next.steps);
+      setAuditId(next.auditId);
+      setSqlDraft(next.executedSql || sql);
+      setOriginalQuestion(next.originalQuestion ?? originalQuestion);
+      setActiveClarification(next.clarification ?? null);
+      setChainTitle(next.error ? "重跑失败" : "重跑完成");
+      const selected = new Set(next.selectedTables);
+      setHotNames(selected);
+      setHotEdgeIds(
+        payload ? edgeIdsInSet(payload.graph.edges, payload.graph.nodes, selected) : new Set(),
+      );
+      setNotice({
+        type: next.error ? "error" : "success",
+        text: next.error ?? "已创建新的审计记录并完成重跑",
+      });
+    } catch (reason) {
+      if (!controller.signal.aborted) {
+        setNotice({
+          type: "error",
+          text: reason instanceof Error ? reason.message : String(reason),
+        });
+      }
     } finally {
       queryController.current = null;
       if (!controller.signal.aborted) setBusy(null);
@@ -690,6 +795,23 @@ export function ObservatoryWorkspace() {
               >
                 <SearchOutlined /> {busy === "query" ? "执行中..." : "生成并执行 SQL"}
               </button>
+              {carriedUserTurns(history) > 0 ? (
+                <div className="obs-followup">
+                  <span className="obs-followup__badge">
+                    <BranchesOutlined /> 追问中 · 已带 {carriedUserTurns(history)} 轮上下文
+                  </span>
+                  <button
+                    type="button"
+                    className="obs-chip"
+                    disabled={busy !== null}
+                    onClick={resetThread}
+                  >
+                    新会话
+                  </button>
+                </div>
+              ) : (
+                <p className="obs-ask-hint">提问后可继续追问(例如「那 3 月呢」「换成渠道维度」)</p>
+              )}
               {activeSource?.semanticProfile === "oneapi" ? (
                 <div className="obs-chips">
                   {EXAMPLES.map((item) => (
@@ -782,10 +904,48 @@ export function ObservatoryWorkspace() {
             <pre className="obs-pre">{schemaText || "提问或点选引用链后显示相关表字段"}</pre>
             <div className="panel-heading">
               <span>SQL</span>
+              <span className="obs-sql-source">
+                {result?.generatedSql && sqlDraft.trim() !== result.generatedSql.trim()
+                  ? "草稿已编辑"
+                  : "只读校验后执行"}
+              </span>
             </div>
-            <pre className="obs-pre obs-sql">
-              {result?.sql ?? (liveSql || result?.clarifying || result?.error || "等待生成")}
-            </pre>
+            {result?.clarifying ? (
+              <pre className="obs-pre obs-sql">{result.clarifying}</pre>
+            ) : (
+              <textarea
+                className="obs-sql-editor"
+                aria-label="可编辑 SQL"
+                value={sqlDraft || liveSql}
+                onChange={(event) => setSqlDraft(event.target.value)}
+                placeholder="生成 SQL 后可检查并编辑，再创建子审计重跑"
+                spellCheck={false}
+              />
+            )}
+            {activeParentAuditId && !result?.clarifying ? (
+              <div className="obs-rerun-actions">
+                <button
+                  className="studio-button secondary"
+                  type="button"
+                  disabled={busy !== null || !liveSql.trim()}
+                  onClick={() => {
+                    setSqlDraft(liveSql);
+                    void rerun(liveSql, activeParentAuditId);
+                  }}
+                >
+                  原样重跑
+                </button>
+                <button
+                  className="studio-button primary"
+                  type="button"
+                  disabled={busy !== null || !(sqlDraft || liveSql).trim()}
+                  onClick={() => void rerun(sqlDraft || liveSql, activeParentAuditId)}
+                >
+                  校验并重跑编辑 SQL
+                </button>
+                <span>重跑会创建新的审计记录，父记录保持不变。</span>
+              </div>
+            ) : null}
             <div className="panel-heading">
               <span>Result</span>
             </div>
@@ -793,7 +953,9 @@ export function ObservatoryWorkspace() {
               {result?.error ? <div className="workspace-notice error">{result.error}</div> : null}
               {result?.clarifying ? <p>{result.clarifying}</p> : null}
               {result?.truncated ? (
-                <p className="panel-state">仅展示前 {rows.length} 条，已达安全上限。可缩小范围后重试。</p>
+                <p className="panel-state">
+                  仅展示前 {rows.length} 条，已达安全上限。可缩小范围后重试。
+                </p>
               ) : null}
               {rows.length > 0 ? (
                 <div className="obs-table-wrap">
@@ -819,11 +981,36 @@ export function ObservatoryWorkspace() {
               ) : null}
               {!result ? (
                 <p className="panel-state">
-                  {busy === "query" ? "查询执行中，完成后显示结果" : "指定条数后返回对应结果；未指定时会先确认"}
+                  {busy === "query"
+                    ? "查询执行中，完成后显示结果"
+                    : "指定条数后返回对应结果；未指定时会先确认"}
                 </p>
               ) : null}
               {result?.clarifying ? (
                 <div className="obs-clarify">
+                  {activeClarification ? (
+                    <div className="obs-clarification-contract">
+                      <p>
+                        第 {activeClarification.round} 轮 · 待补充：
+                        {activeClarification.slots.map((slot) => slot.label).join("、")}
+                      </p>
+                      {activeClarification.candidates.length ? (
+                        <div className="obs-clarify-candidates">
+                          {activeClarification.candidates.map((candidate) => (
+                            <button
+                              key={`${candidate.label}:${candidate.value}`}
+                              type="button"
+                              className="obs-chip"
+                              title={candidate.description}
+                              onClick={() => setClarify(candidate.value)}
+                            >
+                              {candidate.label}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <label htmlFor="obs-clarify">回答追问后继续生成 SQL</label>
                   <textarea
                     id="obs-clarify"
@@ -840,14 +1027,7 @@ export function ObservatoryWorkspace() {
                     >
                       继续查询
                     </button>
-                    <button
-                      className="studio-button secondary"
-                      type="button"
-                      onClick={() => {
-                        setHistory([]);
-                        setClarify("");
-                      }}
-                    >
+                    <button className="studio-button secondary" type="button" onClick={resetThread}>
                       新问题
                     </button>
                   </div>

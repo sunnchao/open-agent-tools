@@ -55,7 +55,8 @@ export class KnowledgeGraph {
   constructor(opts: KnowledgeGraphOptions = {}) {
     this.store = new SqliteGraphStore({ dbPath: opts.dbPath ?? "./rag-graph.db" });
     this.extractor =
-      opts.extractor ?? (opts.llmChat ? new LlmGraphExtractor(opts.llmChat) : new RuleGraphExtractor());
+      opts.extractor ??
+      (opts.llmChat ? new LlmGraphExtractor(opts.llmChat) : new RuleGraphExtractor());
     this.retriever = new GraphRetriever(this.store, { embeddings: opts.embeddings });
     this.visualizer = new GraphVisualizer(this.store);
   }
@@ -88,7 +89,10 @@ export class KnowledgeGraph {
         // 抽取结果 props 中携带的别名（alias / aliases,逗号分隔）注册进别名表,共指合并用
         const aliasField = e.props["alias"] ?? e.props["aliases"] ?? e.props["别名"];
         if (aliasField) {
-          for (const alias of aliasField.split(/[,，]/).map((s) => s.trim()).filter(Boolean)) {
+          for (const alias of aliasField
+            .split(/[,，]/)
+            .map((s) => s.trim())
+            .filter(Boolean)) {
             this.store.addAlias(e.id, alias);
           }
         }
@@ -188,8 +192,18 @@ export class KnowledgeGraph {
     return this.store.neighbors(entityId, hops);
   }
 
-  listEntities(opts?: { offset?: number; limit?: number; type?: string; search?: string }): Entity[] {
+  listEntities(opts?: {
+    offset?: number;
+    limit?: number;
+    type?: string;
+    search?: string;
+  }): Entity[] {
     return this.store.listEntities(opts);
+  }
+
+  /** 列出支撑某实体的文档来源（ACL / 排障用）。 */
+  entitySources(entityId: string): string[] {
+    return this.store.entitySources?.(entityId) ?? [];
   }
 
   getStats(): { entities: number; relations: number } {

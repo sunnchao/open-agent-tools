@@ -2,12 +2,17 @@ import type { Evaluation, KnowledgeStrip, RetrievalEvidence } from "./types.js";
 import { splitStrips } from "./evaluator.js";
 
 export interface HeuristicEvaluatorOptions {
-  /** 总命中数低于该值判 incorrect，默认 1。 */
+  /** 预留：纯关键词检索时的最少命中数。 */
   minHits?: number;
-  /** 查询词覆盖率的阈值：低于该值判 incorrect，默认 0.25。 */
+  /** 无分数证据（纯关键词检索）时，查询词覆盖率的阈值，默认 0.25。 */
   minCoverage?: number;
   /** 每个证据最多切条带数，默认 20。 */
   maxStrips?: number;
+  /**
+   * 有向量/融合分数时的最低相关门限。缺省关闭：不同检索器的分数量纲不同，
+   * 不能用一个写死的余弦阈值套到 RRF 分上。
+   */
+  semanticThreshold?: number;
 }
 
 /** 从查询中提取关键词（英文词 + 中文 2 字滑窗）。 */
@@ -36,11 +41,13 @@ export class HeuristicRetrievalEvaluator implements EvaluatorLike {
   private minHits: number;
   private minCoverage: number;
   private maxStrips: number;
+  private semanticThreshold?: number;
 
   constructor(opts: HeuristicEvaluatorOptions = {}) {
     this.minHits = opts.minHits ?? 1;
     this.minCoverage = opts.minCoverage ?? 0.25;
     this.maxStrips = opts.maxStrips ?? 20;
+    this.semanticThreshold = opts.semanticThreshold;
   }
 
   async evaluate(query: string, evidence: RetrievalEvidence[]): Promise<Evaluation> {
@@ -49,12 +56,49 @@ export class HeuristicRetrievalEvaluator implements EvaluatorLike {
     if (allChunks.length === 0) {
       return { assessment: "incorrect", confidence: 0, strips: [] };
     }
+    if (allChunks.length < this.minHits) {
+      return { assessment: "incorrect", confidence: 0, strips: [] };
+    }
+
+    // 语义优先：有分数的检索结果不应再被「中文二字滑窗字面覆盖率」否决。
+    // 取 top-1 相对分数（top1 / 候选均值）作为区分力，避免依赖某一种分数量纲。
+    const scored = allChunks.filter((chunk) => Number.isFinite(chunk.score));
+    if (scored.length > 0) {
+      const sorted = [...scored].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+      const top = sorted[0]?.score ?? 0;
+      const mean =
+        sorted.reduce((sum, chunk) => sum + Math.max(0, chunk.score ?? 0), 0) / sorted.length;
+      const separation = mean > 0 ? top / mean : 0;
+      const confidence = Math.max(0, Math.min(1, separation / 2));
+      if (this.semanticThreshold !== undefined && top < this.semanticThreshold) {
+        return { assessment: "incorrect", confidence, strips: [] };
+      }
+      const strips = allChunks.flatMap((chunk) =>
+        splitStrips(chunk, this.maxStrips).map((strip) => ({
+          ...strip,
+          // top-1 的条带保留；其余分块只有在接近 top 时才保留，避免把候选噪声注入 prompt。
+          relevant:
+            chunk === sorted[0] ||
+            (top > 0 && (chunk.score ?? 0) >= top * 0.5) ||
+            this.keywordCoverage(query, strip.text) > 0,
+        })),
+      );
+      return {
+        assessment: separation >= 1.35 ? "correct" : "ambiguous",
+        confidence,
+        strips,
+      };
+    }
+
     if (keywords.length === 0) {
       // 无关键词可判（纯符号/超短查询）：有命中就视为 correct
       const strips = allChunks.flatMap((c) => splitStrips(c, this.maxStrips));
       return { assessment: "correct", confidence: 0.6, strips };
     }
-    const joined = allChunks.map((c) => c.content).join(" ").toLowerCase();
+    const joined = allChunks
+      .map((c) => c.content)
+      .join(" ")
+      .toLowerCase();
     const hitCount = keywords.filter((k) => joined.includes(k)).length;
     const coverage = hitCount / keywords.length;
 
@@ -72,6 +116,13 @@ export class HeuristicRetrievalEvaluator implements EvaluatorLike {
       return { assessment: "ambiguous", confidence: coverage, strips };
     }
     return { assessment: "correct", confidence: coverage, strips };
+  }
+
+  private keywordCoverage(query: string, text: string): number {
+    const keywords = extractKeywords(query);
+    if (keywords.length === 0) return 0;
+    const lower = text.toLowerCase();
+    return keywords.filter((keyword) => lower.includes(keyword)).length / keywords.length;
   }
 }
 

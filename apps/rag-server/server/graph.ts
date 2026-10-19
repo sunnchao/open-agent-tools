@@ -8,6 +8,8 @@ import {
 } from "@open-agent-tools/rag/crag";
 import type { Rag } from "@open-agent-tools/rag";
 import type { GraphLifecycle } from "./lifecycle.js";
+import { querySources } from "./query-settings.js";
+import { accessGroups } from "./request-validation.js";
 
 export interface GraphRouterOptions {
   rag: Rag;
@@ -40,7 +42,9 @@ export function graphRouter(opts: GraphRouterDeps): Router {
     try {
       const sources = body.source ? [decodeSource(body.source)] : rag.listSources();
       if (sources.length === 0) {
-        res.status(200).json({ sources: [], entities: 0, relations: 0, message: "no sources to extract" });
+        res
+          .status(200)
+          .json({ sources: [], entities: 0, relations: 0, message: "no sources to extract" });
         return;
       }
       let entities = 0;
@@ -111,16 +115,39 @@ export function graphRouter(opts: GraphRouterDeps): Router {
 
   /** 子图检索：种子定位 + 多跳扩展，返回序列化文本与导出 JSON。 */
   router.post("/retrieve", async (req: Request, res: Response) => {
-    const body = (req.body ?? {}) as { query?: unknown; maxHops?: unknown; maxNodes?: unknown };
+    const body = (req.body ?? {}) as {
+      query?: unknown;
+      maxHops?: unknown;
+      maxNodes?: unknown;
+      sources?: unknown;
+      viewerGroups?: unknown;
+    };
     const query = typeof body.query === "string" ? body.query.trim() : "";
     if (!query) {
       res.status(400).json({ error: "query is required" });
       return;
     }
+    let sources: string[] | undefined;
+    let viewerGroups: string[] | undefined;
     try {
+      sources = querySources(body.sources);
+      if (res.locals.ragScope === "runtime") {
+        // runtime 调用默认只查公开文档，即使直接访问 graph 端点也不能退化为管理全量。
+        viewerGroups =
+          body.viewerGroups === undefined ? [] : accessGroups(body.viewerGroups, "viewerGroups");
+      } else if (body.viewerGroups !== undefined) {
+        viewerGroups = accessGroups(body.viewerGroups, "viewerGroups");
+      }
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    try {
+      const scopedSources = rag.resolveVisibleSources(sources, viewerGroups);
       const result = await graph.retrieve(query, {
         maxHops: clampInt(body.maxHops, 2, 1, 4),
         maxNodes: clampInt(body.maxNodes, 64, 4, 512),
+        ...(scopedSources !== undefined ? { sources: scopedSources } : {}),
       });
       res.json({
         query,
@@ -151,13 +178,22 @@ export function buildCragController(opts: GraphRouterOptions): CragController {
         sources: rOpts.sources,
       });
       return {
-        chunks: result.chunks.map((c) => ({ source: c.source, chunkIndex: c.chunkIndex, content: c.content })),
+        chunks: result.chunks.map((c) => ({
+          source: c.source,
+          chunkIndex: c.chunkIndex,
+          content: c.content,
+          ...(typeof c.score === "number" ? { score: c.score } : {}),
+        })),
       };
     },
   });
   const graphDomain = createGraphDomain({
-    retrieve: async (query) => {
-      const result = await graph.retrieve(query, { maxHops: 2 });
+    retrieve: async (query, opts = {}) => {
+      if (opts.sources?.length === 0) return { query, seeds: [], subgraph: null };
+      const result = await graph.retrieve(query, {
+        maxHops: 2,
+        ...(opts.sources ? { sources: opts.sources } : {}),
+      });
       return result;
     },
   });

@@ -163,9 +163,9 @@ export class SqliteGraphStore implements GraphStore {
    *    统一挂到 LEGACY_SOURCE 占位来源下，等 reconcile 按真实来源重建后自然消解。
    */
   private migrate(): void {
-    const columns = this.db
-      .prepare(`PRAGMA table_info(relations)`)
-      .all() as unknown as Array<{ name: string }>;
+    const columns = this.db.prepare(`PRAGMA table_info(relations)`).all() as unknown as Array<{
+      name: string;
+    }>;
     if (!columns.some((c) => c.name === "source")) {
       this.db.exec(`ALTER TABLE relations ADD COLUMN source TEXT NOT NULL DEFAULT ''`);
     }
@@ -234,8 +234,7 @@ export class SqliteGraphStore implements GraphStore {
 
   findEntityById(id: string): Entity | null {
     const row = this.db.prepare(`SELECT * FROM entities WHERE id = ?`).get(id) as
-      | EntityRow
-      | undefined;
+      EntityRow | undefined;
     return row ? toEntity(row) : null;
   }
 
@@ -254,15 +253,61 @@ export class SqliteGraphStore implements GraphStore {
     return contains.map(toEntity);
   }
 
+  /**
+   * 限定来源的名称匹配。
+   *
+   * 图谱实体可能由多篇文档共同支撑；只要命中来源集合中的任意一篇即可返回。
+   * 空来源集合显式返回空，不能退化成“不过滤”。
+   */
+  findEntitiesByNameInSources(name: string, sources: readonly string[], limit = 10): Entity[] {
+    const normalized = normalizeName(name);
+    if (!normalized || sources.length === 0) return [];
+    const placeholders = sources.map(() => "?").join(", ");
+    const scope = `e.id IN (SELECT es.entity_id FROM entity_sources es WHERE es.source IN (${placeholders}))`;
+    const exact = this.db
+      .prepare(
+        `SELECT e.* FROM entities e
+         WHERE e.name = ? AND ${scope}
+         ORDER BY length(e.name) LIMIT ?`,
+      )
+      .all(normalized, ...sources.map((source) => source), limit) as unknown as EntityRow[];
+    if (exact.length > 0) return exact.map(toEntity);
+    const contains = this.db
+      .prepare(
+        `SELECT e.* FROM entities e
+         WHERE e.name LIKE ? AND ${scope}
+         ORDER BY length(e.name) LIMIT ?`,
+      )
+      .all(`%${normalized}%`, ...sources.map((source) => source), limit) as unknown as EntityRow[];
+    return contains.map(toEntity);
+  }
+
   neighbors(
     entityId: string,
     hops: number,
-    opts: { maxNodes?: number; minWeight?: number } = {},
+    opts: { maxNodes?: number; minWeight?: number; sources?: readonly string[] } = {},
   ): Subgraph {
     const maxNodes = opts.maxNodes ?? 64;
     const minWeight = opts.minWeight ?? 1;
+    const sources = opts.sources;
+    if (sources?.length === 0) return makeSubgraph([], []);
     const seed = this.findEntityById(entityId);
     if (!seed) return makeSubgraph([], []);
+    const sourcePlaceholders = (sources ?? []).map(() => "?").join(", ");
+    const entityScope =
+      sources && sources.length > 0
+        ? ` AND id IN (SELECT es.entity_id FROM entity_sources es WHERE es.source IN (${sourcePlaceholders}))`
+        : "";
+    const relationScope =
+      sources && sources.length > 0
+        ? ` AND id IN (SELECT rs.relation_id FROM relation_sources rs WHERE rs.source IN (${sourcePlaceholders}))`
+        : "";
+    if (sources && sources.length > 0) {
+      const seedAllowed = this.db
+        .prepare(`SELECT 1 FROM entities WHERE id = ?${entityScope}`)
+        .get(entityId, ...sources);
+      if (!seedAllowed) return makeSubgraph([], []);
+    }
 
     const seen = new Set<string>([entityId]);
     const relationIds = new Set<string>();
@@ -274,9 +319,20 @@ export class SqliteGraphStore implements GraphStore {
       for (const cur of frontier) {
         const rows = this.db
           .prepare(
-            `SELECT * FROM relations WHERE (src_id = ? OR dst_id = ?) AND weight >= ? ORDER BY weight DESC`,
+            `SELECT * FROM relations
+             WHERE (src_id = ? OR dst_id = ?) AND weight >= ?
+               ${sources && sources.length > 0 ? `AND src_id IN (SELECT id FROM entities WHERE id IN (SELECT entity_id FROM entity_sources WHERE source IN (${sourcePlaceholders}))) AND dst_id IN (SELECT id FROM entities WHERE id IN (SELECT entity_id FROM entity_sources WHERE source IN (${sourcePlaceholders})))` : ""}
+               ${relationScope}
+             ORDER BY weight DESC`,
           )
-          .all(cur, cur, minWeight) as unknown as RelationRow[];
+          .all(
+            cur,
+            cur,
+            minWeight,
+            ...(sources ?? []),
+            ...(sources ?? []),
+            ...(sources ?? []),
+          ) as unknown as RelationRow[];
         for (const row of rows) {
           relationIds.add(row.id);
           const other = row.src_id === cur ? row.dst_id : row.src_id;
@@ -295,8 +351,7 @@ export class SqliteGraphStore implements GraphStore {
     const relations: Relation[] = [...relationIds]
       .map((id) => {
         const row = this.db.prepare(`SELECT * FROM relations WHERE id = ?`).get(id) as
-          | RelationRow
-          | undefined;
+          RelationRow | undefined;
         return row ? toRelation(row) : null;
       })
       .filter((r): r is Relation => r !== null);
@@ -366,8 +421,7 @@ export class SqliteGraphStore implements GraphStore {
 
   getSource(source: string): GraphSourceState | null {
     const row = this.db.prepare(`SELECT * FROM graph_sources WHERE source = ?`).get(source) as
-      | SourceRow
-      | undefined;
+      SourceRow | undefined;
     return row ? toSourceState(row) : null;
   }
 
@@ -405,7 +459,9 @@ export class SqliteGraphStore implements GraphStore {
     this.db.prepare(`DELETE FROM graph_sources WHERE source = ?`).run(source);
   }
 
-  listEntities(opts: { offset?: number; limit?: number; type?: string; search?: string } = {}): Entity[] {
+  listEntities(
+    opts: { offset?: number; limit?: number; type?: string; search?: string } = {},
+  ): Entity[] {
     const { offset = 0, limit = 50, type, search } = opts;
     const where: string[] = [];
     const params: (string | number)[] = [];
@@ -454,6 +510,32 @@ export class SqliteGraphStore implements GraphStore {
       )
       .get(normalized) as EntityRow | undefined;
     return row ? toEntity(row) : null;
+  }
+
+  /** 限定来源的别名定位，避免通过别名绕过 sources 白名单。 */
+  findByAliasInSources(alias: string, sources: readonly string[]): Entity | null {
+    const normalized = normalizeName(alias);
+    if (!normalized || sources.length === 0) return null;
+    const placeholders = sources.map(() => "?").join(", ");
+    const row = this.db
+      .prepare(
+        `SELECT e.* FROM entity_aliases a
+         JOIN entities e ON e.id = a.entity_id
+         WHERE a.alias = ?
+           AND e.id IN (
+             SELECT es.entity_id FROM entity_sources es WHERE es.source IN (${placeholders})
+           )
+         LIMIT 1`,
+      )
+      .get(normalized, ...sources.map((source) => source)) as EntityRow | undefined;
+    return row ? toEntity(row) : null;
+  }
+
+  entitySources(entityId: string): string[] {
+    const rows = this.db
+      .prepare(`SELECT source FROM entity_sources WHERE entity_id = ? ORDER BY source`)
+      .all(entityId) as unknown as Array<{ source: string }>;
+    return rows.map((row) => row.source);
   }
 
   aliasesOf(entityId: string): string[] {

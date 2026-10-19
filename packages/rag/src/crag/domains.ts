@@ -6,8 +6,11 @@ import type { RetrievalDomain, RetrievalEvidence } from "./types.js";
  */
 export interface BlockDomainOptions {
   /** rag.retrieve 包装函数（或包装 rag-server /query 的 HTTP 调用）。 */
-  retrieve: (query: string, opts?: { sources?: string[]; topK?: number }) => Promise<{
-    chunks: Array<{ source: string; chunkIndex: number; content: string }>;
+  retrieve: (
+    query: string,
+    opts?: { sources?: string[]; topK?: number },
+  ) => Promise<{
+    chunks: Array<{ source: string; chunkIndex: number; content: string; score?: number }>;
   }>;
   topK?: number;
   name?: string;
@@ -24,7 +27,12 @@ export function createBlockDomain(opts: BlockDomainOptions): RetrievalDomain {
       });
       return {
         domain: opts.name ?? "block",
-        chunks: result.chunks.map((c) => ({ source: c.source, chunkIndex: c.chunkIndex, content: c.content })),
+        chunks: result.chunks.map((c) => ({
+          source: c.source,
+          chunkIndex: c.chunkIndex,
+          content: c.content,
+          ...(c.score !== undefined ? { score: c.score } : {}),
+        })),
       };
     },
   };
@@ -32,7 +40,10 @@ export function createBlockDomain(opts: BlockDomainOptions): RetrievalDomain {
 
 /** graph 检索域：包装 packages/rag-graph 的 GraphRetriever.retrieve（或 HTTP 调用）。 */
 export interface GraphDomainOptions {
-  retrieve: (query: string) =>
+  retrieve: (
+    query: string,
+    opts?: { sources?: string[] },
+  ) =>
     | {
         subgraph: { formatted(): string } | null;
         seeds: Array<{ name: string }>;
@@ -47,17 +58,19 @@ export interface GraphDomainOptions {
 export function createGraphDomain(opts: GraphDomainOptions): RetrievalDomain {
   return {
     name: opts.name ?? "graph",
-    async retrieve(query): Promise<RetrievalEvidence> {
-      const result = await opts.retrieve(query);
+    async retrieve(query, rOpts = {}): Promise<RetrievalEvidence> {
+      // 图谱域必须与 block 域遵守同一份 sources 白名单；空数组表示不检索。
+      if (rOpts.sources?.length === 0) {
+        return { domain: opts.name ?? "graph", chunks: [] };
+      }
+      const result = await opts.retrieve(query, { sources: rOpts.sources });
       if (!result.subgraph || result.seeds.length === 0) {
         return { domain: opts.name ?? "graph", chunks: [] };
       }
       const text = result.subgraph.formatted();
       return {
         domain: opts.name ?? "graph",
-        chunks: text
-          ? [{ source: "[图谱]", chunkIndex: 0, content: text }]
-          : [],
+        chunks: text ? [{ source: "[图谱]", chunkIndex: 0, content: text }] : [],
       };
     },
   };
