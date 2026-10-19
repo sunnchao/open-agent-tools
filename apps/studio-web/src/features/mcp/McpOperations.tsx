@@ -22,7 +22,6 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
-  AuditOutlined,
   CheckOutlined,
   CloseOutlined,
   DeleteOutlined,
@@ -30,7 +29,6 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
-  UserOutlined,
 } from "../../lib/icons.js";
 import { confirmAction } from "../../components/studio/confirmAction.js";
 import {
@@ -1334,10 +1332,3 @@ export function AuditView() {
   );
 }
 
-// Re-exported for tests that assert the management view union.
-export function __McpOperationsViewGuard(view: McpManagementView): McpManagementView {
-  return view;
-}
-
-void UserOutlined;
-void AuditOutlined;
