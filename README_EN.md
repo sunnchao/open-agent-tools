@@ -1,14 +1,27 @@
-# open-agent-tools MCP Management Platform
+# open-agent-tools Enterprise Internal AI Tooling Platform
 
 [中文](./README.md)
 
-This repository is a pnpm and TypeScript monorepo. This README focuses on the MCP management platform, where administrators configure, build, publish, and roll back managed MCP services. MCP clients access published Tools and Prompts through API Keys and fine-grained grants.
+open-agent-tools is an AI tooling project for internal enterprise use: it consolidates the capabilities enterprises need most when adopting AI internally — agent chat, RAG knowledge bases, the knowledge graph, multi-source data Q&A, workflow orchestration, and MCP tool hosting and governance — into a single pnpm and TypeScript monorepo, so internal data, knowledge, and processes can be called directly by AI.
 
-`apps/studio-web` is the unified visual surface for Agent Chat, MCP administration, RAG knowledge bases, the knowledge graph, multi-source data Q&A, and workflow orchestration. Chat, workflow, data Q&A, and settings requests are served by `apps/server` (the Agent Server, default port `3000`). `apps/cli` and `apps/server` can also run independently as standalone Agent/Chat entry points.
+`apps/studio-web` is the unified visual surface where internal teams use these capabilities, bringing together Agent Chat, RAG knowledge bases, the knowledge graph, multi-source data Q&A, workflow orchestration, and MCP administration. Chat, workflow, data Q&A, and settings requests are served by `apps/server` (the Agent Server, default port `3000`). `apps/cli` and `apps/server` can also run independently as standalone Agent/Chat entry points.
+
+Enterprises no longer have to juggle a set of isolated AI tools: connect data sources, build knowledge bases, orchestrate workflows, and host and authorize tools, then deliver the result to internal employees and business systems through chat, IM bots, and open APIs. The MCP management platform (Control Plane + Gateway + Worker) is the tool governance layer of this system, handling configuration, build, publish, rollback, and access authorization for managed MCP services. See "MCP tool hosting and governance" below for the details.
 
 ## Current capabilities
 
-### MCP management platform
+### AI workbench and applications (Studio Web and Agent Server)
+
+- IM collaboration entry: configure Feishu/DingTalk bots visually in Studio Web "Settings → IM Channels" (multi-channel, encrypted secrets, knowledge base binding); @-mentioning a bot in a group answers from Agent Chat + RAG knowledge base.
+- Multi-source data Q&A: Studio Web "Settings → Schema Sources" manages multiple read-only MySQL / PostgreSQL connections, collection scope, and the default route. The Q&A page isolates the catalog, relationship graph, and SQL execution per source, and records a staged audit of every question from data-source resolution to the final output. Audit records can be searched and replayed in the Q&A page's "Audit logs".
+- RAG asset operations: fixed-size chunking and embedding-similarity semantic chunking. Document title/tags, content fingerprints, chunking parameters, versions, and update times are governed. Re-uploading a document with the same name replaces it atomically. Built-in dashboards show query volume, empty-recall rate, latency, top sources, and user feedback.
+- MCP Gateway connection: Studio Web "Settings → MCP Gateway" configures the Gateway URL and API Key (stored encrypted) used by workflows and chat. Changes take effect on save; without a saved configuration, the environment variables are used as a fallback.
+- Workflow orchestration: the node palette includes Start, User Input, Knowledge Retrieval, Graph Retrieval, SQL Query, LLM, MCP Tool, HTTP Request, Condition Branch, and End nodes. The editor provides run history with checkpoint resume, broken-reference repair, run-path highlighting, per-node execution policies, JSON import/export, multi-select editing, auto layout, and subgraph copy/paste. A draft can be published as an immutable version and invoked externally through a workflow-level API Key (rate-limited per minute), OpenAPI 3.1, and `/v1/workflows/{slug}/run`.
+- Workflow HTTP Request node: six methods; JSON, plain-text, or multipart form (text fields only) request bodies; Basic, Bearer, and custom-header authentication; per-node timeout and retries. Multiple End nodes merge the final output in execution order, and a per-node debug trace is kept. Credentials are redacted in observations, and fixed credentials are removed on export and clipboard copy.
+- Workflow SQL Query node: pick a schema data source (the default source is used when none is selected) and describe the question in natural language, optionally referencing input variables. It reuses the Q&A module's text-to-SQL, read-only validation, and audit. The "Default row count" (1–100, default 100) applies only when the question does not specify a count; when the question asks for the top N rows or all rows, the question wins, capped at 100 rows. Default outputs are `rows`, `sql`, `rowCount`, and `auditId`. If the question needs a business definition clarified, the node fails with the audit ID.
+- Workflow Condition Branch node: configure IF / ELIF / ELSE branches visually. Each branch combines multiple rules with AND/OR, offers 14 operators filtered by variable type, and routes to its own next node on the canvas. At run time the first matching branch in order wins; a condition whose variable is missing or whose type does not match is treated as not satisfied and raises a warning. Run previews and node tests show which branch matched. A draft may be saved with incomplete conditions; variable references, operators, comparison value types, and each branch's next node are validated before running and publishing. The legacy expression mode is still supported.
+
+### MCP tool hosting and governance
 
 - Manage the lifecycle of managed MCP services and versions: draft, validate, build, publish, roll back, disable/enable, and soft-delete. After a soft-delete, the slug can be reused by a new service.
 - Configure Tool-only, Prompt-only, or mixed Tools + Prompts services.
@@ -25,20 +38,11 @@ This repository is a pnpm and TypeScript monorepo. This README focuses on the MC
 - Provide a React administration console covering services, Tools, Prompts, builds, versions, client authorization, and audit.
 - Custom Function Tools: `packages/function-tools` collects MCP tool packages that can be packaged and uploaded independently. It currently contains `pinyin` (Chinese characters to pinyin, runs offline) and `web-search` (Tavily web search, requires `bridge` networking and `TAVILY_API_KEY`), plus an interactive packaging script.
 
-### Studio Web and Agent Server
-
-- IM collaboration entry: configure Feishu/DingTalk bots visually in Studio Web "Settings → IM Channels" (multi-channel, encrypted secrets, knowledge base binding); @-mentioning a bot in a group answers from Agent Chat + RAG knowledge base.
-- Multi-source data Q&A: Studio Web "Settings → Schema Sources" manages multiple read-only MySQL / PostgreSQL connections, collection scope, and the default route. The Q&A page isolates the catalog, relationship graph, and SQL execution per source, and records a staged audit of every question from data-source resolution to the final output. Audit records can be searched and replayed in the Q&A page's "Audit logs".
-- RAG asset operations: fixed-size chunking and embedding-similarity semantic chunking. Document title/tags, content fingerprints, chunking parameters, versions, and update times are governed. Re-uploading a document with the same name replaces it atomically. Built-in dashboards show query volume, empty-recall rate, latency, top sources, and user feedback.
-- MCP Gateway connection: Studio Web "Settings → MCP Gateway" configures the Gateway URL and API Key (stored encrypted) used by workflows and chat. Changes take effect on save; without a saved configuration, the environment variables are used as a fallback.
-- Workflow orchestration: the node palette includes Start, User Input, Knowledge Retrieval, Graph Retrieval, SQL Query, LLM, MCP Tool, HTTP Request, Condition Branch, and End nodes. The editor provides run history with checkpoint resume, broken-reference repair, run-path highlighting, per-node execution policies, JSON import/export, multi-select editing, auto layout, and subgraph copy/paste. A draft can be published as an immutable version and invoked externally through a workflow-level API Key (rate-limited per minute), OpenAPI 3.1, and `/v1/workflows/{slug}/run`.
-- Workflow HTTP Request node: six methods; JSON, plain-text, or multipart form (text fields only) request bodies; Basic, Bearer, and custom-header authentication; per-node timeout and retries. Multiple End nodes merge the final output in execution order, and a per-node debug trace is kept. Credentials are redacted in observations, and fixed credentials are removed on export and clipboard copy.
-- Workflow SQL Query node: pick a schema data source (the default source is used when none is selected) and describe the question in natural language, optionally referencing input variables. It reuses the Q&A module's text-to-SQL, read-only validation, and audit. The "Default row count" (1–100, default 100) applies only when the question does not specify a count; when the question asks for the top N rows or all rows, the question wins, capped at 100 rows. Default outputs are `rows`, `sql`, `rowCount`, and `auditId`. If the question needs a business definition clarified, the node fails with the audit ID.
-- Workflow Condition Branch node: configure IF / ELIF / ELSE branches visually. Each branch combines multiple rules with AND/OR, offers 14 operators filtered by variable type, and routes to its own next node on the canvas. At run time the first matching branch in order wins; a condition whose variable is missing or whose type does not match is treated as not satisfied and raises a warning. Run previews and node tests show which branch matched. A draft may be saved with incomplete conditions; variable references, operators, comparison value types, and each branch's next node are validated before running and publishing. The legacy expression mode is still supported.
-
 The managed runtime currently supports Node.js 20, ESM, and npm only. Python, Java, managed MCP Resources, and remote MCP proxying are outside the currently runnable scope.
 
 ## Architecture
+
+Studio Web is the unified workbench: it serves internal employees and business systems on one side, and connects to the Agent Server (chat, workflows, data Q&A) and the MCP management surface on the other. The diagram below shows the MCP tool hosting, gateway, and isolated execution chain, and how it relates to Studio Web and the RAG Server.
 
 ```text
 Administrator
