@@ -1,30 +1,43 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Input, Select } from "antd";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ApiOutlined,
-  AuditOutlined,
-  BarChartOutlined,
-  BuildOutlined,
+  Alert,
+  App,
+  Badge,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  List,
+  Modal,
+  Select,
+  Segmented,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import {
   CheckCircleFilled,
   CodeOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
-  ExperimentOutlined,
   FileTextOutlined,
   LoadingOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   RocketOutlined,
-  SearchOutlined,
   SettingOutlined,
-  TagOutlined,
-  TeamOutlined,
   ToolOutlined,
   UndoOutlined,
   UploadOutlined,
 } from "../../lib/icons.js";
+import { StudioPage } from "../../components/studio/StudioPageHeader.js";
+import { StudioNotice, type StudioNoticeValue } from "../../components/studio/StudioNotice.js";
+import { confirmAction } from "../../components/studio/confirmAction.js";
 import {
   addPrompt,
   addTool,
@@ -74,6 +87,41 @@ function latestVersion(versions: McpVersion[]): McpVersion | null {
   return [...versions].sort((left, right) => right.versionNumber - left.versionNumber)[0] ?? null;
 }
 
+const VIEW_OPTIONS: Array<{ value: McpManagementView; label: string }> = [
+  { value: "services", label: "服务" },
+  { value: "marketplace", label: "市场" },
+  { value: "builds", label: "构建" },
+  { value: "clients", label: "客户端" },
+  { value: "audit", label: "审计" },
+  { value: "sla", label: "SLA" },
+  { value: "sandbox", label: "沙箱" },
+];
+
+const VIEW_TITLES: Record<McpManagementView, string> = {
+  services: "MCP 服务",
+  marketplace: "工具市场",
+  builds: "构建任务",
+  clients: "客户端授权",
+  audit: "审计事件",
+  sla: "工具 SLA",
+  sandbox: "调试沙箱",
+};
+
+function serviceBadge(status: McpService["status"]): "success" | "warning" | "default" | "error" {
+  if (status === "ACTIVE") return "success";
+  if (status === "DISABLED") return "warning";
+  if (status === "DELETED") return "error";
+  return "default";
+}
+
+function versionTagColor(status: McpVersion["status"]): string {
+  if (status === "PUBLISHED") return "success";
+  if (status === "READY") return "processing";
+  if (status === "FAILED") return "error";
+  if (status === "VALIDATING" || status === "BUILDING") return "warning";
+  return "default";
+}
+
 export function McpWorkspace() {
   const [view, setView] = useState<McpManagementView>("services");
   const [services, setServices] = useState<McpService[]>([]);
@@ -85,8 +133,10 @@ export function McpWorkspace() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { message } = App.useApp();
   const [dialog, setDialog] = useState<DialogState>(null);
   const [serviceBusy, setServiceBusy] = useState(false);
+  const notice: StudioNoticeValue | null = error ? { type: "error", text: error } : null;
 
   const loadServices = useCallback(async () => {
     setLoading(true);
@@ -196,309 +246,286 @@ export function McpWorkspace() {
     else if (current !== asset.value) setAsset({ kind: asset.kind, value: current } as Asset);
   }, [asset?.kind, asset?.value.id, version?.id, version?.revision]);
 
-  return (
-    <section className="domain-workspace mcp-workspace">
-      <header className="domain-header">
-        <div>
-          <p className="domain-eyebrow">资源编排 / MCP</p>
-          <h1>
-            {view === "services"
-              ? "MCP 服务"
-              : view === "marketplace"
-                ? "工具市场"
-                : view === "builds"
-                  ? "构建任务"
-                  : view === "clients"
-                    ? "客户端授权"
-                    : view === "audit"
-                      ? "审计事件"
-                      : view === "sla"
-                        ? "工具 SLA"
-                        : "调试沙箱"}
-          </h1>
-        </div>
-        <nav className="mcp-management-tabs" aria-label="MCP 管理视图">
-          <button
-            type="button"
-            className={view === "services" ? "is-active" : ""}
-            onClick={() => setView("services")}
-          >
-            <ApiOutlined /> 服务
-          </button>
-          <button
-            type="button"
-            className={view === "marketplace" ? "is-active" : ""}
-            onClick={() => setView("marketplace")}
-          >
-            <TagOutlined /> 市场
-          </button>
-          <button
-            type="button"
-            className={view === "builds" ? "is-active" : ""}
-            onClick={() => setView("builds")}
-          >
-            <BuildOutlined /> 构建
-          </button>
-          <button
-            type="button"
-            className={view === "clients" ? "is-active" : ""}
-            onClick={() => setView("clients")}
-          >
-            <TeamOutlined /> 客户端
-          </button>
-          <button
-            type="button"
-            className={view === "audit" ? "is-active" : ""}
-            onClick={() => setView("audit")}
-          >
-            <AuditOutlined /> 审计
-          </button>
-          <button
-            type="button"
-            className={view === "sla" ? "is-active" : ""}
-            onClick={() => setView("sla")}
-          >
-            <BarChartOutlined /> SLA
-          </button>
-          <button
-            type="button"
-            className={view === "sandbox" ? "is-active" : ""}
-            onClick={() => setView("sandbox")}
-          >
-            <ExperimentOutlined /> 沙箱
-          </button>
-        </nav>
-        <div className="domain-header-actions">
-          {view === "services" ? (
-            <>
-              {selectedService ? (
-                <>
-                  <button
-                    className="icon-command"
-                    type="button"
-                    title="编辑服务"
-                    aria-label="编辑服务"
-                    disabled={serviceBusy}
-                    onClick={() => setDialog({ kind: "service", initial: selectedService })}
-                  >
-                    <EditOutlined />
-                  </button>
-                  <button
-                    className="studio-button secondary"
-                    type="button"
-                    disabled={serviceBusy}
-                    onClick={() => setDialog({ kind: "environment", service: selectedService })}
-                  >
-                    <SettingOutlined /> 环境变量
-                  </button>
-                  <button
-                    className="icon-command"
-                    type="button"
-                    title={selectedService.status === "DISABLED" ? "启用服务" : "禁用服务"}
-                    aria-label={selectedService.status === "DISABLED" ? "启用服务" : "禁用服务"}
-                    disabled={
-                      serviceBusy ||
-                      (selectedService.status !== "ACTIVE" && selectedService.status !== "DISABLED")
-                    }
-                    onClick={() => {
-                      const enabling = selectedService.status === "DISABLED";
-                      if (
-                        !window.confirm(
-                          `${enabling ? "启用" : "禁用"}服务 ${selectedService.name}？`,
-                        )
-                      )
-                        return;
+  const serviceActions =
+    view === "services" ? (
+      <Flex gap={8} align="center" wrap>
+        {selectedService ? (
+          <>
+            <Tooltip title="编辑服务">
+              <Button
+                type="text"
+                icon={<EditOutlined />}
+                aria-label="编辑服务"
+                disabled={serviceBusy}
+                onClick={() => setDialog({ kind: "service", initial: selectedService })}
+              />
+            </Tooltip>
+            <Button
+              icon={<SettingOutlined />}
+              disabled={serviceBusy}
+              onClick={() => setDialog({ kind: "environment", service: selectedService })}
+            >
+              环境变量
+            </Button>
+            <Tooltip
+              title={selectedService.status === "DISABLED" ? "启用服务" : "禁用服务"}
+            >
+              <Button
+                type="text"
+                icon={<CheckCircleFilled />}
+                aria-label={selectedService.status === "DISABLED" ? "启用服务" : "禁用服务"}
+                disabled={
+                  serviceBusy ||
+                  (selectedService.status !== "ACTIVE" && selectedService.status !== "DISABLED")
+                }
+                onClick={() => {
+                  const enabling = selectedService.status === "DISABLED";
+                  confirmAction({
+                    title: `${enabling ? "启用" : "禁用"}服务“${selectedService.name}”？`,
+                    content: enabling
+                      ? "启用后 Gateway 将接受该服务的调用。"
+                      : "禁用后 Gateway 将拒绝该服务的调用，已发布版本不受影响。",
+                    okText: enabling ? "启用" : "禁用",
+                    danger: !enabling,
+                    onOk: () =>
                       void performServiceAction(async () => {
                         if (enabling)
                           await enableService(selectedService.id, selectedService.revision);
                         else await disableService(selectedService.id, selectedService.revision);
                         await refreshSelected();
-                      });
-                    }}
-                  >
-                    <CheckCircleFilled />
-                  </button>
-                  <button
-                    className="icon-command danger"
-                    type="button"
-                    title="删除服务"
-                    aria-label="删除服务"
-                    disabled={serviceBusy}
-                    onClick={() => {
-                      if (!window.confirm(`永久删除服务 ${selectedService.name}？`)) return;
+                        message.success(`服务已${enabling ? "启用" : "禁用"}`);
+                      }),
+                  });
+                }}
+              />
+            </Tooltip>
+            <Tooltip title="删除服务">
+              <Button
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                aria-label="删除服务"
+                disabled={serviceBusy}
+                onClick={() => {
+                  confirmAction({
+                    title: `永久删除服务“${selectedService.name}”？`,
+                    content: "服务及其版本、资产将一并删除，该操作不可恢复。",
+                    onOk: () =>
                       void performServiceAction(async () => {
                         await deleteService(selectedService.id, selectedService.revision);
                         const next = await listServices();
                         setServices(next);
                         setSelectedId(next[0]?.id ?? null);
-                      });
-                    }}
-                  >
-                    <DeleteOutlined />
-                  </button>
-                </>
-              ) : null}
-              <button
-                className="studio-button secondary"
-                type="button"
-                onClick={() => void refreshSelected()}
-              >
-                <ReloadOutlined /> 刷新
-              </button>
-              <button
-                className="studio-button primary"
-                type="button"
-                onClick={() => setDialog({ kind: "service" })}
-              >
-                <PlusOutlined /> 新建服务
-              </button>
-            </>
-          ) : null}
-        </div>
-      </header>
+                        message.success("服务已删除");
+                      }),
+                  });
+                }}
+              />
+            </Tooltip>
+          </>
+        ) : null}
+        <Button icon={<ReloadOutlined />} onClick={() => void refreshSelected()}>
+          刷新
+        </Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setDialog({ kind: "service" })}>
+          新建服务
+        </Button>
+      </Flex>
+    ) : undefined;
+
+  return (
+    <StudioPage
+      eyebrow="资源编排 / MCP"
+      title={VIEW_TITLES[view]}
+      description="管理 MCP 服务、版本生命周期与资源资产。"
+      actions={serviceActions}
+      extra={
+        <>
+          <div style={{ padding: "12px 16px 0" }}>
+            <Segmented<McpManagementView>
+              aria-label="MCP 管理视图"
+              value={view}
+              onChange={(value) => setView(value)}
+              options={VIEW_OPTIONS.map((item) => ({ ...item }))}
+              block
+            />
+          </div>
+          <StudioNotice notice={notice} />
+        </>
+      }
+    >
 
       {view === "services" ? (
         <>
-          <div className="domain-grid">
-            <aside className="resource-panel">
-              <div className="panel-heading">
-                <span>服务列表</span>
-                <span className="count-badge">{services.length}</span>
-              </div>
-              {loading ? <div className="panel-state">正在连接控制面...</div> : null}
-              {error ? (
-                <div className="connection-state" role="alert">
-                  <span>控制面未连接</span>
-                  <small>{error}</small>
-                  <button type="button" onClick={() => void loadServices()}>
+        <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}>
+          <Card
+            size="small"
+            title="服务列表"
+            extra={<Tag>{services.length}</Tag>}
+            style={{ width: 280, flex: "0 0 auto", maxHeight: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}
+            styles={{ body: { padding: 8, overflowY: "auto" } }}
+          >
+            {loading ? (
+              <Flex justify="center" style={{ padding: 24 }}>
+                <Spin tip="正在连接控制面..." />
+              </Flex>
+            ) : null}
+            {error ? (
+              <Alert
+                type="error"
+                showIcon
+                message="控制面未连接"
+                description={error}
+                action={
+                  <Button size="small" onClick={() => void loadServices()}>
                     重新连接
-                  </button>
-                </div>
-              ) : null}
-              {!loading && !error && services.length === 0 ? (
-                <div className="panel-state">还没有 MCP 服务</div>
-              ) : null}
-              <div className="resource-list">
-                {services.map((service) => (
-                  <button
-                    type="button"
-                    key={service.id}
-                    className={`resource-item${selectedId === service.id ? " is-active" : ""}`}
+                  </Button>
+                }
+                style={{ marginBottom: 8 }}
+              />
+            ) : null}
+            {!loading && !error && services.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有 MCP 服务" />
+            ) : (
+              <List
+                size="small"
+                dataSource={services}
+                rowKey="id"
+                renderItem={(service) => (
+                  <List.Item
                     onClick={() => setSelectedId(service.id)}
+                    style={{
+                      cursor: "pointer",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      background: service.id === selectedId ? "#f0f5ff" : undefined,
+                    }}
                   >
-                    <span className={`resource-icon status-${service.status.toLowerCase()}`}>
-                      <ApiOutlined />
-                    </span>
-                    <span className="resource-copy">
-                      <b>{service.name}</b>
-                      <small>/{service.slug}</small>
-                    </span>
-                    <span className="status-dot" title={service.status} />
-                  </button>
-                ))}
-              </div>
-            </aside>
+                    <List.Item.Meta
+                      avatar={<Badge status={serviceBadge(service.status)} />}
+                      title={
+                        <Typography.Text strong ellipsis style={{ maxWidth: 150 }}>
+                          {service.name}
+                        </Typography.Text>
+                      }
+                      description={`/${service.slug}`}
+                    />
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
 
-            <div className="asset-panel">
-              <div className="asset-toolbar">
-                <div className="segmented-control" aria-label="MCP 资源类型">
-                  <button
-                    type="button"
-                    className={tab === "tools" ? "is-active" : ""}
-                    onClick={() => setTab("tools")}
-                  >
-                    <ToolOutlined /> Tools <span>{version?.tools.length ?? 0}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={tab === "prompts" ? "is-active" : ""}
-                    onClick={() => setTab("prompts")}
-                  >
-                    <FileTextOutlined /> Prompts <span>{version?.prompts.length ?? 0}</span>
-                  </button>
-                </div>
-                <label className="studio-search">
-                  <SearchOutlined />
-                  <Input
-                    value={search}
-                    autoComplete="off"
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="搜索资源"
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="icon-command"
-                  title={tab === "tools" ? "添加 Tool" : "添加 Prompt"}
-                  aria-label={tab === "tools" ? "添加 Tool" : "添加 Prompt"}
-                  disabled={version?.status !== "DRAFT"}
-                  onClick={() => setDialog({ kind: tab === "tools" ? "tool" : "prompt" })}
-                >
-                  <PlusOutlined />
-                </button>
-              </div>
-
-              {selectedService && version ? (
-                <VersionLifecycle
-                  key={version.id}
-                  service={selectedService}
-                  version={version}
-                  versions={versions}
-                  onSelect={(versionId) => {
-                    setSelectedVersionId(versionId);
-                    setAsset(null);
-                  }}
-                  onRefresh={refreshSelected}
+          <Flex vertical gap={12} style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+            <Card size="small">
+              <Flex gap={8} align="center" wrap>
+                <Segmented<AssetTab>
+                  aria-label="MCP 资源类型"
+                  value={tab}
+                  onChange={(value) => setTab(value)}
+                  options={[
+                    { value: "tools", label: `Tools ${version?.tools.length ?? 0}`, icon: <ToolOutlined /> },
+                    { value: "prompts", label: `Prompts ${version?.prompts.length ?? 0}`, icon: <FileTextOutlined /> },
+                  ]}
                 />
-              ) : null}
+                <Input.Search
+                  allowClear
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="搜索资源"
+                  style={{ flex: 1, minWidth: 160 }}
+                />
+                <Tooltip title={tab === "tools" ? "添加 Tool" : "添加 Prompt"}>
+                  <Button
+                    type="text"
+                    icon={<PlusOutlined />}
+                    aria-label={tab === "tools" ? "添加 Tool" : "添加 Prompt"}
+                    disabled={version?.status !== "DRAFT"}
+                    onClick={() => setDialog({ kind: tab === "tools" ? "tool" : "prompt" })}
+                  />
+                </Tooltip>
+              </Flex>
+            </Card>
 
-              <div className="asset-list">
-                {assets.map((item) => {
-                  const current: Asset =
-                    tab === "tools"
-                      ? { kind: "tool", value: item as McpTool }
-                      : { kind: "prompt", value: item as McpPrompt };
-                  const selected =
-                    asset?.kind === current.kind && asset.value.id === current.value.id;
-                  return (
-                    <button
-                      type="button"
-                      className={`asset-row${selected ? " is-active" : ""}`}
-                      key={item.id}
-                      onClick={() => setAsset(current)}
-                    >
-                      <span className={`asset-kind kind-${tab}`}>
-                        {tab === "tools" ? <CodeOutlined /> : <FileTextOutlined />}
-                      </span>
-                      <span className="asset-copy">
-                        <b>{item.name}</b>
-                        <small>
-                          {item.description ||
-                            (tab === "tools" ? "未填写工具说明" : "未填写提示词说明")}
-                        </small>
-                      </span>
-                      <span className="asset-meta">
-                        {tab === "tools"
-                          ? (item as McpTool).handler
-                          : `${(item as McpPrompt).arguments.length} 参数`}
-                      </span>
-                    </button>
-                  );
-                })}
-                {!selectedService ? (
-                  <EmptyAssetState icon={<ApiOutlined />} text="从左侧选择一个 MCP 服务" />
-                ) : null}
-                {selectedService && !version ? (
-                  <EmptyAssetState icon={<CodeOutlined />} text="该服务还没有可用版本" />
-                ) : null}
-                {selectedService && version && assets.length === 0 ? (
-                  <EmptyAssetState icon={<SearchOutlined />} text="没有匹配的资源" />
-                ) : null}
-              </div>
-            </div>
+            {selectedService && version ? (
+              <VersionLifecycle
+                key={version.id}
+                service={selectedService}
+                version={version}
+                versions={versions}
+                onSelect={(versionId) => {
+                  setSelectedVersionId(versionId);
+                  setAsset(null);
+                }}
+                onRefresh={refreshSelected}
+              />
+            ) : null}
 
-            <aside className="inspector-panel">
-              <div className="panel-heading">配置与预览</div>
+            <Card
+              size="small"
+              title="资源"
+              extra={<Tag>{assets.length}</Tag>}
+              styles={{ body: { padding: 8 } }}
+            >
+              {assets.length === 0 ? (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={
+                    !selectedService
+                      ? "从左侧选择一个 MCP 服务"
+                      : !version
+                        ? "该服务还没有可用版本"
+                        : "没有匹配的资源"
+                  }
+                />
+              ) : (
+                <List
+                  size="small"
+                  dataSource={assets}
+                  rowKey="id"
+                  renderItem={(item) => {
+                    const current: Asset =
+                      tab === "tools"
+                        ? { kind: "tool", value: item as McpTool }
+                        : { kind: "prompt", value: item as McpPrompt };
+                    const selected =
+                      asset?.kind === current.kind && asset.value.id === current.value.id;
+                    return (
+                      <List.Item
+                        onClick={() => setAsset(current)}
+                        style={{
+                          cursor: "pointer",
+                          borderRadius: 8,
+                          padding: "8px 12px",
+                          background: selected ? "#f0f5ff" : undefined,
+                        }}
+                      >
+                        <List.Item.Meta
+                          avatar={tab === "tools" ? <CodeOutlined /> : <FileTextOutlined />}
+                          title={<Typography.Text strong>{item.name}</Typography.Text>}
+                          description={
+                            item.description ||
+                            (tab === "tools" ? "未填写工具说明" : "未填写提示词说明")
+                          }
+                        />
+                        <Typography.Text type="secondary" code style={{ fontSize: 12 }}>
+                          {tab === "tools"
+                            ? (item as McpTool).handler
+                            : `${(item as McpPrompt).arguments.length} 参数`}
+                        </Typography.Text>
+                      </List.Item>
+                    );
+                  }}
+                />
+              )}
+            </Card>
+          </Flex>
+
+          <Card
+            size="small"
+            title="配置与预览"
+            style={{ width: 360, flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}
+          >
               {selectedService && version ? (
                 <VersionLimits
                   key={version.id}
@@ -520,85 +547,100 @@ export function McpWorkspace() {
                     )
                   }
                   onDelete={() => {
-                    if (!window.confirm(`删除 ${asset.value.name}？`)) return;
-                    void performServiceAction(async () => {
-                      if (asset.kind === "tool")
-                        await deleteTool(
-                          selectedService!.id,
-                          version!.id,
-                          asset.value.id,
-                          version!.revision,
-                        );
-                      else
-                        await deletePrompt(
-                          selectedService!.id,
-                          version!.id,
-                          asset.value.id,
-                          version!.revision,
-                        );
-                      setAsset(null);
-                      await refreshSelected();
+                    confirmAction({
+                      title: `删除“${asset.value.name}”？`,
+                      content: "该资源将从当前版本中移除，该操作不可恢复。",
+                      onOk: () =>
+                        void performServiceAction(async () => {
+                          if (asset.kind === "tool")
+                            await deleteTool(
+                              selectedService!.id,
+                              version!.id,
+                              asset.value.id,
+                              version!.revision,
+                            );
+                          else
+                            await deletePrompt(
+                              selectedService!.id,
+                              version!.id,
+                              asset.value.id,
+                              version!.revision,
+                            );
+                          setAsset(null);
+                          await refreshSelected();
+                          message.success("资源已删除");
+                        }),
                     });
                   }}
                 />
               ) : (
-                <div className="inspector-empty">
-                  <CheckCircleFilled />
-                  <p>选择一个 Tool 或 Prompt</p>
-                  <small>这里会显示参数结构和运行预览。</small>
-                </div>
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="选择一个 Tool 或 Prompt，这里会显示参数结构和运行预览。"
+                />
               )}
-            </aside>
-          </div>
-
-          {dialog?.kind === "service" ? (
-            <ServiceDialog
-              initial={dialog.initial}
-              onClose={() => setDialog(null)}
-              onSaved={refreshSelected}
-            />
-          ) : null}
-          {dialog?.kind === "tool" && selectedService && version ? (
-            <ToolDialog
-              service={selectedService}
-              version={version}
-              initial={dialog.initial}
-              onClose={() => setDialog(null)}
-              onSaved={refreshSelected}
-            />
-          ) : null}
-          {dialog?.kind === "environment" ? (
-            <EnvironmentDialog
-              key={dialog.service.id}
-              service={dialog.service}
-              onClose={() => setDialog(null)}
-              onSaved={refreshSelected}
-            />
-          ) : null}
-          {dialog?.kind === "prompt" && selectedService && version ? (
-            <PromptDialog
-              service={selectedService}
-              version={version}
-              initial={dialog.initial}
-              onClose={() => setDialog(null)}
-              onSaved={refreshSelected}
-            />
-          ) : null}
-        </>
+          </Card>
+        </Flex>
+      {dialog?.kind === "service" ? (
+        <ServiceDialog
+          initial={dialog.initial}
+          onClose={() => setDialog(null)}
+          onSaved={refreshSelected}
+        />
+      ) : null}
+      {dialog?.kind === "tool" && selectedService && version ? (
+        <ToolDialog
+          service={selectedService}
+          version={version}
+          initial={dialog.initial}
+          onClose={() => setDialog(null)}
+          onSaved={refreshSelected}
+        />
+      ) : null}
+      {dialog?.kind === "environment" ? (
+        <EnvironmentDialog
+          key={dialog.service.id}
+          service={dialog.service}
+          onClose={() => setDialog(null)}
+          onSaved={refreshSelected}
+        />
+      ) : null}
+      {dialog?.kind === "prompt" && selectedService && version ? (
+        <PromptDialog
+          service={selectedService}
+          version={version}
+          initial={dialog.initial}
+          onClose={() => setDialog(null)}
+          onSaved={refreshSelected}
+        />
+      ) : null}
+      </>
       ) : view === "marketplace" ? (
-        <MarketplaceView />
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 16 }}>
+          <MarketplaceView />
+        </div>
       ) : view === "builds" ? (
-        <BuildsView />
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 16 }}>
+          <BuildsView />
+        </div>
       ) : view === "clients" ? (
-        <ClientsView services={services} />
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 16 }}>
+          <ClientsView services={services} />
+        </div>
       ) : view === "sla" ? (
-        <SlaPanel services={services} />
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 16 }}>
+          <SlaPanel services={services} />
+        </div>
       ) : view === "sandbox" ? (
-        <DebugSandbox services={services} />
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 16 }}>
+          <DebugSandbox services={services} />
+        </div>
       ) : (
-        <AuditView />
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 16 }}>
+          <AuditView />
+        </div>
       )}
-    </section>
+    </StudioPage>
   );
 }
 
@@ -649,73 +691,94 @@ function VersionLifecycle({
     }
   };
 
+  const confirmReset = () =>
+    confirmAction({
+      title: "将该版本重置为草稿？",
+      content: "已构建的镜像引用会被清除，该操作不可恢复。",
+      onOk: () =>
+        void perform("reset", "版本已重置为草稿", async () => {
+          const result = await resetVersionToDraft(service.id, version.id, version.revision);
+          return result.id;
+        }),
+    });
+  const confirmFork = () =>
+    confirmAction({
+      title: `从 v${version.versionNumber} 创建新草稿版本？`,
+      content: "将在当前版本基础上创建新的草稿版本，原版本不受影响。",
+      okText: "创建草稿",
+      danger: false,
+      onOk: () =>
+        void perform("fork", "新草稿版本已创建", async () => {
+          const result = await forkDraftVersion(service.id, version.id);
+          return result.id;
+        }),
+    });
+  const confirmRollback = () =>
+    confirmAction({
+      title: `将 ${service.name} 回滚到 v${version.versionNumber}？`,
+      content: "Gateway 将切换到该版本，已发布流量会立即变更，请确认。",
+      okText: "回滚",
+      onOk: () =>
+        void perform("rollback", `已回滚到 v${version.versionNumber}`, async () => {
+          const result = await rollbackVersion(service.id, version.id, version.revision);
+          return result.version.id;
+        }),
+    });
+
   return (
-    <section className="version-lifecycle" aria-label="版本生命周期">
-      <div className="version-lifecycle-main">
-        <label className="version-picker">
-          <span>版本</span>
-          <Select
-            value={version.id}
-            aria-label="版本"
-            popupMatchSelectWidth={false}
-            onChange={onSelect}
-            options={[...versions]
-              .sort((left, right) => right.versionNumber - left.versionNumber)
-              .map((item) => ({
-                value: item.id,
-                label: `v${item.versionNumber} · ${item.status}`,
-              }))}
-          />
-        </label>
-        <span className={`version-status version-${version.status.toLowerCase()}`}>
-          {processing ? <LoadingOutlined spin /> : null}
-          {version.status}
-        </span>
-        <span className="version-revision">revision {version.revision}</span>
-        <code className="gateway-endpoint">/mcp/services/{service.slug}</code>
-        <div className="lifecycle-actions">
-          {packageRetryable ? (
-            <>
-              <input
-                ref={fileInput}
-                className="visually-hidden"
-                type="file"
-                accept=".zip,application/zip"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = "";
-                  if (!file) return;
-                  void perform("upload", "代码包已提交检查", async () => {
-                    const result = await uploadArtifact(
-                      service.id,
-                      version.id,
-                      version.revision,
-                      file,
-                    );
-                    return result.version.id;
-                  });
-                }}
-              />
-              <button
-                className="studio-button secondary compact"
-                type="button"
-                title="上传 ZIP 代码资源包"
-                disabled={busy !== null}
-                onClick={() => fileInput.current?.click()}
-              >
-                {busy === "upload" ? <LoadingOutlined spin /> : <UploadOutlined />} 上传代码包
-              </button>
-              <button
-                className="studio-button secondary compact"
-                type="button"
-                title={
-                  buildable
-                    ? "构建并检查 Tool 运行镜像"
-                    : processing
-                      ? "等待当前检查或构建任务完成"
-                      : "需要先完成代码包检查"
-                }
+    <Card size="small" title="版本生命周期" extra={<Tag color={versionTagColor(version.status)}>{version.status}</Tag>}>
+      <Flex gap={8} align="center" wrap>
+        <Typography.Text type="secondary">版本</Typography.Text>
+        <Select
+          value={version.id}
+          aria-label="版本"
+          popupMatchSelectWidth={false}
+          onChange={onSelect}
+          style={{ minWidth: 200 }}
+          options={[...versions]
+            .sort((left, right) => right.versionNumber - left.versionNumber)
+            .map((item) => ({
+              value: item.id,
+              label: `v${item.versionNumber} · ${item.status}`,
+            }))}
+        />
+        <Typography.Text type="secondary" code>
+          revision {version.revision}
+        </Typography.Text>
+        <Typography.Text code copyable>
+          /mcp/services/{service.slug}
+        </Typography.Text>
+        {processing ? <Tag icon={<LoadingOutlined spin />} color="warning">处理中</Tag> : null}
+      </Flex>
+      <Flex gap={8} wrap style={{ marginTop: 12 }}>
+        {packageRetryable ? (
+          <>
+            <input
+              ref={fileInput}
+              hidden
+              type="file"
+              accept=".zip,application/zip"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (!file) return;
+                void perform("upload", "代码包已提交检查", async () => {
+                  const result = await uploadArtifact(service.id, version.id, version.revision, file);
+                  return result.version.id;
+                });
+              }}
+            />
+            <Tooltip title="上传 ZIP 代码资源包">
+              <Button size="small" loading={busy === "upload"} disabled={busy !== null} icon={<UploadOutlined />} onClick={() => fileInput.current?.click()}>
+                上传代码包
+              </Button>
+            </Tooltip>
+            <Tooltip title={buildable ? "构建并检查 Tool 运行镜像" : processing ? "等待当前检查或构建任务完成" : "需要先完成代码包检查"}>
+              <Button
+                size="small"
+                loading={busy === "build"}
                 disabled={busy !== null || !buildable}
+                icon={<PlayCircleOutlined />}
                 onClick={() =>
                   void perform("build", "镜像构建任务已提交", async () => {
                     const result = await buildVersion(service.id, version.id, version.revision);
@@ -723,117 +786,61 @@ function VersionLifecycle({
                   })
                 }
               >
-                {busy === "build" ? <LoadingOutlined spin /> : <PlayCircleOutlined />} 构建镜像
-              </button>
-            </>
-          ) : null}
-          {version.status === "DRAFT" && version.tools.length === 0 ? (
-            <button
-              className="studio-button secondary compact"
-              type="button"
-              disabled={busy !== null}
-              onClick={() =>
-                void perform("validate", "Prompt 版本已通过校验", async () => {
-                  const result = await validateVersion(service.id, version.id, version.revision);
-                  return result.id;
-                })
-              }
-            >
-              {busy === "validate" ? <LoadingOutlined spin /> : <CheckCircleFilled />} 校验版本
-            </button>
-          ) : null}
-          {version.status === "READY" ? (
-            <>
-              <button
-                className="studio-button primary compact"
-                type="button"
-                disabled={busy !== null}
-                onClick={() =>
-                  void perform("publish", "版本已发布到 Gateway", async () => {
-                    const result = await publishVersion(service.id, version.id, version.revision);
-                    return result.version.id;
-                  })
-                }
-              >
-                {busy === "publish" ? <LoadingOutlined spin /> : <RocketOutlined />} 发布
-              </button>
-              <button
-                className="studio-button secondary compact"
-                type="button"
-                title="重置为草稿"
-                aria-label="重置为草稿"
-                disabled={busy !== null}
-                onClick={() => {
-                  if (!window.confirm("将该版本重置为草稿？已构建的镜像引用会被清除。")) return;
-                  void perform("reset", "版本已重置为草稿", async () => {
-                    const result = await resetVersionToDraft(
-                      service.id,
-                      version.id,
-                      version.revision,
-                    );
-                    return result.id;
-                  });
-                }}
-              >
-                {busy === "reset" ? <LoadingOutlined spin /> : <UndoOutlined />} 重置
-              </button>
-            </>
-          ) : null}
-          {version.status === "PUBLISHED" || version.status === "SUPERSEDED" ? (
-            <button
-              className="studio-button secondary compact"
-              type="button"
-              disabled={busy !== null}
-              onClick={() => {
-                if (!window.confirm(`从 v${version.versionNumber} 创建新草稿版本？`)) return;
-                void perform("fork", "新草稿版本已创建", async () => {
-                  const result = await forkDraftVersion(service.id, version.id);
-                  return result.id;
-                });
-              }}
-            >
-              {busy === "fork" ? <LoadingOutlined spin /> : <CopyOutlined />} 创建草稿
-            </button>
-          ) : null}
-          {service.status === "ACTIVE" &&
-          service.currentVersionId !== version.id &&
-          (version.status === "READY" || version.status === "SUPERSEDED") ? (
-            <button
-              className="studio-button secondary compact"
-              type="button"
-              title={`回滚到 v${version.versionNumber}`}
-              aria-label={`回滚到 v${version.versionNumber}`}
-              disabled={busy !== null}
-              onClick={() => {
-                if (!window.confirm(`将 ${service.name} 回滚到 v${version.versionNumber}？`))
-                  return;
-                void perform("rollback", `已回滚到 v${version.versionNumber}`, async () => {
-                  const result = await rollbackVersion(service.id, version.id, version.revision);
-                  return result.version.id;
-                });
-              }}
-            >
-              {busy === "rollback" ? <LoadingOutlined spin /> : <UndoOutlined />} 回滚
-            </button>
-          ) : null}
-        </div>
-      </div>
-      <div className="version-artifacts">
-        <span title={version.artifactDigest ?? undefined}>
-          代码包 {version.artifactSize === null ? "未上传" : formatBytes(version.artifactSize)}
-        </span>
-        <span title={version.entry ?? undefined}>入口 {version.entry ?? "待检查"}</span>
-        <span title={version.imageDigest ?? undefined}>
-          镜像 {version.imageDigest ? shortDigest(version.imageDigest) : "未构建"}
-        </span>
-        {notice ? <strong className="lifecycle-notice">{notice}</strong> : null}
-        {error ? (
-          <strong className="lifecycle-error" role="alert">
-            {error}
-          </strong>
+                构建镜像
+              </Button>
+            </Tooltip>
+          </>
         ) : null}
-      </div>
-    </section>
+        {version.status === "DRAFT" && version.tools.length === 0 ? (
+          <Button size="small" loading={busy === "validate"} disabled={busy !== null} icon={<CheckCircleFilled />} onClick={() => void perform("validate", "Prompt 版本已通过校验", async () => {
+            const result = await validateVersion(service.id, version.id, version.revision);
+            return result.id;
+          })}>
+            校验版本
+          </Button>
+        ) : null}
+        {version.status === "READY" ? (
+          <>
+            <Button type="primary" size="small" loading={busy === "publish"} disabled={busy !== null} icon={<RocketOutlined />} onClick={() => void perform("publish", "版本已发布到 Gateway", async () => {
+              const result = await publishVersion(service.id, version.id, version.revision);
+              return result.version.id;
+            })}>
+              发布
+            </Button>
+            <Tooltip title="重置为草稿">
+              <Button size="small" loading={busy === "reset"} disabled={busy !== null} icon={<UndoOutlined />} aria-label="重置为草稿" onClick={confirmReset}>
+                重置
+              </Button>
+            </Tooltip>
+          </>
+        ) : null}
+        {version.status === "PUBLISHED" || version.status === "SUPERSEDED" ? (
+          <Button size="small" loading={busy === "fork"} disabled={busy !== null} icon={<CopyOutlined />} onClick={confirmFork}>
+            创建草稿
+          </Button>
+        ) : null}
+        {service.status === "ACTIVE" && service.currentVersionId !== version.id && (version.status === "READY" || version.status === "SUPERSEDED") ? (
+          <Tooltip title={`回滚到 v${version.versionNumber}`}>
+            <Button size="small" loading={busy === "rollback"} disabled={busy !== null} icon={<UndoOutlined />} aria-label={`回滚到 v${version.versionNumber}`} onClick={confirmRollback}>
+              回滚
+            </Button>
+          </Tooltip>
+        ) : null}
+      </Flex>
+      <Flex gap={16} wrap style={{ marginTop: 12 }}>
+        <Typography.Text type="secondary" title={version.artifactDigest ?? undefined}>
+          代码包 {version.artifactSize === null ? "未上传" : formatBytes(version.artifactSize)}
+        </Typography.Text>
+        <Typography.Text type="secondary" title={version.entry ?? undefined}>
+          入口 {version.entry ?? "待检查"}
+        </Typography.Text>
+        <Typography.Text type="secondary" title={version.imageDigest ?? undefined}>
+          镜像 {version.imageDigest ? shortDigest(version.imageDigest) : "未构建"}
+        </Typography.Text>
+      </Flex>
+      {notice ? <Alert type="success" showIcon message={notice} style={{ marginTop: 12 }} closable /> : null}
+      {error ? <Alert type="error" showIcon message={error} role="alert" style={{ marginTop: 12 }} /> : null}
+    </Card>
   );
 }
 
@@ -847,14 +854,7 @@ function shortDigest(value: string): string {
   return value.length > 20 ? `${value.slice(0, 16)}...` : value;
 }
 
-function EmptyAssetState({ icon, text }: { icon: React.ReactNode; text: string }) {
-  return (
-    <div className="asset-empty">
-      {icon}
-      <p>{text}</p>
-    </div>
-  );
-}
+
 
 function AssetInspector({
   service,
@@ -945,46 +945,30 @@ function AssetInspector({
           : null;
 
   return (
-    <div className="inspector-content">
-      <div className="inspector-title-row">
-        <span className={`asset-kind kind-${asset.kind === "tool" ? "tools" : "prompts"}`}>
-          {asset.kind === "tool" ? <CodeOutlined /> : <FileTextOutlined />}
-        </span>
-        <div>
-          <h2>{asset.value.name}</h2>
-          <p>{asset.value.description || "暂无说明"}</p>
-        </div>
+    <Flex vertical gap={12}>
+      <Flex gap={8} align="center">
+        {asset.kind === "tool" ? <CodeOutlined /> : <FileTextOutlined />}
+        <Flex vertical gap={0} style={{ flex: 1, minWidth: 0 }}>
+          <Typography.Text strong>{asset.value.name}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {asset.value.description || "暂无说明"}
+          </Typography.Text>
+        </Flex>
         {version.status === "DRAFT" ? (
-          <span className="inspector-title-actions">
-            <button
-              className="icon-command"
-              type="button"
-              title="编辑"
-              aria-label="编辑"
-              onClick={onEdit}
-            >
-              <EditOutlined />
-            </button>
-            <button
-              className="icon-command danger"
-              type="button"
-              title="删除"
-              aria-label="删除"
-              onClick={onDelete}
-            >
-              <DeleteOutlined />
-            </button>
-          </span>
+          <Flex gap={4}>
+            <Tooltip title="编辑">
+              <Button type="text" size="small" icon={<EditOutlined />} aria-label="编辑" onClick={onEdit} />
+            </Tooltip>
+            <Tooltip title="删除">
+              <Button type="text" size="small" danger icon={<DeleteOutlined />} aria-label="删除" onClick={onDelete} />
+            </Tooltip>
+          </Flex>
         ) : null}
-      </div>
+      </Flex>
       {asset.kind === "tool" ? (
         <>
           <CodeBlock value={JSON.stringify(asset.value.inputSchema, null, 2)} />
-          <label className="studio-field gateway-key-field">
-            <span>
-              Gateway API Key
-              <small>Bearer</small>
-            </span>
+          <Form.Item label="Gateway API Key" extra="Bearer" style={{ marginBottom: 0 }}>
             <Input.Password
               autoComplete="off"
               spellCheck={false}
@@ -992,49 +976,42 @@ function AssetInspector({
               onChange={(event) => setApiKey(event.target.value)}
               placeholder="mcp_..."
             />
-          </label>
-          {gatewayState ? <p className="gateway-call-state">{gatewayState}</p> : null}
+          </Form.Item>
+          {gatewayState ? (
+            <Alert type="warning" showIcon message={gatewayState} />
+          ) : null}
         </>
       ) : null}
-      <div className="inspector-section-title">输入参数</div>
-      {properties.length === 0 ? <p className="muted-copy">该资源不需要参数。</p> : null}
+      <Typography.Text strong>输入参数</Typography.Text>
+      {properties.length === 0 ? (
+        <Typography.Text type="secondary">该资源不需要参数。</Typography.Text>
+      ) : null}
       {properties.map(([name, schema]) => (
-        <label className="studio-field" key={name}>
-          <span>
-            {name}
-            <small>{schema.type ?? "string"}</small>
-          </span>
+        <Form.Item key={name} label={`${name} · ${schema.type ?? "string"}`} style={{ marginBottom: 8 }}>
           <Input
             value={values[name] ?? ""}
             autoComplete="off"
             onChange={(event) => setValues({ ...values, [name]: event.target.value })}
             placeholder={schema.description ?? "输入测试值"}
           />
-        </label>
+        </Form.Item>
       ))}
-      <button
-        className="studio-button primary full-width"
-        type="button"
-        disabled={
-          busy || (asset.kind === "tool" && (!currentGatewayVersion || apiKey.trim().length === 0))
-        }
+      <Button
+        type="primary"
+        block
+        loading={busy}
+        disabled={asset.kind === "tool" && (!currentGatewayVersion || apiKey.trim().length === 0)}
         onClick={() => void runPreview()}
       >
-        {busy ? "执行中..." : asset.kind === "prompt" ? "渲染 Prompt" : "调用 Tool"}
-      </button>
-      {error ? <p className="field-message error">{error}</p> : null}
+        {asset.kind === "prompt" ? "渲染 Prompt" : "调用 Tool"}
+      </Button>
+      {error ? <Alert type="error" showIcon message={error} /> : null}
       {preview ? (
-        <div className={toolResultError ? "gateway-result is-error" : "gateway-result"}>
-          {asset.kind === "tool" ? (
-            <div className="gateway-result-heading">
-              <span>CallToolResult</span>
-              <strong>{toolResultError ? "执行错误" : "执行成功"}</strong>
-            </div>
-          ) : null}
+        <Card size="small" title={asset.kind === "tool" ? (toolResultError ? "CallToolResult · 执行错误" : "CallToolResult · 执行成功") : "预览结果"}>
           <CodeBlock value={preview} />
-        </div>
+        </Card>
       ) : null}
-    </div>
+    </Flex>
   );
 }
 
@@ -1060,7 +1037,11 @@ function coerceValue(value: string, type?: string): unknown {
 }
 
 function CodeBlock({ value }: { value: string }) {
-  return <pre className="studio-code">{value}</pre>;
+  return (
+    <Typography.Paragraph code copyable style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>
+      {value}
+    </Typography.Paragraph>
+  );
 }
 
 function ServiceDialog({
@@ -1074,14 +1055,13 @@ function ServiceDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
+  const submit = async (values: { name: string; slug: string }) => {
     setBusy(true);
+    setError(null);
     try {
       const value = {
-        name: String(form.get("name") ?? "").trim(),
-        slug: String(form.get("slug") ?? "").trim(),
+        name: String(values.name ?? "").trim(),
+        slug: String(values.slug ?? "").trim(),
       };
       if (initial) await updateService(initial.id, initial.revision, value);
       else await createService(value);
@@ -1095,31 +1075,16 @@ function ServiceDialog({
   };
   return (
     <Dialog title={initial ? "编辑 MCP 服务" : "新建 MCP 服务"} onClose={onClose}>
-      <form className="dialog-form" onSubmit={(event) => void submit(event)}>
-        <label className="studio-field">
-          <span>服务名称</span>
-          <Input
-            required
-            name="name"
-            autoComplete="off"
-            defaultValue={initial?.name}
-            placeholder="例如：文档分析"
-          />
-        </label>
-        <label className="studio-field">
-          <span>Slug</span>
-          <Input
-            required
-            name="slug"
-            autoComplete="off"
-            defaultValue={initial?.slug}
-            pattern="[a-z][a-z0-9-]*"
-            placeholder="document-analysis"
-          />
-        </label>
-        {error ? <p className="field-message error">{error}</p> : null}
+      <Form layout="vertical" initialValues={{ name: initial?.name ?? "", slug: initial?.slug ?? "" }} onFinish={(values) => void submit(values as { name: string; slug: string })}>
+        <Form.Item label="服务名称" name="name" rules={[{ required: true, message: "请输入服务名称" }]}>
+          <Input autoComplete="off" placeholder="例如：文档分析" />
+        </Form.Item>
+        <Form.Item label="Slug" name="slug" rules={[{ required: true, message: "请输入 Slug" }, { pattern: /^[a-z][a-z0-9-]*$/, message: "Slug 须为小写字母、数字或连字符" }]}>
+          <Input autoComplete="off" placeholder="document-analysis" />
+        </Form.Item>
+        {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} /> : null}
         <DialogActions busy={busy} onClose={onClose} />
-      </form>
+      </Form>
     </Dialog>
   );
 }
@@ -1174,8 +1139,7 @@ function EnvironmentDialog({
     };
   }, [service.id, retry]);
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const submitEnv = async () => {
     if (revision === null || busy) return;
     setBusy(true);
     setError(null);
@@ -1202,31 +1166,27 @@ function EnvironmentDialog({
 
   return (
     <Dialog title="配置环境变量" onClose={onClose}>
-      <form className="dialog-form" onSubmit={(event) => void submit(event)}>
-        <div className="mcp-env-heading">
-          <b>{service.name}</b>
-          <span className="count-badge">{rows.length} / 64</span>
-        </div>
-        <p className="mcp-env-note">
-          服务下的所有 Tool
-          共享这些变量，保存后下一次调用生效。已保存的值不会回显，未修改的值会保留。
-        </p>
-        {loading ? <p className="field-message">正在加载环境变量...</p> : null}
+      <Form layout="vertical" onFinish={() => void submitEnv()}>
+        <Flex gap={8} align="center" justify="space-between">
+          <Typography.Text strong>{service.name}</Typography.Text>
+          <Tag>{rows.length} / 64</Tag>
+        </Flex>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          服务下的所有 Tool 共享这些变量，保存后下一次调用生效。已保存的值不会回显，未修改的值会保留。
+        </Typography.Paragraph>
+        {loading ? <Alert type="info" showIcon message="正在加载环境变量..." /> : null}
         {!loading && revision !== null ? (
           <>
-            <div className="mcp-env-rows">
-              {rows.map((row, index) => (
-                <div className="mcp-env-row" key={row.id}>
-                  <label className="studio-field">
-                    <span>变量名</span>
+            {rows.map((row, index) => (
+              <Card key={row.id} size="small" style={{ marginBottom: 8 }}>
+                <Flex gap={8} align="flex-start">
+                  <Form.Item label={`变量名 ${index + 1}`} required style={{ flex: 1, marginBottom: 0 }}>
                     <Input
-                      required
                       disabled={busy || row.saved}
                       aria-label={`变量名 ${index + 1}`}
                       autoComplete="off"
                       spellCheck={false}
                       maxLength={128}
-                      pattern="[A-Za-z_][A-Za-z0-9_]*"
                       placeholder="TAVILY_API_KEY"
                       value={row.name}
                       onChange={(event) =>
@@ -1237,9 +1197,8 @@ function EnvironmentDialog({
                         )
                       }
                     />
-                  </label>
-                  <label className="studio-field">
-                    <span>变量值 {row.value === null ? <small>已保存</small> : null}</span>
+                  </Form.Item>
+                  <Form.Item label={`变量值 ${index + 1}${row.value === null ? " · 已保存" : ""}`} style={{ flex: 1, marginBottom: 0 }}>
                     <Input.Password
                       disabled={busy}
                       aria-label={`变量值 ${index + 1}`}
@@ -1256,54 +1215,44 @@ function EnvironmentDialog({
                         )
                       }
                     />
-                  </label>
-                  <button
-                    className="icon-command danger"
-                    type="button"
-                    aria-label={`删除变量 ${row.name || index + 1}`}
-                    title="删除变量"
-                    disabled={busy}
-                    onClick={() =>
-                      setRows((current) => current.filter((item) => item.id !== row.id))
-                    }
-                  >
-                    <DeleteOutlined />
-                  </button>
-                </div>
-              ))}
-              {rows.length === 0 ? <div className="variable-empty">尚未配置环境变量</div> : null}
-            </div>
-            <button
-              className="studio-button secondary compact"
-              type="button"
+                  </Form.Item>
+                  <Tooltip title="删除变量">
+                    <Button
+                      type="text"
+                      danger
+                      size="small"
+                      icon={<DeleteOutlined />}
+                      aria-label={`删除变量 ${row.name || index + 1}`}
+                      disabled={busy}
+                      style={{ marginTop: 30 }}
+                      onClick={() => setRows((current) => current.filter((item) => item.id !== row.id))}
+                    />
+                  </Tooltip>
+                </Flex>
+              </Card>
+            ))}
+            {rows.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未配置环境变量" />
+            ) : null}
+            <Button
+              size="small"
+              icon={<PlusOutlined />}
               disabled={busy || rows.length >= 64}
-              onClick={() =>
-                setRows((current) => [
-                  ...current,
-                  { id: nextRowId.current++, name: "", value: "", saved: false },
-                ])
-              }
+              onClick={() => setRows((current) => [...current, { id: nextRowId.current++, name: "", value: "", saved: false }])}
+              style={{ marginTop: rows.length ? 8 : 0 }}
             >
-              <PlusOutlined /> 添加变量
-            </button>
+              添加变量
+            </Button>
           </>
         ) : null}
-        {error ? (
-          <p className="field-message error" role="alert">
-            {error}
-          </p>
-        ) : null}
+        {error ? <Alert type="error" showIcon message={error} role="alert" style={{ marginTop: 12 }} /> : null}
         {!loading && revision === null ? (
-          <button
-            className="studio-button secondary compact"
-            type="button"
-            onClick={() => setRetry((current) => current + 1)}
-          >
-            <ReloadOutlined /> 重新加载
-          </button>
+          <Button size="small" icon={<ReloadOutlined />} onClick={() => setRetry((current) => current + 1)} style={{ marginTop: 12 }}>
+            重新加载
+          </Button>
         ) : null}
         <DialogActions busy={busy} disabled={loading || revision === null} onClose={onClose} />
-      </form>
+      </Form>
     </Dialog>
   );
 }
@@ -1323,16 +1272,15 @@ function ToolDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
+  const submitTool = async (values: { name: string; handler: string; description?: string; schema: string }) => {
     setBusy(true);
+    setError(null);
     try {
-      const schema = JSON.parse(String(form.get("schema"))) as Record<string, unknown>;
+      const schema = JSON.parse(String(values.schema)) as Record<string, unknown>;
       const value = {
-        name: String(form.get("name") ?? "").trim(),
-        handler: String(form.get("handler") ?? "").trim(),
-        description: String(form.get("description") ?? "").trim(),
+        name: String(values.name ?? "").trim(),
+        handler: String(values.handler ?? "").trim(),
+        description: String(values.description ?? "").trim(),
         inputSchema: schema,
       };
       if (initial) await updateTool(service.id, version.id, initial.id, version.revision, value);
@@ -1347,41 +1295,37 @@ function ToolDialog({
   };
   return (
     <Dialog title={initial ? "编辑 Tool" : "添加 Tool"} onClose={onClose}>
-      <form className="dialog-form" onSubmit={(event) => void submit(event)}>
-        <div className="field-grid">
-          <label className="studio-field">
-            <span>Tool 名称</span>
-            <Input required name="name" autoComplete="off" defaultValue={initial?.name} />
-          </label>
-          <label className="studio-field">
-            <span>Handler 导出名</span>
-            <Input required name="handler" autoComplete="off" defaultValue={initial?.handler} />
-          </label>
-        </div>
-        <label className="studio-field">
-          <span>说明</span>
-          <Input name="description" autoComplete="off" defaultValue={initial?.description} />
-        </label>
-        <label className="studio-field">
-          <span>输入 Schema</span>
-          <Input.TextArea
-            name="schema"
-            autoComplete="off"
-            rows={9}
-            defaultValue={JSON.stringify(
-              initial?.inputSchema ?? {
-                type: "object",
-                properties: {},
-                additionalProperties: false,
-              },
-              null,
-              2,
-            )}
-          />
-        </label>
-        {error ? <p className="field-message error">{error}</p> : null}
+      <Form
+        layout="vertical"
+        initialValues={{
+          name: initial?.name ?? "",
+          handler: initial?.handler ?? "",
+          description: initial?.description ?? "",
+          schema: JSON.stringify(
+            initial?.inputSchema ?? { type: "object", properties: {}, additionalProperties: false },
+            null,
+            2,
+          ),
+        }}
+        onFinish={(values) => void submitTool(values as { name: string; handler: string; description?: string; schema: string })}
+      >
+        <Flex gap={8}>
+          <Form.Item label="Tool 名称" name="name" rules={[{ required: true, message: "请输入 Tool 名称" }]} style={{ flex: 1 }}>
+            <Input autoComplete="off" />
+          </Form.Item>
+          <Form.Item label="Handler 导出名" name="handler" rules={[{ required: true, message: "请输入 Handler" }]} style={{ flex: 1 }}>
+            <Input autoComplete="off" />
+          </Form.Item>
+        </Flex>
+        <Form.Item label="说明" name="description" style={{ marginBottom: 12 }}>
+          <Input autoComplete="off" />
+        </Form.Item>
+        <Form.Item label="输入 Schema" name="schema" rules={[{ required: true, message: "请输入 Schema" }]} style={{ marginBottom: 12 }}>
+          <Input.TextArea autoComplete="off" rows={9} />
+        </Form.Item>
+        {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} /> : null}
         <DialogActions busy={busy} onClose={onClose} />
-      </form>
+      </Form>
     </Dialog>
   );
 }
@@ -1401,18 +1345,16 @@ function PromptDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
+  const submitPrompt = async (values: { name: string; title?: string; description?: string; args: string; messages: string }) => {
     setBusy(true);
     setError(null);
     try {
       const value = {
-        name: String(form.get("name") ?? "").trim(),
-        title: String(form.get("title") ?? "").trim() || undefined,
-        description: String(form.get("description") ?? "").trim() || undefined,
-        arguments: JSON.parse(String(form.get("arguments"))) as McpPrompt["arguments"],
-        messages: JSON.parse(String(form.get("messages"))) as McpPrompt["messages"],
+        name: String(values.name ?? "").trim(),
+        title: String(values.title ?? "").trim() || undefined,
+        description: String(values.description ?? "").trim() || undefined,
+        arguments: JSON.parse(String(values.args)) as McpPrompt["arguments"],
+        messages: JSON.parse(String(values.messages)) as McpPrompt["messages"],
       };
       if (initial) await updatePrompt(service.id, version.id, initial.id, version.revision, value);
       else await addPrompt(service.id, version.id, version.revision, value);
@@ -1426,50 +1368,37 @@ function PromptDialog({
   };
   return (
     <Dialog title={initial ? "编辑 Prompt" : "添加 Prompt"} onClose={onClose}>
-      <form className="dialog-form" onSubmit={(event) => void submit(event)}>
-        <div className="field-grid">
-          <label className="studio-field">
-            <span>Prompt 名称</span>
-            <Input required name="name" autoComplete="off" defaultValue={initial?.name} />
-          </label>
-          <label className="studio-field">
-            <span>标题</span>
-            <Input name="title" autoComplete="off" defaultValue={initial?.title} />
-          </label>
-        </div>
-        <label className="studio-field">
-          <span>说明</span>
-          <Input name="description" autoComplete="off" defaultValue={initial?.description} />
-        </label>
-        <label className="studio-field">
-          <span>参数定义</span>
-          <Input.TextArea
-            name="arguments"
-            autoComplete="off"
-            rows={6}
-            defaultValue={JSON.stringify(
-              initial?.arguments ?? [{ name: "input", required: true }],
-              null,
-              2,
-            )}
-          />
-        </label>
-        <label className="studio-field">
-          <span>消息模板</span>
-          <Input.TextArea
-            name="messages"
-            autoComplete="off"
-            rows={9}
-            defaultValue={JSON.stringify(
-              initial?.messages ?? [{ role: "user", content: { type: "text", text: "{{input}}" } }],
-              null,
-              2,
-            )}
-          />
-        </label>
-        {error ? <p className="field-message error">{error}</p> : null}
+      <Form
+        layout="vertical"
+        initialValues={{
+          name: initial?.name ?? "",
+          title: initial?.title ?? "",
+          description: initial?.description ?? "",
+          args: JSON.stringify(initial?.arguments ?? [{ name: "input", required: true }], null, 2),
+          messages: JSON.stringify(initial?.messages ?? [{ role: "user", content: { type: "text", text: "{{input}}" } }], null, 2),
+        }}
+        onFinish={(values) => void submitPrompt(values as { name: string; title?: string; description?: string; args: string; messages: string })}
+      >
+        <Flex gap={8}>
+          <Form.Item label="Prompt 名称" name="name" rules={[{ required: true, message: "请输入 Prompt 名称" }]} style={{ flex: 1 }}>
+            <Input autoComplete="off" />
+          </Form.Item>
+          <Form.Item label="标题" name="title" style={{ flex: 1 }}>
+            <Input autoComplete="off" />
+          </Form.Item>
+        </Flex>
+        <Form.Item label="说明" name="description" style={{ marginBottom: 12 }}>
+          <Input autoComplete="off" />
+        </Form.Item>
+        <Form.Item label="参数定义" name="args" rules={[{ required: true, message: "请输入参数定义" }]} style={{ marginBottom: 12 }}>
+          <Input.TextArea autoComplete="off" rows={6} />
+        </Form.Item>
+        <Form.Item label="消息模板" name="messages" rules={[{ required: true, message: "请输入消息模板" }]} style={{ marginBottom: 12 }}>
+          <Input.TextArea autoComplete="off" rows={9} />
+        </Form.Item>
+        {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} /> : null}
         <DialogActions busy={busy} onClose={onClose} />
-      </form>
+      </Form>
     </Dialog>
   );
 }
@@ -1484,23 +1413,9 @@ function Dialog({
   onClose: () => void;
 }) {
   return (
-    <div className="studio-dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="studio-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header>
-          <h2>{title}</h2>
-          <button type="button" aria-label="关闭" onClick={onClose}>
-            ×
-          </button>
-        </header>
-        {children}
-      </section>
-    </div>
+    <Modal open centered title={title} onCancel={onClose} footer={null} destroyOnClose>
+      {children}
+    </Modal>
   );
 }
 
@@ -1514,13 +1429,11 @@ function DialogActions({
   onClose: () => void;
 }) {
   return (
-    <div className="dialog-actions">
-      <button className="studio-button secondary" type="button" onClick={onClose}>
-        取消
-      </button>
-      <button className="studio-button primary" type="submit" disabled={busy || disabled}>
-        {busy ? "保存中..." : "保存"}
-      </button>
-    </div>
+    <Flex gap={8} justify="flex-end" style={{ marginTop: 16 }}>
+      <Button onClick={onClose}>取消</Button>
+      <Button type="primary" htmlType="submit" loading={busy} disabled={busy || disabled}>
+        保存
+      </Button>
+    </Flex>
   );
 }

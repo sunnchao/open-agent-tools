@@ -8,7 +8,7 @@ import {
 import { variableNodes, renameVariable, repairVariableReference } from "./variables.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Badge, Button, Empty, Flex, Input, Segmented, Typography } from "antd";
+import { Alert, Badge, Button, Empty, Flex, Input, Segmented, Spin, Tag, Tooltip, Typography } from "antd";
 import "./workflow-panels.css";
 import {
   addEdge,
@@ -1267,17 +1267,19 @@ function WorkflowCanvas({
   };
 
   if (workspaceLoading && !workflow) {
-    return <div className="workflow-screen-state">正在加载工作流...</div>;
+    return (
+      <Flex justify="center" style={{ padding: 64 }}>
+        <Spin tip="正在加载工作流..." />
+      </Flex>
+    );
   }
 
   if (!workflow) {
     return (
-      <div className="workflow-screen-state is-error">
-        <p>{workspaceError ?? "工作流不存在"}</p>
-        <button className="studio-button secondary" type="button" onClick={onBack}>
-          返回工作流列表
-        </button>
-      </div>
+      <Flex vertical gap={12} align="center" style={{ padding: 64 }}>
+        <Alert type="error" showIcon message={workspaceError ?? "工作流不存在"} />
+        <Button onClick={onBack}>返回工作流列表</Button>
+      </Flex>
     );
   }
 
@@ -1289,15 +1291,14 @@ function WorkflowCanvas({
     <section className="workflow-workspace">
       <header className="workflow-toolbar">
         <div className="workflow-title">
-          <button
-            className="workflow-editor-back"
-            type="button"
-            title="返回工作流列表"
-            aria-label="返回工作流列表"
-            onClick={() => void persistDraft().then((revision) => revision !== null && onBack())}
-          >
-            <PanelLeftCloseOutlined />
-          </button>
+          <Tooltip title="返回工作流列表">
+            <Button
+              type="text"
+              icon={<PanelLeftCloseOutlined />}
+              aria-label="返回工作流列表"
+              onClick={() => void persistDraft().then((revision) => revision !== null && onBack())}
+            />
+          </Tooltip>
           <ApartmentMark />
           <div>
             <span>
@@ -1306,49 +1307,44 @@ function WorkflowCanvas({
                 {liveVersion ? `LIVE v${liveVersion.versionNumber}` : "DRAFT"}
               </small>
             </span>
-            <label>
-              <input
-                value={name}
-                onChange={(event) => {
-                  setName(event.target.value);
-                  markEdited();
-                }}
-                aria-label="工作流名称"
-              />
-              <EditOutlined />
-            </label>
+            <Input
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value);
+                markEdited();
+              }}
+              aria-label="工作流名称"
+              suffix={<EditOutlined />}
+              style={{ maxWidth: 280 }}
+            />
           </div>
         </div>
         <div className="workflow-actions">
           {workspaceError ? (
-            <span className="workflow-toolbar-error" title={workspaceError}>
+            <Typography.Text type="danger" title={workspaceError}>
               {workspaceError}
-            </span>
+            </Typography.Text>
           ) : null}
           {publishNotice ? (
-            <span className="save-state" role="status">
+            <Typography.Text type="secondary" role="status">
               {publishNotice}
-            </span>
+            </Typography.Text>
           ) : null}
-          <div className="workflow-history-actions" aria-label="编辑历史">
-            <button type="button" title="撤销" aria-label="撤销" disabled={!canUndo} onClick={undo}>
-              <UndoOutlined />
-            </button>
-            <button type="button" title="重做" aria-label="重做" disabled={!canRedo} onClick={redo}>
-              <RedoOutlined />
-            </button>
-          </div>
-          <button
-            className="studio-button secondary add-node"
-            type="button"
-            onClick={openNodePicker}
-          >
-            <PlusOutlined /> <span>添加节点</span>
-          </button>
+          <Flex gap={4} aria-label="编辑历史">
+            <Tooltip title="撤销">
+              <Button type="text" icon={<UndoOutlined />} aria-label="撤销" disabled={!canUndo} onClick={undo} />
+            </Tooltip>
+            <Tooltip title="重做">
+              <Button type="text" icon={<RedoOutlined />} aria-label="重做" disabled={!canRedo} onClick={redo} />
+            </Tooltip>
+          </Flex>
+          <Button icon={<PlusOutlined />} onClick={openNodePicker}>
+            添加节点
+          </Button>
           <div className="workflow-validation-wrap">
-            <button
-              className={`workflow-validation${validationIssues.length > 0 ? " has-issues" : " is-valid"}`}
-              type="button"
+            <Button
+              danger={validationIssues.length > 0}
+              icon={validationIssues.length > 0 ? <CloseCircleFilled /> : <CheckCircleFilled />}
               aria-expanded={showIssues}
               aria-label={
                 validationIssues.length > 0
@@ -1357,11 +1353,8 @@ function WorkflowCanvas({
               }
               onClick={() => setShowIssues((visible) => !visible)}
             >
-              {validationIssues.length > 0 ? <CloseCircleFilled /> : <CheckCircleFilled />}
-              <span>
-                {validationIssues.length > 0 ? `${validationIssues.length} 个问题` : "结构正常"}
-              </span>
-            </button>
+              {validationIssues.length > 0 ? `${validationIssues.length} 个问题` : "结构正常"}
+            </Button>
             {showIssues ? (
               <div
                 className="workflow-validation-menu"
@@ -1380,23 +1373,19 @@ function WorkflowCanvas({
                   <ol>
                     {validationIssues.map((issue, index) => (
                       <li key={`${issue.code}-${issue.nodeId ?? "workflow"}-${index}`}>
-                        <button type="button" onClick={() => focusIssue(issue)}>
-                          <CloseCircleFilled />
-                          <span>
-                            <b>{issue.message}</b>
-                            <small>{issue.nodeId ?? "WORKFLOW"}</small>
-                          </span>
-                        </button>
+                        <Button type="text" size="small" icon={<CloseCircleFilled />} onClick={() => focusIssue(issue)}>
+                          {issue.message} · {issue.nodeId ?? "WORKFLOW"}
+                        </Button>
                         {issue.reference &&
                           issue.suggestions?.map((suggestion) => (
-                            <button
+                            <Button
                               key={suggestion}
-                              type="button"
-                              className="variable-text-button"
+                              type="link"
+                              size="small"
                               onClick={() => repairReference(issue, suggestion)}
                             >
                               改为 {suggestion}
-                            </button>
+                            </Button>
                           ))}
                       </li>
                     ))}
@@ -1405,113 +1394,74 @@ function WorkflowCanvas({
               </div>
             ) : null}
           </div>
-          <span className={`save-state is-${saveState}`}>
-            {saveState === "error"
-              ? "保存失败"
-              : saveState === "saving" || dirty
-                ? "自动保存中"
-                : "已自动保存"}
-          </span>
-          <button
-            className="studio-button secondary"
-            type="button"
-            onClick={() => (validationIssues.length ? setConfirmExport(true) : exportGraph())}
-          >
+          <Typography.Text type={saveState === "error" ? "danger" : "secondary"}>
+            {saveState === "error" ? "保存失败" : saveState === "saving" || dirty ? "自动保存中" : "已自动保存"}
+          </Typography.Text>
+          <Button onClick={() => (validationIssues.length ? setConfirmExport(true) : exportGraph())}>
             导出 JSON
-          </button>
-          <button
-            className="studio-button secondary"
-            type="button"
-            disabled={running}
-            onClick={arrangeGraph}
-          >
+          </Button>
+          <Button disabled={running} onClick={arrangeGraph}>
             整理布局
-          </button>
-          <details className="workflow-clipboard-menu">
-            <summary>剪贴板</summary>
-            <div>
-              <button
-                type="button"
-                disabled={!selectedIds.length}
-                onClick={() => void copySelection()}
-              >
-                复制节点 ⌘C / Ctrl+C
-              </button>
-              <button type="button" disabled={running} onClick={() => void pasteSelection()}>
-                粘贴节点 ⌘V / Ctrl+V
-              </button>
-            </div>
-          </details>
-          <button className="studio-button secondary save-button" type="button" onClick={save}>
-            <SaveOutlined /> <span>保存</span>
-          </button>
-          <button
-            className="studio-button secondary"
-            type="button"
-            title="API 与版本"
-            onClick={() =>
-              void persistDraft().then((revision) => revision !== null && onOpenAccess())
-            }
-          >
-            <ApiOutlined /> <span>访问点</span>
-          </button>
-          <button
-            className="studio-button primary workflow-publish"
-            type="button"
-            disabled={publishState === "publishing" || running || validationIssues.length > 0}
+          </Button>
+          <Flex gap={4} align="center">
+            <Tooltip title="复制节点 ⌘C / Ctrl+C">
+              <Button size="small" disabled={!selectedIds.length} onClick={() => void copySelection()}>
+                复制
+              </Button>
+            </Tooltip>
+            <Tooltip title="粘贴节点 ⌘V / Ctrl+V">
+              <Button size="small" disabled={running} onClick={() => void pasteSelection()}>
+                粘贴
+              </Button>
+            </Tooltip>
+          </Flex>
+          <Button icon={<SaveOutlined />} onClick={save}>
+            保存
+          </Button>
+          <Tooltip title="API 与版本">
+            <Button icon={<ApiOutlined />} onClick={() => void persistDraft().then((revision) => revision !== null && onOpenAccess())}>
+              访问点
+            </Button>
+          </Tooltip>
+          <Button
+            type="primary"
+            icon={<RocketOutlined />}
+            loading={publishState === "publishing"}
+            disabled={running || validationIssues.length > 0}
             onClick={() => {
               setWorkspaceError(null);
               setShowPublish(true);
             }}
           >
-            <RocketOutlined />
-            <span>{publishState === "publishing" ? "发布中" : "发布"}</span>
-          </button>
-          <button
-            className={`studio-button run${running ? " is-stop" : ""}`}
-            type="button"
+            {publishState === "publishing" ? "发布中" : "发布"}
+          </Button>
+          <Button
+            type="primary"
+            danger={running}
+            icon={running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
             aria-label={running ? "停止工作流" : "运行工作流"}
             disabled={nodeTestPendingId !== null}
             onClick={() => (running ? stopRun() : void run())}
           >
-            {running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-            <span>{running ? "停止" : "运行"}</span>
-          </button>
+            {running ? "停止" : "运行"}
+          </Button>
         </div>
       </header>
 
-      <div className="workflow-mobile-switcher" role="tablist" aria-label="Workflow 工作区视图">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mobileView === "palette"}
-          className={mobileView === "palette" ? "is-active" : undefined}
-          onClick={() => setMobileView("palette")}
-        >
-          <PlusOutlined />
-          <span>节点库</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mobileView === "canvas"}
-          className={mobileView === "canvas" ? "is-active" : undefined}
-          onClick={showCanvas}
-        >
-          <BranchesOutlined />
-          <span>画布</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mobileView === "inspector"}
-          className={mobileView === "inspector" ? "is-active" : undefined}
-          onClick={() => setMobileView("inspector")}
-        >
-          <ExperimentOutlined />
-          <span>{selectedNode ? "配置" : "运行"}</span>
-        </button>
-      </div>
+      <Segmented
+        aria-label="Workflow 工作区视图"
+        value={mobileView}
+        onChange={(value) => {
+          if (value === "canvas") showCanvas();
+          else setMobileView(value as typeof mobileView);
+        }}
+        options={[
+          { value: "palette", label: "节点库", icon: <PlusOutlined /> },
+          { value: "canvas", label: "画布", icon: <BranchesOutlined /> },
+          { value: "inspector", label: selectedNode ? "配置" : "运行", icon: <ExperimentOutlined /> },
+        ]}
+        style={{ margin: "8px 12px 0" }}
+      />
       {confirmExport ? (
         <ConfirmDialog
           title="导出存在问题的工作流？"
@@ -1672,24 +1622,25 @@ function WorkflowCanvas({
             </WorkflowEdgeActionsContext.Provider>
           </WorkflowBranchActionsContext.Provider>
           {selectedNodes.length > 1 ? (
-            <div className="workflow-selection-toolbar" role="toolbar" aria-label="批量操作">
-              <span>已选 {selectedNodes.length} 个节点</span>
-              <button type="button" disabled={running} onClick={duplicateSelected}>
+            <Flex gap={8} align="center" role="toolbar" aria-label="批量操作" style={{ padding: 8 }}>
+              <Tag>已选 {selectedNodes.length} 个节点</Tag>
+              <Button size="small" disabled={running} onClick={duplicateSelected}>
                 复制
-              </button>
-              <button type="button" disabled={running} onClick={removeSelected}>
+              </Button>
+              <Button size="small" danger disabled={running} onClick={removeSelected}>
                 删除
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                size="small"
+                type="text"
                 onClick={() => {
                   setNodes((current) => current.map((node) => ({ ...node, selected: false })));
                   setSelectedId(null);
                 }}
               >
                 取消选择
-              </button>
-            </div>
+              </Button>
+            </Flex>
           ) : null}
           <div className="workflow-canvas-status">
             <span>
