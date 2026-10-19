@@ -1,13 +1,33 @@
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useMemo, useState } from "react";
 import {
-  CloseOutlined,
+  Alert,
+  App,
+  Badge,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Select,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import type { ColumnsType } from "antd/es/table";
+import {
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
 } from "../../lib/icons.js";
+import { StudioNotice, type StudioNoticeValue } from "../../components/studio/StudioNotice.js";
 import {
   fetchImChannels,
   removeImChannel,
@@ -45,12 +65,14 @@ const emptyDraft = (): Draft => ({
 });
 
 export function ImChannelsSection() {
+  const { message } = App.useApp();
   const [channels, setChannels] = useState<ImChannelMetadata[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [restartingId, setRestartingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<StudioNoticeValue | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -70,12 +92,22 @@ export function ImChannelsSection() {
 
   const submit = async () => {
     if (!draft) return;
+    if (!draft.name.trim()) {
+      setError("请填写渠道名称");
+      return;
+    }
+    if (!draft.appId.trim()) {
+      setError("请填写 App ID");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      await saveImChannel(draft);
+      const saved = await saveImChannel(draft);
       setDraft(null);
       await refresh();
+      setNotice({ type: "success", text: `已保存渠道「${saved.name}」` });
+      void message.success(`已保存渠道「${saved.name}」`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "IM 渠道保存失败");
     } finally {
@@ -103,6 +135,8 @@ export function ImChannelsSection() {
     try {
       await restartImChannel(channel.id);
       await refresh();
+      setNotice({ type: "success", text: `渠道「${channel.name}」重启指令已发送` });
+      void message.success(`渠道「${channel.name}」重启指令已发送`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "渠道重启失败");
     } finally {
@@ -110,146 +144,172 @@ export function ImChannelsSection() {
     }
   };
 
+  const remove = async (channel: ImChannelMetadata) => {
+    setError(null);
+    try {
+      await removeImChannel(channel.id);
+      await refresh();
+      setNotice({ type: "success", text: `渠道「${channel.name}」已删除` });
+      void message.success(`渠道「${channel.name}」已删除`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "删除失败");
+    }
+  };
+
+  const columns: ColumnsType<ImChannelMetadata> = useMemo(
+    () => [
+      {
+        title: "名称",
+        dataIndex: "name",
+        key: "name",
+        render: (_: unknown, record: ImChannelMetadata) => (
+          <Flex gap={8} align="center">
+            <Badge status={record.enabled ? "success" : "default"} />
+            <Typography.Text strong>{record.name}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {record.id.slice(0, 8)}
+            </Typography.Text>
+          </Flex>
+        ),
+      },
+      {
+        title: "平台",
+        dataIndex: "platform",
+        key: "platform",
+        render: (value: ImPlatform) => <Tag>{IM_PLATFORM_LABELS[value]}</Tag>,
+      },
+      {
+        title: "App ID",
+        dataIndex: "appId",
+        key: "appId",
+        render: (value: string) => (
+          <Typography.Text code ellipsis style={{ maxWidth: 160 }} title={value}>
+            {value}
+          </Typography.Text>
+        ),
+      },
+      {
+        title: "知识库",
+        dataIndex: "ragSources",
+        key: "ragSources",
+        render: (value: string[]) => (
+          <Flex gap={4} align="center" wrap>
+            <Tag>{value.length}</Tag>
+            <Typography.Text type="secondary" ellipsis style={{ maxWidth: 180 }} title={value.join(", ")}>
+              {value.length > 0 ? value.join(", ") : "未绑定"}
+            </Typography.Text>
+          </Flex>
+        ),
+      },
+      {
+        title: "状态",
+        dataIndex: "enabled",
+        key: "enabled",
+        render: (value: boolean) => (
+          <Badge status={value ? "success" : "default"} text={value ? "启用" : "停用"} />
+        ),
+      },
+      {
+        title: "连接",
+        dataIndex: "connected",
+        key: "connected",
+        render: (_: unknown, record: ImChannelMetadata) => (
+          <Badge
+            status={record.connected ? "success" : record.error ? "error" : "default"}
+            text={record.connected ? "已连接" : record.error ? "异常" : "未连接"}
+          />
+        ),
+      },
+      {
+        title: "操作",
+        key: "actions",
+        fixed: "right",
+        width: 140,
+        render: (_: unknown, record: ImChannelMetadata) => (
+          <Flex gap={4}>
+            <Tooltip title="重启连接">
+              <Button
+                type="text"
+                icon={<ReloadOutlined spin={restartingId === record.id} />}
+                aria-label={`重启 ${record.name}`}
+                disabled={restartingId !== null}
+                onClick={() => void restart(record)}
+              />
+            </Tooltip>
+            <Tooltip title="编辑">
+              <Button
+                type="text"
+                icon={<EditOutlined />}
+                aria-label={`编辑 ${record.name}`}
+                onClick={() => edit(record)}
+              />
+            </Tooltip>
+            <Popconfirm
+              title={`删除渠道「${record.name}」？`}
+              description="机器人连接将立即断开，该操作不可恢复。"
+              okText="确认删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => void remove(record)}
+            >
+              <Tooltip title="删除">
+                <Button
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  aria-label={`删除 ${record.name}`}
+                />
+              </Tooltip>
+            </Popconfirm>
+          </Flex>
+        ),
+      },
+    ],
+    [restartingId],
+  );
+
   return (
-    <main className="settings-content">
-      {error ? <div className="settings-alert">{error}</div> : null}
-      <div className="settings-intro">
-        <div>
-          <span className="settings-kicker">COLLABORATION ENTRY</span>
-          <h2>机器人渠道</h2>
-        </div>
-        <span>{channels.length} 个渠道</span>
-        <div className="domain-header-actions">
-          <button
-            className="studio-button secondary"
-            type="button"
-            onClick={() => void refresh()}
-            disabled={loading}
-          >
-            <ReloadOutlined spin={loading} /> <span>刷新</span>
-          </button>
-          <button
-            className="studio-button primary"
-            type="button"
-            onClick={() => setDraft(emptyDraft())}
-          >
-            <PlusOutlined /> <span>新建渠道</span>
-          </button>
-        </div>
-      </div>
-      <div className="provider-table-wrap">
-        <table className="provider-table">
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>平台</th>
-              <th>App ID</th>
-              <th>知识库</th>
-              <th>状态</th>
-              <th>连接</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {loading && channels.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="table-empty">
-                  正在加载 IM 渠道...
-                </td>
-              </tr>
-            ) : null}
-            {!loading && channels.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="table-empty">
-                  还没有 IM 渠道
-                </td>
-              </tr>
-            ) : null}
-            {channels.map((channel) => (
-              <tr key={channel.id}>
-                <td data-label="名称">
-                  <div className="provider-name">
-                    <span className={`provider-dot${channel.enabled ? "" : " is-disabled"}`} />
-                    <b>{channel.name}</b>
-                    <small>{channel.id.slice(0, 8)}</small>
-                  </div>
-                </td>
-                <td data-label="平台">
-                  <span className="format-pill">{IM_PLATFORM_LABELS[channel.platform]}</span>
-                </td>
-                <td data-label="App ID">
-                  <code title={channel.appId}>{channel.appId}</code>
-                </td>
-                <td data-label="知识库">
-                  <span className="model-count">{channel.ragSources.length}</span>
-                  <small className="channel-sources" title={channel.ragSources.join(", ")}>
-                    {channel.ragSources.length > 0 ? channel.ragSources.join(", ") : "未绑定"}
-                  </small>
-                </td>
-                <td data-label="状态">
-                  <span className={`status-pill${channel.enabled ? " is-enabled" : ""}`}>
-                    {channel.enabled ? "启用" : "停用"}
-                  </span>
-                </td>
-                <td data-label="连接">
-                  <span className={`status-pill${channel.connected ? " is-enabled" : ""}`}>
-                    {channel.connected ? "已连接" : channel.error ? "异常" : "未连接"}
-                  </span>
-                </td>
-                <td data-label="操作">
-                  <div className="table-actions">
-                    <button
-                      type="button"
-                      title="重启连接"
-                      aria-label={`重启 ${channel.name}`}
-                      onClick={() => void restart(channel)}
-                      disabled={restartingId !== null}
-                    >
-                      <ReloadOutlined spin={restartingId === channel.id} />
-                    </button>
-                    <button
-                      type="button"
-                      title="编辑"
-                      aria-label={`编辑 ${channel.name}`}
-                      onClick={() => edit(channel)}
-                    >
-                      <EditOutlined />
-                    </button>
-                    <button
-                      type="button"
-                      title="删除"
-                      aria-label={`删除 ${channel.name}`}
-                      onClick={() => {
-                        if (window.confirm(`删除渠道「${channel.name}」？`))
-                          void removeImChannel(channel.id)
-                            .then(refresh)
-                            .catch((reason) =>
-                              setError(reason instanceof Error ? reason.message : "删除失败"),
-                            );
-                      }}
-                    >
-                      <DeleteOutlined />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {draft
-        ? createPortal(
-            <ImChannelModal
-              draft={draft}
-              setDraft={setDraft}
-              saving={saving}
-              onCancel={() => setDraft(null)}
-              onSubmit={() => void submit()}
-            />,
-            document.body,
-          )
-        : null}
-    </main>
+    <Flex vertical gap={12}>
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      <StudioNotice notice={notice} />
+      <Flex align="flex-start" justify="space-between" gap={12}>
+        <Flex vertical gap={2}>
+          <Typography.Text type="secondary" style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2 }}>
+            COLLABORATION ENTRY
+          </Typography.Text>
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            机器人渠道 <Tag style={{ marginLeft: 8 }}>{channels.length}</Tag>
+          </Typography.Title>
+        </Flex>
+        <Flex gap={8}>
+          <Button icon={<ReloadOutlined spin={loading} />} disabled={loading} onClick={() => void refresh()}>
+            刷新
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setDraft(emptyDraft())}>
+            新建渠道
+          </Button>
+        </Flex>
+      </Flex>
+      <Card size="small" styles={{ body: { padding: 0 } }}>
+        <Table<ImChannelMetadata>
+          size="small"
+          rowKey="id"
+          columns={columns}
+          dataSource={channels}
+          loading={loading}
+          pagination={channels.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
+          scroll={{ x: "max-content" }}
+          locale={{ emptyText: <Empty description={loading ? "正在加载 IM 渠道..." : "还没有 IM 渠道"} /> }}
+        />
+      </Card>
+      <ImChannelModal
+        draft={draft}
+        setDraft={setDraft}
+        saving={saving}
+        onCancel={() => setDraft(null)}
+        onSubmit={() => void submit()}
+      />
+    </Flex>
   );
 }
 
@@ -260,13 +320,14 @@ function ImChannelModal({
   onCancel,
   onSubmit,
 }: {
-  draft: Draft;
+  draft: Draft | null;
   setDraft: (draft: Draft) => void;
   saving: boolean;
   onCancel: () => void;
   onSubmit: () => void;
 }) {
   const [sourceInput, setSourceInput] = useState("");
+  if (!draft) return null;
   const patch = (value: Partial<Draft>) => setDraft({ ...draft, ...value });
   const addSource = () => {
     const source = sourceInput.trim();
@@ -276,177 +337,127 @@ function ImChannelModal({
   };
 
   return (
-    <div
-      className="settings-modal-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel();
-      }}
+    <Modal
+      open
+      title={draft.id ? "编辑渠道" : "新建渠道"}
+      onCancel={onCancel}
+      destroyOnClose={false}
+      footer={
+        <Flex gap={8} justify="flex-end">
+          <Button onClick={onCancel}>取消</Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSubmit}>
+            {saving ? "保存中" : "保存渠道"}
+          </Button>
+        </Flex>
+      }
     >
-      <div
-        className="settings-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="im-channel-modal-title"
-      >
-        <div className="settings-modal-head">
-          <div>
-            <span className="settings-kicker">IM CHANNEL EDITOR</span>
-            <h2 id="im-channel-modal-title">{draft.id ? "编辑渠道" : "新建渠道"}</h2>
-          </div>
-          <button type="button" aria-label="关闭" onClick={onCancel}>
-            <CloseOutlined />
-          </button>
-        </div>
-        <div className="settings-modal-fields">
-          <label className="studio-field">
-            <span>名称</span>
-            <input
-              value={draft.name}
-              onChange={(event) => patch({ name: event.target.value })}
-              placeholder="例如 研发群机器人"
-            />
-          </label>
-          <label className="studio-field">
-            <span>平台</span>
-            <select
-              value={draft.platform}
-              onChange={(event) => patch({ platform: event.target.value as ImPlatform })}
-            >
-              {IM_PLATFORMS.map((platform) => (
-                <option key={platform} value={platform}>
-                  {IM_PLATFORM_LABELS[platform]}
-                </option>
+      <Form layout="vertical" preserve={false}>
+        <Form.Item label="名称" required>
+          <Input
+            aria-label="渠道名称"
+            value={draft.name}
+            onChange={(event) => patch({ name: event.target.value })}
+            placeholder="例如 研发群机器人"
+          />
+        </Form.Item>
+        <Form.Item label="平台">
+          <Select
+            aria-label="平台"
+            value={draft.platform}
+            onChange={(value) => patch({ platform: value as ImPlatform })}
+            options={IM_PLATFORMS.map((platform) => ({
+              value: platform,
+              label: IM_PLATFORM_LABELS[platform],
+            }))}
+          />
+        </Form.Item>
+        <Form.Item label="App ID" required>
+          <Input
+            aria-label="App ID"
+            value={draft.appId}
+            onChange={(event) => patch({ appId: event.target.value })}
+            placeholder="cli_xxxxxxxx"
+          />
+        </Form.Item>
+        <Form.Item
+          label="App Secret"
+          extra={draft.id ? "留空保持不变" : "必填"}
+        >
+          <Input.Password
+            aria-label="App Secret"
+            value={draft.appSecret}
+            onChange={(event) => patch({ appSecret: event.target.value })}
+            autoComplete="new-password"
+          />
+        </Form.Item>
+        <Form.Item label="事件解密密钥" extra="可选，飞书 Encrypt Key / 钉钉加解密">
+          <Input.Password
+            aria-label="事件解密密钥"
+            value={draft.encryptKey}
+            onChange={(event) => patch({ encryptKey: event.target.value })}
+            autoComplete="new-password"
+          />
+        </Form.Item>
+        <Form.Item label="知识库绑定" extra="留空则机器人退化为纯 LLM 问答">
+          <Flex vertical gap={8}>
+            <Flex gap={4} wrap>
+              {draft.ragSources.map((source) => (
+                <Tag
+                  key={source}
+                  closable
+                  onClose={() =>
+                    patch({ ragSources: draft.ragSources.filter((item) => item !== source) })
+                  }
+                >
+                  {source}
+                </Tag>
               ))}
-            </select>
-          </label>
-          <label className="studio-field">
-            <span>App ID</span>
-            <input
-              value={draft.appId}
-              onChange={(event) => patch({ appId: event.target.value })}
-              placeholder="cli_xxxxxxxx"
-            />
-          </label>
-          <label className="studio-field">
-            <span>
-              App Secret <small>{draft.id ? "留空保持不变" : "必填"}</small>
-            </span>
-            <input
-              type="password"
-              value={draft.appSecret}
-              onChange={(event) => patch({ appSecret: event.target.value })}
-              autoComplete="new-password"
-            />
-          </label>
-          <label className="studio-field">
-            <span>
-              事件解密密钥 <small>可选，飞书 Encrypt Key / 钉钉加解密</small>
-            </span>
-            <input
-              type="password"
-              value={draft.encryptKey}
-              onChange={(event) => patch({ encryptKey: event.target.value })}
-              autoComplete="new-password"
-            />
-          </label>
-          <div className="studio-field">
-            <span>知识库绑定</span>
-            <div className="model-editor">
-              <div className="model-tags">
-                {draft.ragSources.map((source) => (
-                  <span className="model-tag" key={source}>
-                    {source}
-                    <button
-                      type="button"
-                      aria-label={`移除 ${source}`}
-                      onClick={() =>
-                        patch({ ragSources: draft.ragSources.filter((item) => item !== source) })
-                      }
-                    >
-                      <CloseOutlined />
-                    </button>
-                  </span>
-                ))}
-                {draft.ragSources.length === 0 ? (
-                  <small>留空则机器人退化为纯 LLM 问答</small>
-                ) : null}
-              </div>
-              <div className="model-editor-input">
-                <input
-                  value={sourceInput}
-                  onChange={(event) => setSourceInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addSource();
-                    }
-                  }}
-                  placeholder="知识库 source 名，回车添加"
-                />
-                <button type="button" onClick={addSource}>
-                  <PlusOutlined />
-                </button>
-              </div>
-            </div>
-          </div>
-          <label className="studio-field">
-            <span>
-              检索条数 <small>1–20</small>
-            </span>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={draft.ragTopK}
-              onChange={(event) =>
-                patch({ ragTopK: Math.min(20, Math.max(1, Number(event.target.value) || 5)) })
-              }
-            />
-          </label>
-          <label className="toggle-field">
-            <span className="toggle-field__copy">
-              <b>群聊需 @ 机器人</b>
-              <small>关闭后群内所有消息都会响应（慎用）</small>
-            </span>
-            <span className="settings-switch">
-              <input
-                type="checkbox"
-                checked={draft.requireMention}
-                onChange={(event) => patch({ requireMention: event.target.checked })}
+              {draft.ragSources.length === 0 ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  留空则机器人退化为纯 LLM 问答
+                </Typography.Text>
+              ) : null}
+            </Flex>
+            <Flex gap={8}>
+              <Input
+                aria-label="知识库 source 名"
+                value={sourceInput}
+                onChange={(event) => setSourceInput(event.target.value)}
+                onPressEnter={addSource}
+                placeholder="知识库 source 名，回车添加"
               />
-              <span aria-hidden="true" />
-            </span>
-          </label>
-          <label className="toggle-field">
-            <span className="toggle-field__copy">
-              <b>启用渠道</b>
-              <small>停用后立即断开机器人连接</small>
-            </span>
-            <span className="settings-switch">
-              <input
-                type="checkbox"
-                checked={draft.enabled}
-                onChange={(event) => patch({ enabled: event.target.checked })}
-              />
-              <span aria-hidden="true" />
-            </span>
-          </label>
-        </div>
-        <div className="settings-modal-actions">
-          <button className="studio-button secondary" type="button" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            className="studio-button primary"
-            type="button"
-            disabled={saving}
-            onClick={onSubmit}
-          >
-            <SaveOutlined /> {saving ? "保存中" : "保存渠道"}
-          </button>
-        </div>
-      </div>
-    </div>
+              <Button icon={<PlusOutlined />} onClick={addSource} aria-label="添加知识库绑定">
+                添加
+              </Button>
+            </Flex>
+          </Flex>
+        </Form.Item>
+        <Form.Item label="检索条数" extra="1–20">
+          <InputNumber
+            aria-label="检索条数"
+            min={1}
+            max={20}
+            value={draft.ragTopK}
+            onChange={(value) => patch({ ragTopK: Math.min(20, Math.max(1, Number(value) || 5)) })}
+            style={{ width: "100%" }}
+          />
+        </Form.Item>
+        <Form.Item label="群聊需 @ 机器人" extra="关闭后群内所有消息都会响应（慎用）">
+          <Switch
+            aria-label="群聊需 @ 机器人"
+            checked={draft.requireMention}
+            onChange={(checked) => patch({ requireMention: checked })}
+          />
+        </Form.Item>
+        <Form.Item label="启用渠道" extra="停用后立即断开机器人连接">
+          <Switch
+            aria-label="启用渠道"
+            checked={draft.enabled}
+            onChange={(checked) => patch({ enabled: checked })}
+          />
+        </Form.Item>
+      </Form>
+    </Modal>
   );
 }
+

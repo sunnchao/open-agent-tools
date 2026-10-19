@@ -1,15 +1,38 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import {
+  Alert,
+  App,
+  Badge,
+  Button,
+  Card,
+  Descriptions,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  InputNumber,
+  List,
+  Popconfirm,
+  Progress,
+  Segmented,
+  Slider,
+  Spin,
+  Statistic,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+  Upload,
+} from "antd";
+import type { ColumnsType } from "antd/es/table";
 import {
   BarChartOutlined,
-  CheckCircleFilled,
   CloudUploadOutlined,
   DatabaseOutlined,
   DeleteOutlined,
-  FileTextOutlined,
   DislikeOutlined,
+  FileTextOutlined,
   LikeOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -17,6 +40,8 @@ import {
   SettingOutlined,
   TagOutlined,
 } from "../../lib/icons.js";
+import { StudioPage } from "../../components/studio/StudioPageHeader.js";
+import { StudioNotice, type StudioNoticeValue } from "../../components/studio/StudioNotice.js";
 import {
   deleteDocument,
   getAnalyticsOverview,
@@ -63,7 +88,7 @@ const defaultSettings: RagSettings = {
 };
 
 export function RagWorkspace() {
-  const fileInput = useRef<HTMLInputElement>(null);
+  const { message } = App.useApp();
   const settingsInitialized = useRef(false);
   const [stats, setStats] = useState<DocumentStats | null>(null);
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
@@ -80,8 +105,7 @@ export function RagWorkspace() {
   const [qualityDays, setQualityDays] = useState<7 | 30>(7);
   const [feedback, setFeedback] = useState<Record<string, QueryFeedbackRating>>({});
   const [busy, setBusy] = useState<"loading" | "upload" | "query" | null>("loading");
-  const [dragging, setDragging] = useState(false);
-  const [notice, setNotice] = useState<{ type: "error" | "success"; text: string } | null>(null);
+  const [notice, setNotice] = useState<StudioNoticeValue | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -177,10 +201,9 @@ export function RagWorkspace() {
     try {
       const ingested = await uploadDocuments(files, settings);
       await refresh();
-      setNotice({
-        type: "success",
-        text: `已入库 ${ingested.files} 个文件，生成 ${ingested.chunks} 个分块`,
-      });
+      const text = `已入库 ${ingested.files} 个文件，生成 ${ingested.chunks} 个分块`;
+      setNotice({ type: "success", text });
+      void message.success(text);
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
@@ -188,13 +211,7 @@ export function RagWorkspace() {
     }
   };
 
-  const removeSource = async (source: string) => {
-    if (
-      !window.confirm(
-        `确认删除知识来源“${source}”？\n\n该来源的全部分块，以及由它抽取出的知识图谱实体与关系都会一并清除（被其他文档共同引用的实体会保留）。`,
-      )
-    )
-      return;
+  const doRemoveSource = async (source: string) => {
     try {
       const result = await deleteDocument(source);
       setSelectedSource(null);
@@ -202,10 +219,13 @@ export function RagWorkspace() {
       await refresh();
       const removed = result?.graph;
       if (removed && (removed.entities > 0 || removed.relations > 0)) {
-        setNotice({
-          type: "success",
-          text: `已删除「${source}」，同时清理图谱 ${removed.entities} 个实体、${removed.relations} 条关系`,
-        });
+        const text = `已删除「${source}」，同时清理图谱 ${removed.entities} 个实体、${removed.relations} 条关系`;
+        setNotice({ type: "success", text });
+        void message.success(text);
+      } else {
+        const text = `已删除「${source}」`;
+        setNotice({ type: "success", text });
+        void message.success(text);
       }
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
@@ -249,6 +269,7 @@ export function RagWorkspace() {
           : current,
       );
       setNotice({ type: "success", text: "文档信息已保存" });
+      void message.success("文档信息已保存");
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
       throw reason;
@@ -266,178 +287,179 @@ export function RagWorkspace() {
     }
   };
 
+  const docColumns: ColumnsType<DocumentSource> = [
+    {
+      title: "知识来源",
+      dataIndex: "source",
+      key: "source",
+      render: (_: unknown, record: DocumentSource) => (
+        <Flex gap={8} align="center">
+          <FileTextOutlined />
+          <Flex vertical gap={0} style={{ minWidth: 0 }}>
+            <Typography.Text strong ellipsis title={record.title} style={{ maxWidth: 150 }}>
+              {record.title}
+            </Typography.Text>
+            <Typography.Text type="secondary" ellipsis title={record.source} style={{ fontSize: 12, maxWidth: 150 }}>
+              v{record.version} · {record.chunks} 个分块
+            </Typography.Text>
+          </Flex>
+        </Flex>
+      ),
+    },
+    {
+      title: "操作",
+      key: "actions",
+      width: 60,
+      render: (_: unknown, record: DocumentSource) => (
+        <Popconfirm
+          title={`确认删除知识来源“${record.source}”？`}
+          description="全部分块与派生图谱一并清除，该操作不可恢复。"
+          okText="确认删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+          onConfirm={() => void doRemoveSource(record.source)}
+        >
+          <Tooltip title="删除来源">
+            <Button
+              type="text"
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              aria-label={`删除 ${record.source}`}
+              onClick={(event) => event.stopPropagation()}
+            />
+          </Tooltip>
+        </Popconfirm>
+      ),
+    },
+  ];
+
   return (
-    <section
-      className={`domain-workspace rag-workspace${dragging ? " is-dragging" : ""}`}
-      onDragOver={(event) => {
-        event.preventDefault();
-        setDragging(true);
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false);
-      }}
-      onDrop={(event) => {
-        event.preventDefault();
-        setDragging(false);
-        void upload(Array.from(event.dataTransfer.files));
-      }}
-    >
-      <input
-        ref={fileInput}
-        hidden
-        type="file"
-        multiple
-        accept=".pdf,.txt,.md"
-        onChange={(event) => {
-          void upload(Array.from(event.target.files ?? []));
-          event.target.value = "";
-        }}
-      />
-      <header className="domain-header">
-        <div>
-          <p className="domain-eyebrow">上下文工程 / RAG</p>
-          <h1>知识库</h1>
-        </div>
-        <div className="domain-header-actions">
-          <div className="segmented-control rag-view-switch" aria-label="知识库视图">
-            <button
-              type="button"
-              className={view === "documents" ? "is-active" : ""}
-              onClick={() => setView("documents")}
-            >
-              <FileTextOutlined /> 文档
-            </button>
-            <button
-              type="button"
-              className={view === "analytics" ? "is-active" : ""}
-              onClick={() => setView("analytics")}
-            >
-              <BarChartOutlined /> 运营分析
-            </button>
-          </div>
-          <span className={`capability-state${stats?.embeddingsEnabled ? " is-on" : ""}`}>
-            <span /> 向量检索
-          </span>
-          <span className={`capability-state${stats?.llmAvailable ? " is-on" : ""}`}>
-            <span /> LLM
-          </span>
-          <button
-            className="studio-button secondary"
-            type="button"
+    <StudioPage
+      eyebrow="上下文工程 / RAG"
+      title="知识库"
+      description="上传文档构建知识来源，预览召回片段，分析服务质量。"
+      actions={
+        <>
+          <Segmented<"documents" | "analytics">
+            aria-label="知识库视图"
+            value={view}
+            onChange={(value) => setView(value)}
+            options={[
+              { value: "documents", label: "文档", icon: <FileTextOutlined /> },
+              { value: "analytics", label: "运营分析", icon: <BarChartOutlined /> },
+            ]}
+          />
+          <Badge status={stats?.embeddingsEnabled ? "success" : "default"} text="向量检索" />
+          <Badge status={stats?.llmAvailable ? "success" : "default"} text="LLM" />
+          <Button
+            icon={<ReloadOutlined spin={busy === "loading" || analyticsLoading} />}
+            disabled={busy !== null && busy !== "query"}
             onClick={() => {
               setNotice(null);
               if (view === "analytics") void refreshAnalytics();
               else void refresh();
             }}
           >
-            <ReloadOutlined /> 刷新
-          </button>
-          <button
-            className="studio-button primary"
-            type="button"
-            disabled={busy === "upload" || Boolean(separatorError) || semanticUnavailable}
-            onClick={() => fileInput.current?.click()}
-          >
-            <CloudUploadOutlined /> {busy === "upload" ? "入库中..." : "上传文档"}
-          </button>
-        </div>
-      </header>
-
-      {dragging ? (
-        <div className="drop-overlay">
-          <CloudUploadOutlined />
-          <b>释放以导入知识库</b>
-          <span>PDF、TXT、Markdown</span>
-        </div>
-      ) : null}
-      {notice ? (
-        <div className={`workspace-notice ${notice.type}`} role="status">
-          {notice.type === "success" ? <CheckCircleFilled /> : null}
-          {notice.text}
-        </div>
-      ) : null}
-
+            刷新
+          </Button>
+        </>
+      }
+      extra={<StudioNotice notice={notice} />}
+    >
       {view === "analytics" ? (
-        <RagAnalyticsDashboard
-          overview={analytics}
-          report={qualityReport}
-          loading={analyticsLoading}
-          days={qualityDays}
-          onDaysChange={setQualityDays}
-        />
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 16 }}>
+          <RagAnalyticsDashboard
+            overview={analytics}
+            report={qualityReport}
+            loading={analyticsLoading}
+            days={qualityDays}
+            onDaysChange={setQualityDays}
+          />
+        </div>
       ) : (
-        <div className="domain-grid">
-          <aside className="resource-panel">
-            <div className="panel-heading">
-              <span>知识来源</span>
-              <span className="count-badge">{stats?.sources.length ?? 0}</span>
-            </div>
-            {busy === "loading" ? <div className="panel-state">正在加载知识库...</div> : null}
-            {!busy && stats?.sources.length === 0 ? (
-              <div className="panel-state">拖入文档以创建知识来源</div>
-            ) : null}
-            <div className="resource-list">
-              {stats?.sources.map((item) => (
-                <button
-                  type="button"
-                  key={item.source}
-                  className={`resource-item${selectedSource === item.source ? " is-active" : ""}`}
-                  onClick={() => {
-                    setSelectedSource(item.source);
+        <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}>
+          <Card
+            size="small"
+            title="知识来源"
+            extra={<Tag>{stats?.sources.length ?? 0}</Tag>}
+            style={{ width: 320, flex: "0 0 auto", maxHeight: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}
+            styles={{ body: { padding: 8, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 } }}
+          >
+            <Upload.Dragger
+              multiple
+              accept=".pdf,.txt,.md"
+              showUploadList={false}
+              disabled={busy === "upload" || Boolean(separatorError) || semanticUnavailable}
+              beforeUpload={(file, fileList) => {
+                void upload(fileList.length > 0 ? Array.from(fileList) : [file as unknown as File]);
+                return false;
+              }}
+            >
+              <Flex vertical align="center" gap={4} style={{ padding: "8px 0" }}>
+                <CloudUploadOutlined style={{ fontSize: 20 }} />
+                <Typography.Text strong style={{ fontSize: 12 }}>
+                  {busy === "upload" ? "入库中..." : "拖入文档或点击上传"}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  PDF、TXT、Markdown
+                </Typography.Text>
+              </Flex>
+            </Upload.Dragger>
+            {busy === "loading" ? (
+              <Flex justify="center" style={{ padding: 24 }}>
+                <Spin aria-label="正在加载知识库" />
+              </Flex>
+            ) : stats?.sources.length === 0 ? (
+              <Empty description="拖入文档以创建知识来源" />
+            ) : (
+              <Table<DocumentSource>
+                size="small"
+                rowKey="source"
+                columns={docColumns}
+                dataSource={stats?.sources ?? []}
+                pagination={false}
+                showHeader={false}
+                onRow={(record) => ({
+                  onClick: () => {
+                    setSelectedSource(record.source);
                     setHighlightChunkIndex(null);
-                  }}
-                >
-                  <span className="resource-icon rag-source">
-                    <FileTextOutlined />
-                  </span>
-                  <span className="resource-copy">
-                    <b title={item.title}>{item.title}</b>
-                    <small>
-                      v{item.version} · {item.chunks} 个分块
-                    </small>
-                  </span>
-                  <span
-                    className="row-action"
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`删除 ${item.source}`}
-                    title="删除来源"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void removeSource(item.source);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void removeSource(item.source);
-                    }}
-                  >
-                    <DeleteOutlined />
-                  </span>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <div className="rag-preview-panel">
-            <div className="rag-query-bar">
-              <SearchOutlined />
-              <textarea
-                rows={2}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runQuery();
-                }}
-                placeholder="输入问题，预览召回片段与生成结果"
+                  },
+                  style: {
+                    cursor: "pointer",
+                    background: record.source === selectedSource ? "#f0f5ff" : undefined,
+                  },
+                })}
+                locale={{ emptyText: <Empty description="拖入文档以创建知识来源" /> }}
               />
-              <button
-                className="studio-button primary"
-                type="button"
-                disabled={!query.trim() || busy === "query"}
-                onClick={() => void runQuery()}
-              >
-                {busy === "query" ? "检索中..." : "运行检索"}
-              </button>
-            </div>
+            )}
+          </Card>
+
+          <Flex vertical gap={12} style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+            <Card size="small" title="检索预览">
+              <Flex gap={8} align="flex-start">
+                <Input.TextArea
+                  aria-label="检索问题"
+                  rows={2}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runQuery();
+                  }}
+                  placeholder="输入问题，预览召回片段与生成结果"
+                  style={{ flex: 1 }}
+                />
+                <Button
+                  type="primary"
+                  icon={<SearchOutlined />}
+                  loading={busy === "query"}
+                  disabled={!query.trim() || busy === "query"}
+                  onClick={() => void runQuery()}
+                >
+                  {busy === "query" ? "检索中..." : "运行检索"}
+                </Button>
+              </Flex>
+            </Card>
             {result ? (
               <QueryPreview
                 result={result}
@@ -451,171 +473,136 @@ export function RagWorkspace() {
                 highlightChunkIndex={highlightChunkIndex}
               />
             )}
-          </div>
+          </Flex>
 
-          <aside className="inspector-panel">
-            <div className="panel-heading">
-              <span>检索设置</span>
-              <SettingOutlined />
-            </div>
-            <div className="inspector-content rag-settings">
-              {selectedDocument ? (
-                <DocumentMetadataEditor
-                  document={selectedDocument}
-                  onSave={(patch) => saveDocumentMetadata(selectedDocument.source, patch)}
+          <Card
+            size="small"
+            title={
+              <Flex gap={8} align="center">
+                <SettingOutlined />
+                <Typography.Text strong>检索设置</Typography.Text>
+              </Flex>
+            }
+            style={{ width: 330, flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}
+          >
+            {selectedDocument ? (
+              <DocumentMetadataEditor
+                document={selectedDocument}
+                onSave={(patch) => saveDocumentMetadata(selectedDocument.source, patch)}
+              />
+            ) : null}
+            <Form layout="vertical" preserve={false}>
+              <Form.Item label="文档切分" extra="仅影响随后上传或重新入库的文档。">
+                <Segmented<ChunkStrategy>
+                  aria-label="切分模式"
+                  value={settings.chunkStrategy}
+                  onChange={(value) => setSettings({ ...settings, chunkStrategy: value })}
+                  options={[
+                    { value: "fixed", label: "固定切分" },
+                    { value: "semantic", label: "语义切分", disabled: !stats?.embeddingsEnabled },
+                  ]}
+                  block
+                />
+              </Form.Item>
+              {!stats?.embeddingsEnabled ? (
+                <Alert
+                  showIcon
+                  type="info"
+                  message="语义切分需要 Embeddings；当前仍可使用固定切分与 BM25 检索。"
+                  style={{ marginBottom: 12 }}
                 />
               ) : null}
-              <div className="settings-group">
-                <h2>文档切分</h2>
-                <p>仅影响随后上传或重新入库的文档。</p>
-                <div className="chunk-strategy-control" role="group" aria-label="切分模式">
-                  <button
-                    type="button"
-                    className={settings.chunkStrategy === "fixed" ? "is-active" : ""}
-                    onClick={() => setSettings({ ...settings, chunkStrategy: "fixed" })}
-                  >
-                    <b>固定切分</b>
-                    <small>结构优先 · 长度兜底</small>
-                  </button>
-                  <button
-                    type="button"
-                    className={settings.chunkStrategy === "semantic" ? "is-active" : ""}
-                    disabled={!stats?.embeddingsEnabled}
-                    title={stats?.embeddingsEnabled ? "" : "需要配置 Embeddings 模型"}
-                    onClick={() => setSettings({ ...settings, chunkStrategy: "semantic" })}
-                  >
-                    <b>语义切分</b>
-                    <small>话题变化处断块</small>
-                  </button>
-                </div>
-                {!stats?.embeddingsEnabled ? (
-                  <div className="semantic-capability-note">
-                    语义切分需要 Embeddings；当前仍可使用固定切分与 BM25 检索。
-                  </div>
-                ) : null}
-                <NumberField
-                  label={settings.chunkStrategy === "semantic" ? "最大分块长度" : "分块长度"}
-                  value={settings.chunkSize}
+              <Form.Item label={settings.chunkStrategy === "semantic" ? "最大分块长度" : "分块长度"}>
+                <InputNumber
+                  aria-label="分块长度"
                   min={1}
                   max={4000}
                   step={50}
-                  onChange={(chunkSize) => setSettings({ ...settings, chunkSize })}
+                  value={settings.chunkSize}
+                  onChange={(value) => setSettings({ ...settings, chunkSize: Number(value) || 1 })}
+                  style={{ width: "100%" }}
                 />
-                <NumberField
-                  label="重叠长度"
-                  value={settings.chunkOverlap}
+              </Form.Item>
+              <Form.Item label="重叠长度">
+                <InputNumber
+                  aria-label="重叠长度"
                   min={0}
                   max={Math.max(0, settings.chunkSize - 1)}
                   step={10}
-                  onChange={(chunkOverlap) => setSettings({ ...settings, chunkOverlap })}
+                  value={settings.chunkOverlap}
+                  onChange={(value) => setSettings({ ...settings, chunkOverlap: Number(value) || 0 })}
+                  style={{ width: "100%" }}
                 />
-                {settings.chunkStrategy === "semantic" ? (
-                  <label className="range-field semantic-threshold-field">
-                    <span>
-                      语义敏感度 <b>{Math.round(settings.semanticThreshold * 100)}%</b>
-                    </span>
-                    <input
-                      type="range"
-                      min={0.5}
-                      max={0.95}
-                      step={0.05}
-                      value={settings.semanticThreshold}
-                      onChange={(event) =>
-                        setSettings({
-                          ...settings,
-                          semanticThreshold: Number(event.target.value),
-                        })
-                      }
-                    />
-                    <small className="field-help">
-                      相邻句段相似度低于阈值时开启新分块；数值越高，切分越细。
-                    </small>
-                  </label>
-                ) : (
-                  <label
-                    className={`studio-field separator-field${separatorError ? " is-invalid" : ""}`}
-                  >
-                    <span>
-                      分段标识符
-                      <small>{settings.separators.length}/20</small>
-                    </span>
-                    <textarea
-                      className="mono-input"
-                      rows={7}
-                      value={separatorText}
-                      aria-invalid={Boolean(separatorError)}
-                      onChange={(event) => {
-                        const nextText = event.target.value;
-                        setSeparatorText(nextText);
-                        setSettings({ ...settings, separators: separatorsFromText(nextText) });
-                      }}
-                    />
-                    <small className="field-help">
-                      一行一个，按顺序匹配。支持 \n、\t、\s（空格）。
-                    </small>
-                    {separatorError ? (
-                      <small className="field-error">{separatorError}</small>
-                    ) : null}
-                  </label>
-                )}
-              </div>
-              <div className="settings-group">
-                <h2>召回策略</h2>
-                <p>混合检索使用向量 kNN 与 BM25，经 RRF 融合排序。</p>
-                <label className="range-field">
-                  <span>
-                    Top-K <b>{settings.topK}</b>
-                  </span>
-                  <input
-                    type="range"
-                    min={1}
-                    max={10}
-                    value={settings.topK}
-                    onChange={(event) =>
-                      setSettings({ ...settings, topK: Number(event.target.value) })
-                    }
+              </Form.Item>
+              {settings.chunkStrategy === "semantic" ? (
+                <Form.Item
+                  label={`语义敏感度 ${Math.round(settings.semanticThreshold * 100)}%`}
+                  extra="相邻句段相似度低于阈值时开启新分块；数值越高，切分越细。"
+                >
+                  <Slider
+                    aria-label="语义敏感度"
+                    min={0.5}
+                    max={0.95}
+                    step={0.05}
+                    value={settings.semanticThreshold}
+                    onChange={(value) => setSettings({ ...settings, semanticThreshold: value })}
                   />
-                </label>
-                <label className="toggle-field">
-                  <span>
-                    <b>仅当前文档</b>
-                    <small>{selectedSource ? `限定 ${selectedSource}` : "请先选择文档"}</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    disabled={!selectedSource}
-                    checked={settings.restrictToSelected}
-                    onChange={(event) =>
-                      setSettings({ ...settings, restrictToSelected: event.target.checked })
-                    }
+                </Form.Item>
+              ) : (
+                <Form.Item
+                  label={`分段标识符 ${settings.separators.length}/20`}
+                  extra="一行一个，按顺序匹配。支持 \n、\t、\s（空格）。"
+                  validateStatus={separatorError ? "error" : undefined}
+                  help={separatorError ?? undefined}
+                >
+                  <Input.TextArea
+                    aria-label="分段标识符"
+                    rows={7}
+                    value={separatorText}
+                    onChange={(event) => {
+                      const nextText = event.target.value;
+                      setSeparatorText(nextText);
+                      setSettings({ ...settings, separators: separatorsFromText(nextText) });
+                    }}
                   />
-                </label>
-                <label className="toggle-field">
-                  <span>
-                    <b>生成回答</b>
-                    <small>召回后调用 LLM 生成答案</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={settings.generate}
-                    onChange={(event) =>
-                      setSettings({ ...settings, generate: event.target.checked })
-                    }
-                  />
-                </label>
-              </div>
-              <div className="index-summary">
-                <DatabaseOutlined />
-                <span>
-                  <b>{stats?.chunks ?? 0}</b>
-                  <small>已索引分块</small>
-                </span>
-              </div>
-            </div>
-          </aside>
-        </div>
+                </Form.Item>
+              )}
+              <Form.Item label={`Top-K ${settings.topK}`} extra="混合检索使用向量 kNN 与 BM25，经 RRF 融合排序。">
+                <Slider
+                  aria-label="Top-K"
+                  min={1}
+                  max={10}
+                  value={settings.topK}
+                  onChange={(value) => setSettings({ ...settings, topK: value })}
+                />
+              </Form.Item>
+              <Form.Item label="仅当前文档" extra={selectedSource ? `限定 ${selectedSource}` : "请先选择文档"}>
+                <Switch
+                  aria-label="仅当前文档"
+                  disabled={!selectedSource}
+                  checked={settings.restrictToSelected}
+                  onChange={(checked) => setSettings({ ...settings, restrictToSelected: checked })}
+                />
+              </Form.Item>
+              <Form.Item label="生成回答" extra="召回后调用 LLM 生成答案">
+                <Switch
+                  aria-label="生成回答"
+                  checked={settings.generate}
+                  onChange={(checked) => setSettings({ ...settings, generate: checked })}
+                />
+              </Form.Item>
+              <Card size="small" style={{ marginTop: 8 }}>
+                <Statistic
+                  title="已索引分块"
+                  value={stats?.chunks ?? 0}
+                  prefix={<DatabaseOutlined />}
+                />
+              </Card>
+            </Form>
+          </Card>
+        </Flex>
       )}
-    </section>
+    </StudioPage>
   );
 }
 
@@ -657,41 +644,6 @@ function validateSeparators(separators: readonly string[]): string | null {
   return null;
 }
 
-function NumberField({
-  label,
-  value,
-  min,
-  max,
-  step,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="studio-field">
-      <span>
-        {label}
-        <small>
-          {min}–{max}
-        </small>
-      </span>
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(event) => onChange(Math.max(min, Math.min(max, Number(event.target.value))))}
-      />
-    </label>
-  );
-}
-
 function DocumentMetadataEditor({
   document,
   onSave,
@@ -726,91 +678,68 @@ function DocumentMetadataEditor({
   const groupsInvalid = groups.length > 50 || groups.some((group) => group.length > 60);
 
   return (
-    <div className="settings-group document-profile">
-      <div className="document-profile-heading">
-        <div>
-          <h2>资产信息</h2>
-          <p>{document.source}</p>
-        </div>
-        <span>v{document.version}</span>
-      </div>
-      <label className="studio-field">
-        <span>显示标题</span>
-        <input value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} />
-      </label>
-      <label className="studio-field">
-        <span>
-          可见分组 <small>{groups.length}/50 · 留空公开</small>
-        </span>
-        <input
-          value={groupText}
-          placeholder="hr, finance, leadership"
-          onChange={(event) => setGroupText(event.target.value)}
-        />
-        <small className="field-help">
-          发布应用只会检索公开文档与调用方命中的分组；管理台检索不受此限制。
-        </small>
-        {groupsInvalid ? (
-          <small className="field-error">分组需为 1-60 字符，最多 50 个</small>
+    <Card size="small" title={`资产信息 v${document.version}`} style={{ marginBottom: 12 }}>
+      <Typography.Paragraph type="secondary" ellipsis={{ rows: 1 }} style={{ fontSize: 12 }}>
+        {document.source}
+      </Typography.Paragraph>
+      <Form layout="vertical" preserve={false}>
+        <Form.Item label="显示标题" required validateStatus={!title.trim() ? "error" : undefined} help={!title.trim() ? "标题不能为空" : undefined}>
+          <Input aria-label="显示标题" value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} />
+        </Form.Item>
+        <Form.Item label={`可见分组 ${groups.length}/50 · 留空公开`} validateStatus={groupsInvalid ? "error" : undefined} help="发布应用只会检索公开文档与调用方命中的分组；管理台检索不受此限制。">
+          <Input
+            aria-label="可见分组"
+            value={groupText}
+            placeholder="hr, finance, leadership"
+            onChange={(event) => setGroupText(event.target.value)}
+          />
+          {groupsInvalid ? <Typography.Text type="danger" style={{ fontSize: 12 }}>分组需为 1-60 字符，最多 50 个</Typography.Text> : null}
+        </Form.Item>
+        <Form.Item label={`标签 ${tags.length}/20`}>
+          <Input
+            aria-label="标签"
+            value={tagText}
+            placeholder="产品, 生产, FAQ"
+            onChange={(event) => setTagText(event.target.value)}
+          />
+        </Form.Item>
+        {tags.length > 0 ? (
+          <Flex gap={4} wrap style={{ marginBottom: 12 }}>
+            {tags.map((tag) => (
+              <Tag key={tag} icon={<TagOutlined />}>{tag}</Tag>
+            ))}
+          </Flex>
         ) : null}
-      </label>
-      <label className="studio-field">
-        <span>
-          标签 <small>{tags.length}/20</small>
-        </span>
-        <input
-          value={tagText}
-          placeholder="产品, 生产, FAQ"
-          onChange={(event) => setTagText(event.target.value)}
-        />
-      </label>
-      {tags.length > 0 ? (
-        <div className="document-tags" aria-label="文档标签">
-          {tags.map((tag) => (
-            <span key={tag}>
-              <TagOutlined /> {tag}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <dl className="document-facts">
-        <div>
-          <dt>类型</dt>
-          <dd>{document.mimeType}</dd>
-        </div>
-        <div>
-          <dt>大小</dt>
-          <dd>{formatBytes(document.byteSize)}</dd>
-        </div>
-        <div>
-          <dt>切分策略</dt>
-          <dd>
+        <Descriptions size="small" column={1} bordered>
+          <Descriptions.Item label="类型">{document.mimeType}</Descriptions.Item>
+          <Descriptions.Item label="大小">{formatBytes(document.byteSize)}</Descriptions.Item>
+          <Descriptions.Item label="切分策略">
             {document.chunkStrategy === "semantic"
               ? `语义 · ${Math.round((document.semanticThreshold ?? 0.75) * 100)}%`
               : `固定 · ${document.chunkSize}/${document.chunkOverlap}`}
-          </dd>
-        </div>
-        <div>
-          <dt>更新</dt>
-          <dd>{formatDateTime(document.updatedAt)}</dd>
-        </div>
-      </dl>
-      <button
-        className="studio-button secondary full-width"
-        type="button"
-        disabled={invalid || groupsInvalid || saving}
-        onClick={async () => {
-          setSaving(true);
-          try {
-            await onSave({ title: title.trim(), tags, allowedGroups: groups });
-          } finally {
-            setSaving(false);
-          }
-        }}
-      >
-        <SaveOutlined /> {saving ? "保存中..." : "保存资产信息"}
-      </button>
-    </div>
+          </Descriptions.Item>
+          <Descriptions.Item label="更新">{formatDateTime(document.updatedAt)}</Descriptions.Item>
+        </Descriptions>
+        <Button
+          type="default"
+          block
+          icon={<SaveOutlined />}
+          loading={saving}
+          disabled={invalid || groupsInvalid || saving}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              await onSave({ title: title.trim(), tags, allowedGroups: groups });
+            } finally {
+              setSaving(false);
+            }
+          }}
+          style={{ marginTop: 12 }}
+        >
+          {saving ? "保存中..." : "保存资产信息"}
+        </Button>
+      </Form>
+    </Card>
   );
 }
 
@@ -827,85 +756,103 @@ function RagAnalyticsDashboard({
   days: 7 | 30;
   onDaysChange: (days: 7 | 30) => void;
 }) {
-  if (loading && !overview) return <div className="rag-analytics-state">正在汇总查询数据...</div>;
-  if (!overview) return <div className="rag-analytics-state">暂无运营数据</div>;
+  if (loading && !overview)
+    return (
+      <Flex justify="center" style={{ padding: 48 }}>
+        <Spin aria-label="正在汇总查询数据" />
+      </Flex>
+    );
+  if (!overview) return <Empty description="暂无运营数据" />;
   const maxQueries = Math.max(1, ...(report?.trend.map((day) => day.queries) ?? []));
   const helpful = overview.totals.helpfulRate;
   const quality = report?.totals;
   const attribution = report?.attribution;
   const hasNoAnswerHistory = Boolean(attribution?.unknown);
+  const recentColumns: ColumnsType<AnalyticsOverview["recent"][number]> = [
+    { title: "问题", dataIndex: "query", key: "query", ellipsis: true, render: (value: string, record) => <Typography.Text ellipsis title={record.error ?? value} style={{ maxWidth: 240 }}>{value}</Typography.Text> },
+    { title: "命中", dataIndex: "hitCount", key: "hitCount", width: 70, render: (_: unknown, record) => (record.error ? "失败" : record.hitCount) },
+    { title: "延迟", dataIndex: "latencyMs", key: "latencyMs", width: 90, render: (value: number) => `${value} ms` },
+    {
+      title: "反馈",
+      dataIndex: "feedback",
+      key: "feedback",
+      width: 70,
+      render: (value: string | null) => (value === "positive" ? "有用" : value === "negative" ? "无用" : "--"),
+    },
+    {
+      title: "归因",
+      dataIndex: "attribution",
+      key: "attribution",
+      width: 100,
+      render: (value: AnalyticsOverview["recent"][number]["attribution"]) => <Tag>{attributionLabel(value)}</Tag>,
+    },
+    { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 110, render: (value: string) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{formatDateTime(value)}</Typography.Text> },
+  ];
   return (
-    <div className="rag-analytics-dashboard">
-      <header className="analytics-heading">
-        <div>
-          <p>最近 {days} 天</p>
-          <h2>知识库服务质量</h2>
-        </div>
-        <div className="analytics-heading-actions">
-          <div className="segmented-control analytics-range-switch" aria-label="报告周期">
-            {([7, 30] as const).map((period) => (
-              <button
-                type="button"
-                key={period}
-                className={days === period ? "is-active" : ""}
-                onClick={() => onDaysChange(period)}
-              >
-                {period} 天
-              </button>
-            ))}
-          </div>
-          <span>{loading ? "更新中" : "实时汇总"}</span>
-        </div>
-      </header>
+    <Flex vertical gap={12}>
+      <Flex align="flex-start" justify="space-between" gap={12} wrap>
+        <Flex vertical gap={2}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>最近 {days} 天</Typography.Text>
+          <Typography.Title level={5} style={{ margin: 0 }}>知识库服务质量</Typography.Title>
+        </Flex>
+        <Flex gap={8} align="center">
+          <Segmented<7 | 30>
+            aria-label="报告周期"
+            value={days}
+            onChange={(value) => onDaysChange(value)}
+            options={[
+              { value: 7, label: "7 天" },
+              { value: 30, label: "30 天" },
+            ]}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{loading ? "更新中" : "实时汇总"}</Typography.Text>
+        </Flex>
+      </Flex>
 
-      <div className="analytics-metrics">
-        <Metric
-          label="查询总量"
-          value={String(overview.totals.queries)}
-          detail={`${overview.totals.failed} 次失败`}
-        />
-        <Metric
-          label="检索命中率"
-          value={quality ? `${Math.round(quality.hitRate * 100)}%` : "--"}
-          detail={quality ? `${quality.hits} 次命中文档` : "正在汇总归因"}
-          tone={quality && quality.hitRate < 0.75 ? "warning" : "normal"}
-        />
-        <Metric
-          label="无答案率"
-          value={quality ? `${Math.round(quality.noAnswerRate * 100)}%` : "--"}
-          detail={quality ? `${quality.noAnswer} 次无答案` : "正在汇总归因"}
-          tone={quality && quality.noAnswerRate > 0.25 ? "warning" : "normal"}
-        />
-      </div>
+      <Flex gap={12} wrap>
+        <Card size="small" style={{ flex: "1 1 160px" }}>
+          <Statistic title="查询总量" value={overview.totals.queries} suffix={`失败 ${overview.totals.failed}`} />
+        </Card>
+        <Card size="small" style={{ flex: "1 1 160px", borderColor: quality && quality.hitRate < 0.75 ? "#d98a2b" : undefined }}>
+          <Statistic
+            title="检索命中率"
+            value={quality ? Math.round(quality.hitRate * 100) : "--"}
+            suffix={quality ? "%" : ""}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{quality ? `${quality.hits} 次命中文档` : "正在汇总归因"}</Typography.Text>
+        </Card>
+        <Card size="small" style={{ flex: "1 1 160px", borderColor: quality && quality.noAnswerRate > 0.25 ? "#d98a2b" : undefined }}>
+          <Statistic
+            title="无答案率"
+            value={quality ? Math.round(quality.noAnswerRate * 100) : "--"}
+            suffix={quality ? "%" : ""}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{quality ? `${quality.noAnswer} 次无答案` : "正在汇总归因"}</Typography.Text>
+        </Card>
+        <Card size="small" style={{ flex: "1 1 160px" }}>
+          <Statistic title="平均延迟" value={overview.totals.averageLatencyMs} suffix="ms" />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>含检索与生成</Typography.Text>
+        </Card>
+        <Card size="small" style={{ flex: "1 1 160px", borderColor: overview.totals.noHitRate > 0.25 ? "#d98a2b" : undefined }}>
+          <Statistic title="空召回" value={overview.totals.noHits} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{Math.round(overview.totals.noHitRate * 100)}% 的成功请求</Typography.Text>
+        </Card>
+        <Card size="small" style={{ flex: "1 1 160px" }}>
+          <Statistic
+            title="用户好评"
+            value={helpful === null ? "--" : Math.round(helpful * 100)}
+            suffix={helpful === null ? "" : "%"}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{overview.totals.positiveFeedback + overview.totals.negativeFeedback} 条反馈</Typography.Text>
+        </Card>
+      </Flex>
 
-      <div className="analytics-secondary-metrics">
-        <Metric
-          label="平均延迟"
-          value={`${overview.totals.averageLatencyMs} ms`}
-          detail="含检索与生成"
-        />
-        <Metric
-          label="空召回"
-          value={String(overview.totals.noHits)}
-          detail={`${Math.round(overview.totals.noHitRate * 100)}% 的成功请求`}
-          tone={overview.totals.noHitRate > 0.25 ? "warning" : "normal"}
-        />
-        <Metric
-          label="用户好评"
-          value={helpful === null ? "--" : `${Math.round(helpful * 100)}%`}
-          detail={`${overview.totals.positiveFeedback + overview.totals.negativeFeedback} 条反馈`}
-        />
-      </div>
-
-      <div className="analytics-main-grid quality-grid">
-        <section className="analytics-section attribution-panel">
-          <div className="analytics-section-heading">
-            <h3>无答案归因</h3>
-            <span>按实际检索与生成结果</span>
-          </div>
+      <Flex gap={12} align="flex-start" wrap>
+        <Card size="small" title="无答案归因" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>按实际检索与生成结果</Typography.Text>} style={{ flex: "1 1 320px" }}>
           {attribution ? (
-            <div className="attribution-list">
-              {(
+            <List
+              size="small"
+              dataSource={
                 [
                   ["no_documents", "没有可见文档", "确认是否已上传文档或分组权限是否匹配"],
                   ["retrieval_miss", "未检索到内容", "补充同义词、标题与问题表述"],
@@ -914,161 +861,132 @@ function RagAnalyticsDashboard({
                   ["error", "服务错误", "检查模型、检索服务与网关日志"],
                   ["unknown", "历史未归因", "升级前事件缺少 CRAG 判定"],
                 ] as const
-              ).map(([key, label, hint]) => {
+              }
+              rowKey="0"
+              renderItem={([key, label, hint]) => {
                 const count = attribution[key];
                 const total = Math.max(1, quality?.queries ?? 0);
                 return (
-                  <div className="attribution-row" key={key}>
-                    <div>
-                      <b>{label}</b>
-                      <small>{hint}</small>
-                    </div>
-                    <strong>{count}</strong>
-                    <div className="attribution-track">
-                      <i
-                        style={{ width: `${Math.max(count > 0 ? 4 : 0, (count / total) * 100)}%` }}
-                      />
-                    </div>
-                  </div>
+                  <List.Item>
+                    <Flex vertical gap={4} style={{ width: "100%" }}>
+                      <Flex justify="space-between" align="center">
+                        <Flex vertical gap={0}>
+                          <Typography.Text strong>{label}</Typography.Text>
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{hint}</Typography.Text>
+                        </Flex>
+                        <Typography.Text strong>{count}</Typography.Text>
+                      </Flex>
+                      <Progress percent={Math.round((count / total) * 100)} showInfo={false} size="small" />
+                    </Flex>
+                  </List.Item>
                 );
-              })}
-            </div>
+              }}
+            />
           ) : (
-            <div className="analytics-empty">暂无归因数据</div>
+            <Empty description="暂无归因数据" />
           )}
           {hasNoAnswerHistory ? (
-            <p className="analytics-footnote">
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8 }}>
               历史事件来源版本较旧，无法可靠补判 attribution，因此保留为“历史未归因”。
-            </p>
+            </Typography.Paragraph>
           ) : null}
-        </section>
+        </Card>
 
-        <section className="analytics-section unanswered-ranking">
-          <div className="analytics-section-heading">
-            <h3>Top 未覆盖问题</h3>
-            <span>按出现次数</span>
-          </div>
+        <Card size="small" title="Top 未覆盖问题" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>按出现次数</Typography.Text>} style={{ flex: "1 1 280px" }}>
           {!report || report.topUnanswered.length === 0 ? (
-            <div className="analytics-empty">暂无未覆盖问题</div>
+            <Empty description="暂无未覆盖问题" />
           ) : (
-            <ol>
-              {report.topUnanswered.map((item) => (
-                <li key={`${item.query}:${item.attribution}`}>
-                  <span>{String(item.count).padStart(2, "0")}</span>
-                  <b title={item.query}>{item.query}</b>
-                  <small>{attributionLabel(item.attribution)}</small>
-                </li>
-              ))}
-            </ol>
+            <List
+              size="small"
+              dataSource={report.topUnanswered}
+              rowKey={(item) => `${item.query}:${item.attribution}`}
+              renderItem={(item) => (
+                <List.Item>
+                  <List.Item.Meta
+                    title={<Typography.Text ellipsis title={item.query}>{item.query}</Typography.Text>}
+                    description={attributionLabel(item.attribution)}
+                  />
+                  <Tag>{String(item.count).padStart(2, "0")}</Tag>
+                </List.Item>
+              )}
+            />
           )}
-        </section>
-      </div>
+        </Card>
+      </Flex>
 
-      <div className="analytics-main-grid">
-        <section className="analytics-section query-trend">
-          <div className="analytics-section-heading">
-            <h3>质量趋势</h3>
-            <span>柱高为每日查询量，橙色为无答案</span>
-          </div>
-          <div
-            className="query-bars"
-            style={
-              {
-                "--trend-columns": (report?.trend ?? []).length || days,
-              } as CSSProperties
-            }
-          >
-            {(report?.trend ?? []).map((day, index) => (
-              <div
-                className="query-bar-column"
-                key={day.date}
-                title={`${day.date}: ${day.queries} 次查询，${day.noAnswer} 次无答案`}
-              >
-                <span>{day.queries || ""}</span>
-                <div className="query-bar-track">
-                  <i
+      <Flex gap={12} align="flex-start" wrap>
+        <Card size="small" title="质量趋势" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>柱高为每日查询量，橙色为无答案</Typography.Text>} style={{ flex: "2 1 420px" }}>
+          <Flex gap={4} align="flex-end" style={{ minHeight: 120 }}>
+            {(report?.trend ?? []).map((day) => (
+              <Tooltip key={day.date} title={`${day.date}: ${day.queries} 次查询，${day.noAnswer} 次无答案`}>
+                <Flex vertical align="center" gap={4} style={{ flex: 1, minWidth: 0 }}>
+                  <Typography.Text style={{ fontSize: 11 }}>{day.queries || ""}</Typography.Text>
+                  <div
                     style={{
-                      height: `${Math.max(day.queries > 0 ? 8 : 2, (day.queries / maxQueries) * 100)}%`,
+                      width: "100%",
+                      height: Math.max(day.queries > 0 ? 8 : 2, (day.queries / maxQueries) * 100),
+                      background: "#f0efea",
+                      borderRadius: 4,
+                      position: "relative",
+                      overflow: "hidden",
                     }}
                   >
-                    <em
+                    <div
                       style={{
+                        position: "absolute",
+                        bottom: 0,
+                        width: "100%",
                         height: `${day.queries > 0 ? (day.noAnswer / day.queries) * 100 : 0}%`,
+                        background: "#d9822b",
                       }}
                     />
-                  </i>
-                </div>
-                <small>{days === 7 || index % 5 === 0 ? day.date.slice(5) : ""}</small>
-              </div>
+                  </div>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    {days === 7 ? day.date.slice(5) : day.date.slice(5)}
+                  </Typography.Text>
+                </Flex>
+              </Tooltip>
             ))}
-          </div>
-        </section>
+          </Flex>
+        </Card>
 
-        <section className="analytics-section source-ranking">
-          <div className="analytics-section-heading">
-            <h3>热门知识来源</h3>
-            <span>按召回片段数</span>
-          </div>
+        <Card size="small" title="热门知识来源" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>按召回片段数</Typography.Text>} style={{ flex: "1 1 240px" }}>
           {overview.topSources.length === 0 ? (
-            <div className="analytics-empty">暂无命中来源</div>
+            <Empty description="暂无命中来源" />
           ) : (
-            <ol>
-              {overview.topSources.map((source, index) => (
-                <li key={source.source}>
-                  <span>{String(index + 1).padStart(2, "0")}</span>
-                  <b title={source.source}>{source.source}</b>
-                  <small>{source.hits} hits</small>
-                </li>
-              ))}
-            </ol>
+            <List
+              size="small"
+              dataSource={overview.topSources}
+              rowKey="source"
+              renderItem={(source, index) => (
+                <List.Item>
+                  <Tag>{String(index + 1).padStart(2, "0")}</Tag>
+                  <Typography.Text ellipsis title={source.source} style={{ flex: 1 }}>{source.source}</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>{source.hits} hits</Typography.Text>
+                </List.Item>
+              )}
+            />
           )}
-        </section>
-      </div>
+        </Card>
+      </Flex>
 
-      <section className="analytics-section recent-queries">
-        <div className="analytics-section-heading">
-          <h3>最近查询</h3>
-          <span>最多展示 20 条</span>
-        </div>
-        <div className="analytics-table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>问题</th>
-                <th>命中</th>
-                <th>延迟</th>
-                <th>反馈</th>
-                <th>归因</th>
-                <th>时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              {overview.recent.map((item) => (
-                <tr key={item.id} className={item.error ? "is-error" : ""}>
-                  <td title={item.error ?? item.query}>{item.query}</td>
-                  <td>{item.error ? "失败" : item.hitCount}</td>
-                  <td>{item.latencyMs} ms</td>
-                  <td>
-                    {item.feedback === "positive"
-                      ? "有用"
-                      : item.feedback === "negative"
-                        ? "无用"
-                        : "--"}
-                  </td>
-                  <td className={`attribution-${item.attribution}`}>
-                    {attributionLabel(item.attribution)}
-                  </td>
-                  <td>{formatDateTime(item.createdAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {overview.recent.length === 0 ? (
-            <div className="analytics-empty">运行检索后会在这里显示质量数据</div>
-          ) : null}
-        </div>
-      </section>
-    </div>
+      <Card
+        size="small"
+        title="最近查询"
+        extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>最多展示 20 条</Typography.Text>}
+        styles={{ body: { padding: 0 } }}
+      >
+        <Table
+          size="small"
+          rowKey="id"
+          columns={recentColumns}
+          dataSource={overview.recent}
+          pagination={false}
+          scroll={{ x: "max-content" }}
+          locale={{ emptyText: <Empty description="运行检索后会在这里显示质量数据" /> }}
+        />
+      </Card>
+    </Flex>
   );
 }
 
@@ -1089,26 +1007,6 @@ function attributionLabel(attribution: AnalyticsOverview["recent"][number]["attr
     default:
       return "历史未归因";
   }
-}
-
-function Metric({
-  label,
-  value,
-  detail,
-  tone = "normal",
-}: {
-  label: string;
-  value: string;
-  detail: string;
-  tone?: "normal" | "warning";
-}) {
-  return (
-    <article className={`analytics-metric${tone === "warning" ? " is-warning" : ""}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </article>
-  );
 }
 
 function formatBytes(bytes: number): string {
@@ -1145,43 +1043,44 @@ function ChunkPreview({
   }, [highlightChunkIndex, chunks]);
 
   return (
-    <div className="preview-content">
-      <div className="preview-heading">
-        <div>
-          <p>分块预览</p>
-          <h2>{source ?? "未选择知识来源"}</h2>
-        </div>
-        {source ? <span>{chunks.length} chunks</span> : null}
-      </div>
+    <Card
+      size="small"
+      title="分块预览"
+      extra={<Tag>{source ? `${chunks.length} chunks` : "未选择"}</Tag>}
+    >
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+        {source ?? "未选择知识来源"}
+      </Typography.Paragraph>
       {!source ? (
-        <div className="asset-empty">
-          <FileTextOutlined />
-          <p>从左侧选择文档查看切分结果</p>
-        </div>
-      ) : null}
-      <div className="chunk-preview-list">
-        {chunks.map((chunk) => {
-          const isHighlighted =
-            highlightChunkIndex != null && chunk.chunkIndex === highlightChunkIndex;
-          return (
-            <article
-              className={`knowledge-chunk${isHighlighted ? " is-highlighted" : ""}`}
-              key={chunk.id}
-              ref={isHighlighted ? highlightRef : undefined}
-            >
-              <header>
-                <span>#{String(chunk.chunkIndex + 1).padStart(2, "0")}</span>
-                <span>{chunk.length} 字符</span>
-                <span className={chunk.hasEmbedding ? "vector-on" : "vector-off"}>
-                  {chunk.hasEmbedding ? "VECTOR" : "BM25"}
-                </span>
-              </header>
-              <p>{chunk.content}</p>
-            </article>
-          );
-        })}
-      </div>
-    </div>
+        <Empty description="从左侧选择文档查看切分结果" />
+      ) : (
+        <List
+          size="small"
+          dataSource={chunks}
+          rowKey="id"
+          locale={{ emptyText: <Empty description="暂无分块" /> }}
+          renderItem={(chunk) => {
+            const isHighlighted =
+              highlightChunkIndex != null && chunk.chunkIndex === highlightChunkIndex;
+            return (
+              <List.Item style={isHighlighted ? { background: "#fff7e6", borderRadius: 8 } : undefined}>
+                <List.Item.Meta
+                  title={
+                    <Flex gap={8} align="center" wrap>
+                      <Tag>#{String(chunk.chunkIndex + 1).padStart(2, "0")}</Tag>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>{chunk.length} 字符</Typography.Text>
+                      <Tag color={chunk.hasEmbedding ? "success" : "default"}>{chunk.hasEmbedding ? "VECTOR" : "BM25"}</Tag>
+                    </Flex>
+                  }
+                  description={<Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>{chunk.content}</Typography.Paragraph>}
+                />
+                {isHighlighted ? <span ref={highlightRef as unknown as undefined} /> : null}
+              </List.Item>
+            );
+          }}
+        />
+      )}
+    </Card>
   );
 }
 
@@ -1195,58 +1094,67 @@ function QueryPreview({
   onFeedback: (rating: QueryFeedbackRating) => void;
 }) {
   return (
-    <div className="preview-content query-result">
-      <div className="preview-heading">
-        <div>
-          <p>检索预览</p>
-          <h2>{result.query}</h2>
-        </div>
-        <div className="query-result-actions">
-          <span>{result.chunks.length} hits</span>
-          <button
-            type="button"
-            className={feedback === "positive" ? "is-active" : ""}
-            aria-label="检索结果有用"
-            title="有用"
-            onClick={() => onFeedback("positive")}
-          >
-            <LikeOutlined />
-          </button>
-          <button
-            type="button"
-            className={feedback === "negative" ? "is-active is-negative" : ""}
-            aria-label="检索结果无用"
-            title="无用"
-            onClick={() => onFeedback("negative")}
-          >
-            <DislikeOutlined />
-          </button>
-        </div>
-      </div>
+    <Card
+      size="small"
+      title="检索预览"
+      extra={
+        <Flex gap={4} align="center">
+          <Tag>{result.chunks.length} hits</Tag>
+          <Tooltip title="有用">
+            <Button
+              type={feedback === "positive" ? "primary" : "text"}
+              size="small"
+              icon={<LikeOutlined />}
+              aria-label="检索结果有用"
+              onClick={() => onFeedback("positive")}
+            />
+          </Tooltip>
+          <Tooltip title="无用">
+            <Button
+              type={feedback === "negative" ? "primary" : "text"}
+              danger={feedback === "negative"}
+              size="small"
+              icon={<DislikeOutlined />}
+              aria-label="检索结果无用"
+              onClick={() => onFeedback("negative")}
+            />
+          </Tooltip>
+        </Flex>
+      }
+    >
+      <Typography.Title level={5} style={{ marginTop: 0 }}>{result.query}</Typography.Title>
       {result.generate ? (
-        <section className="generated-answer">
-          <span className="answer-label">ANSWER</span>
+        <Card size="small" type="inner" title="ANSWER" style={{ marginBottom: 12 }}>
           {result.answer ? (
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{result.answer}</ReactMarkdown>
+            <Typography.Paragraph style={{ fontSize: 13 }}>{result.answer}</Typography.Paragraph>
           ) : (
-            <p>{result.llmAvailable ? "没有足够资料生成回答。" : "LLM 未启用，仅展示检索结果。"}</p>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+              {result.llmAvailable ? "没有足够资料生成回答。" : "LLM 未启用，仅展示检索结果。"}
+            </Typography.Paragraph>
           )}
-        </section>
+        </Card>
       ) : null}
-      <div className="chunk-preview-list">
-        {result.chunks.map((chunk, index) => (
-          <article className="knowledge-chunk is-hit" key={chunk.id}>
-            <header>
-              <span>#{String(index + 1).padStart(2, "0")}</span>
-              <span>
-                {chunk.source} · 第 {chunk.chunkIndex + 1} 段
-              </span>
-              <span>{chunk.score.toFixed(4)}</span>
-            </header>
-            <p>{chunk.content}</p>
-          </article>
-        ))}
-      </div>
-    </div>
+      <List
+        size="small"
+        dataSource={result.chunks}
+        rowKey="id"
+        renderItem={(chunk, index) => (
+          <List.Item>
+            <List.Item.Meta
+              title={
+                <Flex gap={8} align="center" wrap>
+                  <Tag>#{String(index + 1).padStart(2, "0")}</Tag>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {chunk.source} · 第 {chunk.chunkIndex + 1} 段
+                  </Typography.Text>
+                  <Tag>{chunk.score.toFixed(4)}</Tag>
+                </Flex>
+              }
+              description={<Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>{chunk.content}</Typography.Paragraph>}
+            />
+          </List.Item>
+        )}
+      />
+    </Card>
   );
 }

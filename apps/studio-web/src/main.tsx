@@ -82,6 +82,23 @@ function StudioRoot() {
           Select: {
             controlHeight: 32,
           },
+          Card: {
+            bodyPadding: 16,
+            headerPadding: 16,
+          },
+          Table: {
+            headerBg: "#faf9f6",
+          },
+          Tabs: {
+            inkBarColor: branding.primaryColor,
+          },
+          Segmented: {
+            trackBg: "#f0efea",
+          },
+          Alert: {},
+          Modal: {},
+          Empty: {},
+          Tag: {},
           Drawer: {
             colorBgElevated: "#ffffff",
           },

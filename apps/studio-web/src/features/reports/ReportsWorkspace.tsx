@@ -1,13 +1,33 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  CloseCircleFilled,
-  CheckCircleFilled,
+  Alert,
+  App,
+  Badge,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  List,
+  Popconfirm,
+  Select,
+  Spin,
+  Switch,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
+import type { ColumnsType } from "antd/es/table";
+import {
   DeleteOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
 } from "../../lib/icons.js";
+import { StudioPage } from "../../components/studio/StudioPageHeader.js";
+import { StudioNotice, type StudioNoticeValue } from "../../components/studio/StudioNotice.js";
 import {
   createReport,
   deleteReport,
@@ -30,12 +50,8 @@ import {
   formatDuration,
   isValidTimeOfDay,
 } from "./schedule.js";
-import "./reports.css";
 
-interface Notice {
-  type: "success" | "error";
-  text: string;
-}
+type Notice = StudioNoticeValue;
 
 function emptyDraft(): ReportDraft {
   return {
@@ -61,7 +77,15 @@ function draftFromReport(report: ScheduledReport): ReportDraft {
   };
 }
 
+function runTagColor(status: ReportRun["status"]): string {
+  if (status === "succeeded") return "success";
+  if (status === "failed") return "error";
+  if (status === "clarifying") return "warning";
+  return "processing";
+}
+
 export function ReportsWorkspace() {
+  const { message } = App.useApp();
   const [reports, setReports] = useState<ScheduledReport[]>([]);
   const [sources, setSources] = useState<SchemaSourceOption[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -129,6 +153,7 @@ export function ReportsWorkspace() {
       setSelectedId(saved.id);
       setDraft(draftFromReport(saved));
       await loadRuns(saved.id);
+      void message.success(selectedId ? "报表已更新" : "报表已创建");
       setNotice({ type: "success", text: selectedId ? "报表已更新" : "报表已创建" });
     } catch (error) {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "保存失败" });
@@ -145,13 +170,16 @@ export function ReportsWorkspace() {
       const { run } = await runReportNow(selectedId);
       await Promise.all([refresh(), loadRuns(selectedId)]);
       setOpenRunId(run.id);
-      setNotice({
-        type: run.status === "succeeded" ? "success" : "error",
-        text:
-          run.status === "succeeded"
-            ? `已运行,返回 ${run.rowCount ?? 0} 行`
-            : `运行未成功:${run.error ?? run.status}`,
-      });
+      const text =
+        run.status === "succeeded"
+          ? `已运行,返回 ${run.rowCount ?? 0} 行`
+          : `运行未成功:${run.error ?? run.status}`;
+      if (run.status === "succeeded") {
+        void message.success(text);
+        setNotice({ type: "success", text });
+      } else {
+        setNotice({ type: "error", text });
+      }
     } catch (error) {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "运行失败" });
     } finally {
@@ -161,13 +189,13 @@ export function ReportsWorkspace() {
 
   const remove = async () => {
     if (!selectedId) return;
-    if (!window.confirm("删除这个定时报表?运行历史会一并清理。")) return;
     setBusy("delete");
     setNotice(null);
     try {
       await deleteReport(selectedId);
       startNew();
       await refresh();
+      void message.success("报表已删除");
       setNotice({ type: "success", text: "报表已删除" });
     } catch (error) {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "删除失败" });
@@ -188,314 +216,356 @@ export function ReportsWorkspace() {
         : "请先填写合法的时间点"
       : "已停用,不会自动执行";
 
+  const runColumns: ColumnsType<ReportRun> = useMemo(
+    () => [
+      {
+        title: "开始时间",
+        dataIndex: "startedAt",
+        key: "startedAt",
+        render: (value: string) => (
+          <Typography.Text type="secondary">{formatDateTime(value)}</Typography.Text>
+        ),
+      },
+      {
+        title: "触发",
+        dataIndex: "trigger",
+        key: "trigger",
+        render: (value: ReportRun["trigger"]) => (value === "manual" ? "手动" : "定时"),
+      },
+      {
+        title: "状态",
+        dataIndex: "status",
+        key: "status",
+        render: (value: ReportRun["status"]) => (
+          <Tag color={runTagColor(value)}>{REPORT_STATUS_LABELS[value]}</Tag>
+        ),
+      },
+      {
+        title: "耗时",
+        dataIndex: "durationMs",
+        key: "durationMs",
+        render: (value: number) => (
+          <Typography.Text type="secondary">{formatDuration(value)}</Typography.Text>
+        ),
+      },
+      {
+        title: "行数",
+        dataIndex: "rowCount",
+        key: "rowCount",
+        render: (value: number | null) => (value ?? "—"),
+      },
+      {
+        title: "操作",
+        key: "actions",
+        render: (_: unknown, record: ReportRun) => (
+          <Button
+            type="link"
+            size="small"
+            onClick={() => setOpenRunId(openRunId === record.id ? null : record.id)}
+          >
+            {openRunId === record.id ? "收起" : "查看"}
+          </Button>
+        ),
+      },
+    ],
+    [openRunId],
+  );
+
+  const previewColumns: ColumnsType<Record<string, unknown>> = useMemo(() => {
+    if (!openRun || openRun.columns.length === 0) return [];
+    return openRun.columns.map((column) => ({
+      title: column,
+      dataIndex: column,
+      key: column,
+      ellipsis: true,
+      render: (value: unknown) => formatCellValue(value),
+    }));
+  }, [openRun]);
+
+  const enabledCount = reports.filter((item) => item.enabled).length;
+
   return (
-    <section className="domain-workspace reports-workspace">
-      <header className="domain-header">
-        <div>
-          <p className="domain-eyebrow">智能问数 / 定时报表</p>
-          <h1>定时报表</h1>
-        </div>
-        <div className="domain-header-actions">
-          <span className={`capability-state${reports.some((item) => item.enabled) ? " is-on" : ""}`}>
-            <span /> {reports.filter((item) => item.enabled).length} 个启用
-          </span>
-          <button
-            className="studio-button secondary"
-            type="button"
+    <StudioPage
+      eyebrow="Scheduled Reports"
+      title="定时报表"
+      description="把问数变成周期报表,保存后按周期自动执行。"
+      actions={
+        <>
+          <Badge status={enabledCount > 0 ? "success" : "default"} text={`${enabledCount} 个启用`} />
+          <Button
+            icon={<ReloadOutlined />}
+            disabled={loading}
             onClick={() => {
               setNotice(null);
               void refresh();
             }}
           >
-            <ReloadOutlined /> 刷新
-          </button>
-          <button className="studio-button primary" type="button" onClick={startNew}>
-            <PlusOutlined /> 新建报表
-          </button>
-        </div>
-      </header>
-
-      {notice ? (
-        <div className={`workspace-notice ${notice.type}`} role="status">
-          {notice.type === "success" ? <CheckCircleFilled /> : <CloseCircleFilled />}
-          {notice.text}
-        </div>
-      ) : null}
-
-      <div className="domain-grid reports-grid">
-        <aside className="resource-panel">
-          <div className="panel-heading">
-            <span>报表清单</span>
-            <span className="count-badge">{reports.length}</span>
-          </div>
-          {loading ? <div className="panel-state">正在加载报表...</div> : null}
-          {!loading && reports.length === 0 ? (
-            <div className="panel-state">还没有定时报表,点「新建报表」保存一次问数</div>
-          ) : null}
-          <div className="resource-list">
-            {reports.map((report) => (
-              <button
-                type="button"
-                key={report.id}
-                className={`resource-item reports-item${
-                  selectedId === report.id ? " is-active" : ""
-                }`}
-                onClick={() => select(report)}
-              >
-                <span
-                  className={`reports-dot is-${report.enabled ? "enabled" : "paused"}`}
-                  aria-hidden="true"
-                />
-                <span className="resource-copy">
-                  <b title={report.name}>{report.name}</b>
-                  <small>
-                    {describeSchedule(report.schedule)} ·{" "}
-                    {report.enabled
-                      ? `下次 ${formatDateTime(report.nextRunAt)}`
-                      : "已停用"}
-                  </small>
-                </span>
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        <div className="reports-detail">
-          {draft ? (
-            <form
-              className="settings-group reports-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void save();
-              }}
-            >
-              <div className="reports-form-heading">
-                <div>
-                  <h2>{selectedId ? "编辑报表" : "新建报表"}</h2>
-                  <p>{selectedId ? `ID ${selectedId.slice(0, 8)}` : "保存后开始按周期自动执行"}</p>
-                </div>
-                <span className={`reports-status is-${selectedId ? "succeeded" : "running"}`}>
-                  {selectedId ? "已保存" : "未保存"}
-                </span>
-              </div>
-
-              <label className="studio-field">
-                <span>
-                  名称 <small>{draft.name.length}/120</small>
-                </span>
-                <input
-                  value={draft.name}
-                  maxLength={120}
-                  placeholder="例如:每日活跃用户"
-                  onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                />
-              </label>
-
-              <label className="studio-field">
-                <span>
-                  自然语言问题 <small>{draft.question.length}/2000</small>
-                </span>
-                <textarea
-                  rows={3}
-                  value={draft.question}
-                  maxLength={2000}
-                  placeholder="例如:昨天的活跃用户有多少?"
-                  onChange={(event) => setDraft({ ...draft, question: event.target.value })}
-                />
-              </label>
-
-              <label className="studio-field">
-                <span>数据源</span>
-                <select
-                  value={draft.sourceId ?? ""}
-                  onChange={(event) =>
-                    setDraft({ ...draft, sourceId: event.target.value || null })
-                  }
-                >
-                  <option value="">默认数据源</option>
-                  {sources.map((source) => (
-                    <option key={source.id} value={source.id}>
-                      {source.name}
-                      {source.isDefault ? "(默认)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="reports-schedule">
-                <label className="studio-field">
-                  <span>周期</span>
-                  <select
-                    value={draft.frequency}
-                    onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        frequency: event.target.value === "weekly" ? "weekly" : "daily",
-                      })
-                    }
-                  >
-                    <option value="daily">每天</option>
-                    <option value="weekly">每周</option>
-                  </select>
-                </label>
-                <label className="studio-field">
-                  <span>时间</span>
-                  <input
-                    type="time"
-                    value={draft.time}
-                    onChange={(event) => setDraft({ ...draft, time: event.target.value })}
-                  />
-                </label>
-                {draft.frequency === "weekly" ? (
-                  <label className="studio-field">
-                    <span>星期</span>
-                    <select
-                      value={String(draft.weekday)}
-                      onChange={(event) =>
-                        setDraft({ ...draft, weekday: Number(event.target.value) })
-                      }
-                    >
-                      {WEEKDAY_LABELS.map((label, index) => (
-                        <option key={label} value={String(index)}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                <label className="reports-toggle">
-                  <input
-                    type="checkbox"
-                    checked={draft.enabled}
-                    onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
-                  />
-                  <span>启用自动执行</span>
-                </label>
-              </div>
-
-              <p className="reports-hint">{nextRunHint}</p>
-
-              <div className="reports-actions">
-                <button className="studio-button primary" type="submit" disabled={busy !== null}>
-                  <SaveOutlined /> {busy === "save" ? "保存中..." : "保存"}
-                </button>
-                {selectedId ? (
-                  <button
-                    className="studio-button secondary"
-                    type="button"
-                    disabled={busy !== null}
-                    onClick={() => void runNow()}
-                  >
-                    <PlayCircleOutlined /> {busy === "run" ? "运行中..." : "立即运行一次"}
-                  </button>
-                ) : null}
-                {selectedId ? (
-                  <button
-                    className="studio-button secondary reports-delete"
-                    type="button"
-                    disabled={busy !== null}
-                    onClick={() => void remove()}
-                  >
-                    <DeleteOutlined /> 删除
-                  </button>
-                ) : null}
-              </div>
-            </form>
+            刷新
+          </Button>
+          <Button icon={<PlusOutlined />} type="primary" onClick={startNew}>
+            新建报表
+          </Button>
+        </>
+      }
+      extra={<StudioNotice notice={notice} />}
+    >
+      <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}>
+        <Card
+          size="small"
+          title="报表清单"
+          extra={<Tag>{reports.length}</Tag>}
+          style={{ width: 280, flex: "0 0 auto", maxHeight: "100%", overflow: "hidden" }}
+          styles={{ body: { padding: 8, overflowY: "auto", maxHeight: "calc(100% - 57px)" } }}
+        >
+          {loading ? (
+            <Flex justify="center" style={{ padding: 24 }}>
+              <Spin aria-label="正在加载报表" />
+            </Flex>
+          ) : reports.length === 0 ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="还没有定时报表,点「新建报表」保存一次问数"
+            />
           ) : (
-            <div className="settings-group reports-empty">
-              <h2>选择一个报表</h2>
-              <p>左侧点选报表查看运行历史,或新建一个把问数变成周期报表。</p>
-            </div>
+            <List
+              size="small"
+              dataSource={reports}
+              rowKey="id"
+              renderItem={(report) => (
+                <List.Item
+                  onClick={() => select(report)}
+                  style={{
+                    cursor: "pointer",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                    background: report.id === selectedId ? "#f0f5ff" : undefined,
+                  }}
+                >
+                  <List.Item.Meta
+                    avatar={<Badge status={report.enabled ? "success" : "default"} />}
+                    title={
+                      <Typography.Text strong ellipsis style={{ maxWidth: 170 }}>
+                        {report.name}
+                      </Typography.Text>
+                    }
+                    description={`${describeSchedule(report.schedule)} · ${
+                      report.enabled ? `下次 ${formatDateTime(report.nextRunAt)}` : "已停用"
+                    }`}
+                  />
+                </List.Item>
+              )}
+            />
+          )}
+        </Card>
+
+        <Flex vertical gap={12} style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+          {draft ? (
+            <Card
+              size="small"
+              title={selectedId ? "编辑报表" : "新建报表"}
+              extra={
+                <Tag color={selectedId ? "success" : "processing"}>
+                  {selectedId ? `已保存 · ID ${selectedId.slice(0, 8)}` : "未保存"}
+                </Tag>
+              }
+            >
+              <Form layout="vertical" onFinish={() => void save()}>
+                <Form.Item label={`名称 (${draft.name.length}/120)`} required>
+                  <Input
+                    aria-label="报表名称"
+                    value={draft.name}
+                    maxLength={120}
+                    placeholder="例如:每日活跃用户"
+                    onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                  />
+                </Form.Item>
+                <Form.Item label={`自然语言问题 (${draft.question.length}/2000)`} required>
+                  <Input.TextArea
+                    aria-label="自然语言问题"
+                    rows={3}
+                    value={draft.question}
+                    maxLength={2000}
+                    placeholder="例如:昨天的活跃用户有多少?"
+                    onChange={(event) => setDraft({ ...draft, question: event.target.value })}
+                  />
+                </Form.Item>
+                <Form.Item label="数据源">
+                  <Select
+                    aria-label="数据源"
+                    value={draft.sourceId ?? ""}
+                    onChange={(value) => setDraft({ ...draft, sourceId: value || null })}
+                    options={[
+                      { value: "", label: "默认数据源" },
+                      ...sources.map((source) => ({
+                        value: source.id,
+                        label: `${source.name}${source.isDefault ? "(默认)" : ""}`,
+                      })),
+                    ]}
+                  />
+                </Form.Item>
+                <Flex gap={12} wrap>
+                  <Form.Item label="周期" style={{ flex: 1, minWidth: 140 }}>
+                    <Select
+                      aria-label="周期"
+                      value={draft.frequency}
+                      onChange={(value) =>
+                        setDraft({ ...draft, frequency: value === "weekly" ? "weekly" : "daily" })
+                      }
+                      options={[
+                        { value: "daily", label: "每天" },
+                        { value: "weekly", label: "每周" },
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label="时间"
+                    style={{ flex: 1, minWidth: 140 }}
+                    validateStatus={isValidTimeOfDay(draft.time) ? undefined : "error"}
+                    help={isValidTimeOfDay(draft.time) ? undefined : "时间必须是 HH:MM(24 小时制)"}
+                  >
+                    <Input
+                      aria-label="时间"
+                      type="time"
+                      value={draft.time}
+                      onChange={(event) => setDraft({ ...draft, time: event.target.value })}
+                    />
+                  </Form.Item>
+                  {draft.frequency === "weekly" ? (
+                    <Form.Item label="星期" style={{ flex: 1, minWidth: 140 }}>
+                      <Select
+                        aria-label="星期"
+                        value={String(draft.weekday)}
+                        onChange={(value) => setDraft({ ...draft, weekday: Number(value) })}
+                        options={WEEKDAY_LABELS.map((label, index) => ({
+                          value: String(index),
+                          label,
+                        }))}
+                      />
+                    </Form.Item>
+                  ) : null}
+                  <Form.Item label="启用自动执行" style={{ flex: 1, minWidth: 140 }}>
+                    <Switch
+                      aria-label="启用自动执行"
+                      checked={draft.enabled}
+                      onChange={(checked) => setDraft({ ...draft, enabled: checked })}
+                    />
+                  </Form.Item>
+                </Flex>
+                <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+                  {nextRunHint}
+                </Typography.Paragraph>
+                <Flex gap={8} justify="flex-end" wrap>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    icon={<SaveOutlined />}
+                    loading={busy === "save"}
+                    disabled={busy !== null && busy !== "save"}
+                  >
+                    保存
+                  </Button>
+                  {selectedId ? (
+                    <Button
+                      icon={<PlayCircleOutlined />}
+                      loading={busy === "run"}
+                      disabled={busy !== null}
+                      onClick={() => void runNow()}
+                    >
+                      立即运行一次
+                    </Button>
+                  ) : null}
+                  {selectedId ? (
+                    <Popconfirm
+                      title="删除这个定时报表?"
+                      description="运行历史会一并清理,该操作不可恢复。"
+                      okText="确认删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => void remove()}
+                    >
+                      <Button
+                        danger
+                        icon={<DeleteOutlined />}
+                        disabled={busy !== null}
+                        aria-label="删除报表"
+                      >
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  ) : null}
+                </Flex>
+              </Form>
+            </Card>
+          ) : (
+            <Card size="small">
+              <Empty description="选择一个报表,或新建一个把问数变成周期报表。" />
+            </Card>
           )}
 
           {selectedId ? (
-            <div className="settings-group reports-history">
-              <div className="panel-heading">
-                <span>运行历史</span>
-                <span className="count-badge">{runs.length}</span>
-              </div>
-              {runs.length === 0 ? <div className="panel-state">还没有运行记录</div> : null}
-              {runs.length > 0 ? (
-                <>
-                  <div className="operations-table-head reports-runs-head">
-                    <span>开始时间</span>
-                    <span>触发</span>
-                    <span>状态</span>
-                    <span>耗时</span>
-                    <span>行数</span>
-                    <span />
-                  </div>
-                  {runs.map((run) => (
-                    <div className="operations-table-row reports-runs-row" key={run.id}>
-                      <time dateTime={run.startedAt}>{formatDateTime(run.startedAt)}</time>
-                      <span>{run.trigger === "manual" ? "手动" : "定时"}</span>
-                      <span className={`reports-status is-${run.status}`}>
-                        {REPORT_STATUS_LABELS[run.status]}
-                      </span>
-                      <span>{formatDuration(run.durationMs)}</span>
-                      <span>{run.rowCount ?? "—"}</span>
-                      <button
-                        className="studio-button compact secondary"
-                        type="button"
-                        onClick={() => setOpenRunId(openRunId === run.id ? null : run.id)}
-                      >
-                        {openRunId === run.id ? "收起" : "查看"}
-                      </button>
-                    </div>
-                  ))}
-                </>
-              ) : null}
-
+            <Card size="small" title="运行历史" extra={<Tag>{runs.length}</Tag>}>
+              <Table<ReportRun>
+                size="small"
+                rowKey="id"
+                columns={runColumns}
+                dataSource={runs}
+                pagination={runs.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
+                scroll={{ x: "max-content" }}
+                locale={{ emptyText: <Empty description="还没有运行记录" /> }}
+              />
               {openRun ? (
-                <div className="reports-run-detail">
-                  {openRun.error ? <p className="reports-run-error">{openRun.error}</p> : null}
+                <Flex vertical gap={10} style={{ marginTop: 12 }}>
+                  {openRun.error ? <Alert type="error" showIcon message={openRun.error} /> : null}
                   {openRun.sql ? (
-                    <pre className="studio-code reports-run-sql">{openRun.sql}</pre>
+                    <Typography.Paragraph
+                      code
+                      copyable
+                      ellipsis={{ rows: 4, expandable: true }}
+                      style={{ margin: 0 }}
+                    >
+                      {openRun.sql}
+                    </Typography.Paragraph>
                   ) : null}
                   {openRun.checks.length > 0 ? (
-                    <ul className="reports-checks">
+                    <Flex vertical gap={4}>
                       {openRun.checks.map((check) => (
-                        <li key={`${check.code}-${check.message}`} className={`is-${check.level}`}>
-                          {check.message}
-                        </li>
+                        <Alert
+                          key={`${check.code}-${check.message}`}
+                          type={check.level === "warning" ? "warning" : "info"}
+                          showIcon
+                          message={check.message}
+                        />
                       ))}
-                    </ul>
+                    </Flex>
                   ) : null}
                   {openRun.columns.length > 0 ? (
-                    <div className="reports-preview">
-                      <table>
-                        <thead>
-                          <tr>
-                            {openRun.columns.map((column) => (
-                              <th key={column}>{column}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {openRun.preview.map((row, index) => (
-                            <tr key={index}>
-                              {openRun.columns.map((column) => (
-                                <td key={column}>{formatCellValue(row[column])}</td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                    <>
+                      <Table<Record<string, unknown>>
+                        size="small"
+                        rowKey={(_, index) => String(index)}
+                        columns={previewColumns}
+                        dataSource={openRun.preview.map((row) => ({
+                          ...row,
+                          key: JSON.stringify(row),
+                        }))}
+                        pagination={{ pageSize: 10, showSizeChanger: false }}
+                        scroll={{ x: "max-content" }}
+                      />
                       {openRun.truncated ? (
-                        <p className="reports-hint">
+                        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
                           结果已截断,仅保留前 {openRun.preview.length} 行快照
-                        </p>
+                        </Typography.Paragraph>
                       ) : null}
-                    </div>
+                    </>
                   ) : (
-                    <p className="panel-state">本次运行没有返回数据</p>
+                    <Empty description="本次运行没有返回数据" />
                   )}
-                </div>
+                </Flex>
               ) : null}
-            </div>
+            </Card>
           ) : null}
-        </div>
-      </div>
-    </section>
+        </Flex>
+      </Flex>
+    </StudioPage>
   );
 }

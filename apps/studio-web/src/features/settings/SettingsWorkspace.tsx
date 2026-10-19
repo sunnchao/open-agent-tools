@@ -1,15 +1,33 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useState } from "react";
 import {
-  CloseOutlined,
+  Alert,
+  App,
+  Badge,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  Menu,
+  Modal,
+  Popconfirm,
+  Select,
+  Spin,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import type { ColumnsType } from "antd/es/table";
+import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
-  SafetyCertificateOutlined,
   SaveOutlined,
-  SettingOutlined,
   StarOutlined,
 } from "../../lib/icons.js";
 import {
@@ -115,6 +133,16 @@ const sectionCopy: Record<SettingsSection, { title: string; subtitle: string }> 
   },
 };
 
+const sectionMenuItems = [
+  { key: "providers", label: "01 · 模型 Provider" },
+  { key: "schema-sources", label: "02 · Schema 数据源" },
+  { key: "mcp-gateway", label: "03 · MCP Gateway" },
+  { key: "im", label: "04 · IM 渠道" },
+  { key: "apps", label: "05 · 员工入口" },
+  { key: "identity", label: "06 · 企业身份" },
+  { key: "branding", label: "07 · 品牌与渠道" },
+];
+
 function initialSection(): SettingsSection {
   const stored = sessionStorage.getItem("open-agent-tools.settings-section");
   return stored === "schema-sources" ||
@@ -145,6 +173,13 @@ const emptyDraft = (): Draft => ({
   format: "openai-chat",
 });
 
+interface IdentityRow {
+  key: string;
+  item: string;
+  value: string;
+  note: string;
+}
+
 function IdentitySection(props: {
   status: IdentityStatus | null;
   loading: boolean;
@@ -152,145 +187,128 @@ function IdentitySection(props: {
   onRefresh: () => void;
 }) {
   const { status, loading, error } = props;
+  const rows: IdentityRow[] = status
+    ? [
+        {
+          key: "provider",
+          item: "Studio 身份提供商",
+          value: identityProviderLabel[status.provider],
+          note: "OIDC 优先；部署 Token 仅作显式兼容回退。",
+        },
+        {
+          key: "issuer",
+          item: "Issuer / Audience",
+          value: `${status.issuer ?? "未配置"} / ${status.audience ?? "未配置"}`,
+          note: "服务端校验 JWT 的签发方与受众，不接受前端传入。",
+        },
+        {
+          key: "claims",
+          item: "组 / 角色 Claim",
+          value: `${status.groupsClaim} / ${status.rolesClaim}`,
+          note: `管理员角色：${status.adminRoles.join(", ") || "未配置"}`,
+        },
+        {
+          key: "ldap",
+          item: "LDAP 网关",
+          value: ldapReadinessLabel[status.ldap.readiness],
+          note: status.ldap.summary,
+        },
+        {
+          key: "hmac",
+          item: "LDAP → HMAC 断言",
+          value: `${status.ldap.assertionKeyId ?? "未配置 Key ID"} / ${status.ldap.identityMode}`,
+          note: `${status.ldap.assertionIssuer ?? "未配置 Issuer"} / ${status.ldap.assertionAudience ?? "未配置 Audience"}。HMAC secret 仅保留在服务端与网关。`,
+        },
+        {
+          key: "password",
+          item: "密码处理",
+          value: "不接收",
+          note: "Agent Server 不在请求中 bind LDAP，不保存 LDAP 密码或 OIDC client secret。",
+        },
+      ]
+    : [];
+  const columns: ColumnsType<IdentityRow> = [
+    { title: "项目", dataIndex: "item", key: "item", render: (value: string) => <Typography.Text strong>{value}</Typography.Text> },
+    {
+      title: "当前值",
+      dataIndex: "value",
+      key: "value",
+      render: (value: string, record: IdentityRow) =>
+        record.key === "provider" || record.key === "ldap" ? (
+          <Badge
+            status={
+              (record.key === "provider" && status?.enabled) ||
+              (record.key === "ldap" && status?.ldap.readiness === "ready")
+                ? "success"
+                : "default"
+            }
+            text={value}
+          />
+        ) : record.key === "password" ? (
+          <Tag>{value}</Tag>
+        ) : (
+          <Typography.Text code style={{ fontSize: 12 }}>{value}</Typography.Text>
+        ),
+    },
+    { title: "说明", dataIndex: "note", key: "note", render: (value: string) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{value}</Typography.Text> },
+  ];
   return (
-    <main className="settings-content">
-      {error ? <div className="settings-alert">{error}</div> : null}
-      <div className="settings-intro">
-        <div>
-          <span className="settings-kicker">ENTERPRISE IDENTITY</span>
-          <h2>
-            <SafetyCertificateOutlined /> 企业身份接入
-          </h2>
-        </div>
-        <button
-          className="studio-button secondary"
-          type="button"
-          onClick={props.onRefresh}
-          disabled={loading}
-        >
-          <ReloadOutlined spin={loading} /> <span>刷新状态</span>
-        </button>
-      </div>
-
+    <Flex vertical gap={12}>
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      <Flex align="flex-start" justify="space-between" gap={12}>
+        <Flex vertical gap={2}>
+          <Typography.Text type="secondary" style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2 }}>
+            ENTERPRISE IDENTITY
+          </Typography.Text>
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            企业身份接入
+          </Typography.Title>
+        </Flex>
+        <Button icon={<ReloadOutlined spin={loading} />} disabled={loading} onClick={props.onRefresh}>
+          刷新状态
+        </Button>
+      </Flex>
+      {status?.configError ? (
+        <Alert
+          type="error"
+          showIcon
+          message={`身份配置未生效：${status.configError}。受保护接口当前拒绝访问，请修正环境变量后重启服务。`}
+        />
+      ) : null}
       {status ? (
-        <>
-          {status.configError ? (
-            <div className="settings-alert">
-              身份配置未生效:{status.configError}
-              。受保护接口当前拒绝访问,请修正环境变量后重启服务。
-            </div>
-          ) : null}
-          <div className="provider-table-wrap">
-            <table className="provider-table">
-              <thead>
-                <tr>
-                  <th>项目</th>
-                  <th>当前值</th>
-                  <th>说明</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td data-label="项目">
-                    <b>Studio 身份提供商</b>
-                  </td>
-                  <td data-label="当前值">
-                    <span className={`status-pill${status.enabled ? " is-enabled" : ""}`}>
-                      {identityProviderLabel[status.provider]}
-                    </span>
-                  </td>
-                  <td data-label="说明">OIDC 优先;部署 Token 仅作显式兼容回退。</td>
-                </tr>
-                <tr>
-                  <td data-label="项目">
-                    <b>Issuer / Audience</b>
-                  </td>
-                  <td data-label="当前值">
-                    <code>{status.issuer ?? "未配置"}</code>
-                    <code>{status.audience ?? "未配置"}</code>
-                  </td>
-                  <td data-label="说明">服务端校验 JWT 的签发方与受众,不接受前端传入。</td>
-                </tr>
-                <tr>
-                  <td data-label="项目">
-                    <b>组 / 角色 Claim</b>
-                  </td>
-                  <td data-label="当前值">
-                    <code>{status.groupsClaim}</code>
-                    <code>{status.rolesClaim}</code>
-                  </td>
-                  <td data-label="说明">管理员角色:{status.adminRoles.join(", ") || "未配置"}</td>
-                </tr>
-                <tr>
-                  <td data-label="项目">
-                    <b>LDAP 网关</b>
-                  </td>
-                  <td data-label="当前值">
-                    <span
-                      className={`status-pill${status.ldap.readiness === "ready" ? " is-enabled" : ""}`}
-                    >
-                      {ldapReadinessLabel[status.ldap.readiness]}
-                    </span>
-                  </td>
-                  <td data-label="说明">{status.ldap.summary}</td>
-                </tr>
-                {status.ldap.configError ? (
-                  <tr>
-                    <td data-label="项目">
-                      <b>LDAP 配置错误</b>
-                    </td>
-                    <td data-label="当前值" colSpan={2}>
-                      {status.ldap.configError}
-                    </td>
-                  </tr>
-                ) : null}
-                <tr>
-                  <td data-label="项目">
-                    <b>LDAP → HMAC 断言</b>
-                  </td>
-                  <td data-label="当前值">
-                    <code>{status.ldap.assertionKeyId ?? "未配置 Key ID"}</code>
-                    <code>{status.ldap.identityMode}</code>
-                  </td>
-                  <td data-label="说明">
-                    {status.ldap.assertionIssuer ?? "未配置 Issuer"} /{" "}
-                    {status.ldap.assertionAudience ?? "未配置 Audience"}。HMAC secret
-                    仅保留在服务端与网关。
-                  </td>
-                </tr>
-                <tr>
-                  <td data-label="项目">
-                    <b>密码处理</b>
-                  </td>
-                  <td data-label="当前值">
-                    <span className="status-pill">不接收</span>
-                  </td>
-                  <td data-label="说明">
-                    Agent Server 不在请求中 bind LDAP,不保存 LDAP 密码或 OIDC client secret。
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p className="mcp-gateway-note">
-            当前配置:
-            {status.ldap.gatewayConfigured ? " 已配置可信网关入口;" : " 未配置可信网关入口;"}
-            {status.deploymentTokenFallback
-              ? " 部署 Token 回退已启用。"
-              : " 未启用部署 Token 回退。"}
-          </p>
-        </>
+        <Card size="small" styles={{ body: { padding: 0 } }}>
+          <Table<IdentityRow>
+            size="small"
+            rowKey="key"
+            columns={columns}
+            dataSource={rows}
+            pagination={false}
+            loading={loading}
+            scroll={{ x: "max-content" }}
+          />
+        </Card>
       ) : (
-        <div className="settings-intro">
-          <span>{loading ? "正在读取身份接入状态..." : "暂无身份接入状态。"}</span>
-        </div>
+        <Card size="small">
+          {loading ? (
+            <Flex justify="center" style={{ padding: 24 }}><Spin aria-label="正在读取身份接入状态" /></Flex>
+          ) : (
+            <Empty description="暂无身份接入状态。" />
+          )}
+        </Card>
       )}
-    </main>
+      {status ? (
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          当前配置：
+          {status.ldap.gatewayConfigured ? "已配置可信网关入口；" : "未配置可信网关入口；"}
+          {status.deploymentTokenFallback ? "部署 Token 回退已启用。" : "未启用部署 Token 回退。"}
+        </Typography.Paragraph>
+      ) : null}
+    </Flex>
   );
 }
 
 export function SettingsWorkspace() {
-  const sectionNavRef = useRef<HTMLElement>(null);
+  const { message } = App.useApp();
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(true);
@@ -311,13 +329,6 @@ export function SettingsWorkspace() {
   const [identityStatus, setIdentityStatus] = useState<IdentityStatus | null>(null);
   const [identityLoading, setIdentityLoading] = useState(false);
   const [identityError, setIdentityError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!window.matchMedia("(max-width: 760px)").matches) return;
-    sectionNavRef.current
-      ?.querySelector<HTMLElement>(".settings-section.is-active")
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeSection]);
 
   const selectSection = (section: SettingsSection) => {
     sessionStorage.setItem("open-agent-tools.settings-section", section);
@@ -354,7 +365,7 @@ export function SettingsWorkspace() {
     }
   };
 
-  // 用量明细导出:带当前空间范围,通过 studioFetch 携带鉴权头后保存为文件。
+  // 用量明细导出：带当前空间范围，通过 studioFetch 携带鉴权头后保存为文件。
   const exportUsage = async (format: ExportFormat) => {
     if (usageExporting) return;
     setUsageExporting(format);
@@ -364,6 +375,7 @@ export function SettingsWorkspace() {
         usageExportPath({ days: 30, all: usageAll }, format),
         `usage-events.${format}`,
       );
+      void message.success("用量明细已导出");
     } catch (reason) {
       setUsageExportError(reason instanceof Error ? reason.message : "用量导出失败");
     } finally {
@@ -396,9 +408,10 @@ export function SettingsWorkspace() {
     setSaving(true);
     setError(null);
     try {
-      await saveProvider(draft);
+      const saved = await saveProvider(draft);
       setDraft(null);
       await refresh();
+      void message.success(`已保存 Provider「${saved.name}」`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Provider 保存失败");
     } finally {
@@ -423,6 +436,7 @@ export function SettingsWorkspace() {
     try {
       await setDefaultProvider(provider.id);
       await refresh();
+      void message.success(`已将「${provider.name}」设为默认`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "设置默认 Provider 失败");
     } finally {
@@ -430,454 +444,354 @@ export function SettingsWorkspace() {
     }
   };
 
-  return (
-    <section className="settings-workspace">
-      <header className="domain-header settings-header">
-        <div>
-          <p className="domain-eyebrow">RUNTIME CONFIGURATION</p>
-          <h1>
-            <SettingOutlined /> {sectionCopy[activeSection].title}
-          </h1>
-          <p className="domain-subtitle">{sectionCopy[activeSection].subtitle}</p>
-        </div>
-        {activeSection === "providers" ? (
-          <div className="domain-header-actions">
-            <button
-              className="studio-button secondary"
-              type="button"
-              onClick={() => void refresh()}
-              disabled={loading}
-            >
-              <ReloadOutlined spin={loading} /> <span>刷新</span>
-            </button>
-            <button
-              className="studio-button primary"
-              type="button"
-              onClick={() => setDraft(emptyDraft())}
-            >
-              <PlusOutlined /> <span>新建 Provider</span>
-            </button>
-          </div>
-        ) : null}
-      </header>
-      <div className="settings-body">
-        <aside className="settings-sections" ref={sectionNavRef}>
-          <button
-            type="button"
-            className={`settings-section${activeSection === "providers" ? " is-active" : ""}`}
-            aria-current={activeSection === "providers" ? "page" : undefined}
-            onClick={() => selectSection("providers")}
-          >
-            <span>01</span>
-            <b>模型 Provider</b>
-            <small>路由与模型目录</small>
-          </button>
-          <button
-            type="button"
-            className={`settings-section${activeSection === "schema-sources" ? " is-active" : ""}`}
-            aria-current={activeSection === "schema-sources" ? "page" : undefined}
-            onClick={() => selectSection("schema-sources")}
-          >
-            <span>02</span>
-            <b>Schema 数据源</b>
-            <small>问数连接与目录</small>
-          </button>
-          <button
-            type="button"
-            className={`settings-section${activeSection === "mcp-gateway" ? " is-active" : ""}`}
-            aria-current={activeSection === "mcp-gateway" ? "page" : undefined}
-            onClick={() => selectSection("mcp-gateway")}
-          >
-            <span>03</span>
-            <b>MCP Gateway</b>
-            <small>地址与 API Key</small>
-          </button>
-          <button
-            type="button"
-            className={`settings-section${activeSection === "im" ? " is-active" : ""}`}
-            aria-current={activeSection === "im" ? "page" : undefined}
-            onClick={() => selectSection("im")}
-          >
-            <span>04</span>
-            <b>IM 渠道</b>
-            <small>飞书 / 钉钉机器人</small>
-          </button>
-          <button
-            type="button"
-            className={`settings-section${activeSection === "apps" ? " is-active" : ""}`}
-            aria-current={activeSection === "apps" ? "page" : undefined}
-            onClick={() => selectSection("apps")}
-          >
-            <span>05</span>
-            <b>员工入口</b>
-            <small>发布问答应用</small>
-          </button>
-          <button
-            type="button"
-            className={`settings-section${activeSection === "identity" ? " is-active" : ""}`}
-            aria-current={activeSection === "identity" ? "page" : undefined}
-            onClick={() => selectSection("identity")}
-          >
-            <span>06</span>
-            <b>企业身份</b>
-            <small>OIDC / LDAP 接入</small>
-          </button>
-          <button
-            type="button"
-            className={`settings-section${activeSection === "branding" ? " is-active" : ""}`}
-            aria-current={activeSection === "branding" ? "page" : undefined}
-            onClick={() => selectSection("branding")}
-          >
-            <span>07</span>
-            <b>品牌与渠道</b>
-            <small>白标 / 分销码</small>
-          </button>
-        </aside>
-        {activeSection === "providers" ? (
-          <main className="settings-content">
-            {error ? <div className="settings-alert">{error}</div> : null}
-            <div className="settings-intro">
-              <div>
-                <span className="settings-kicker">STUDIO ACCESS</span>
-                <h2>部署访问 Token</h2>
-              </div>
-              <span>{studioToken ? "已配置" : "未配置"}</span>
-            </div>
-            <div className="settings-modal-fields">
-              <label className="studio-field">
-                <span>
-                  主服务 Token <small>与服务端 STUDIO_API_TOKEN 保持一致；本地未配置时留空</small>
-                </span>
-                <input
-                  type="password"
-                  value={studioToken}
-                  onChange={(event) => {
-                    setStudioToken(event.target.value);
-                    setTokenSaved(false);
-                  }}
-                  autoComplete="new-password"
-                  placeholder="部署环境配置后在此填写"
-                />
-              </label>
-              <div className="domain-header-actions">
-                <button
-                  className="studio-button secondary"
-                  type="button"
-                  onClick={() => {
-                    setStudioApiToken(studioToken);
-                    setTokenSaved(true);
-                    void refresh();
-                  }}
-                >
-                  <SaveOutlined /> <span>保存并验证</span>
-                </button>
-                {tokenSaved ? <span>已保存，Provider 列表已刷新验证。</span> : null}
-              </div>
-            </div>
+  const remove = async (provider: ProviderMetadata) => {
+    setError(null);
+    try {
+      await removeProvider(provider.id);
+      await refresh();
+      void message.success(`Provider「${provider.name}」已删除`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "删除失败");
+    }
+  };
 
-            <div className="settings-intro">
-              <div>
-                <span className="settings-kicker">WORKSPACE</span>
-                <h2>工作空间归属</h2>
-              </div>
-              <span>{workspaces.length} 个工作空间</span>
-            </div>
-            {workspaceError ? <div className="settings-alert">{workspaceError}</div> : null}
-            <div className="settings-modal-fields">
-              <label className="studio-field">
-                <span>
-                  当前工作空间 <small>会话与用量按空间归集；切换后需刷新页面生效</small>
-                </span>
-                <select
-                  value={activeWorkspace}
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    setActiveWorkspace(next);
-                    setWorkspaceId(next);
-                    void refreshUsage(usageAll);
-                  }}
-                >
-                  <option value="">默认空间（未指定归属）</option>
-                  {workspaces
-                    .filter((workspace) => workspace.id !== "default")
-                    .map((workspace) => (
-                      <option key={workspace.id} value={workspace.id}>
-                        {workspace.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <label className="studio-field">
-                <span>
-                  新建工作空间 <small>用于把会话与用量按部门/项目归集</small>
-                </span>
-                <input
-                  value={newWorkspaceName}
-                  onChange={(event) => setNewWorkspaceName(event.target.value)}
-                  placeholder="例如：交付部"
-                />
-              </label>
-              <div className="domain-header-actions">
-                <button
-                  className="studio-button secondary"
-                  type="button"
-                  disabled={!newWorkspaceName.trim()}
-                  onClick={() => {
-                    void createWorkspace({ name: newWorkspaceName })
-                      .then(() => {
-                        setNewWorkspaceName("");
-                        return refreshWorkspaces();
-                      })
-                      .catch((reason) =>
-                        setWorkspaceError(
-                          reason instanceof Error ? reason.message : "创建工作空间失败",
-                        ),
-                      );
-                  }}
-                >
-                  <PlusOutlined /> <span>新建工作空间</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="settings-intro">
-              <div>
-                <span className="settings-kicker">USAGE</span>
-                <h2>近 30 天用量</h2>
-              </div>
-              <div className="domain-header-actions">
-                <button
-                  className="studio-button secondary"
-                  type="button"
-                  onClick={() => {
-                    const next = !usageAll;
-                    setUsageAll(next);
-                    void refreshUsage(next);
-                  }}
-                >
-                  {usageAll ? "只看当前空间" : "查看全局合计"}
-                </button>
-                <button
-                  className="studio-button secondary"
-                  type="button"
-                  disabled={usageExporting !== null}
-                  onClick={() => void exportUsage("csv")}
-                >
-                  <DownloadOutlined /> {usageExporting === "csv" ? "导出中..." : "导出 CSV"}
-                </button>
-                <button
-                  className="studio-button secondary"
-                  type="button"
-                  disabled={usageExporting !== null}
-                  onClick={() => void exportUsage("json")}
-                >
-                  <DownloadOutlined /> {usageExporting === "json" ? "导出中..." : "导出 JSON"}
-                </button>
-              </div>
-            </div>
-            {usageExportError ? (
-              <div className="settings-alert">用量导出失败:{usageExportError}</div>
-            ) : null}
-            {usage ? (
-              <>
-                <div className="settings-intro">
-                  <span>
-                    对话 {usage.totals.chatTurns} 轮 · 工具 {usage.totals.toolCalls} 次 · 合计{" "}
-                    {usage.totals.totalTokens.toLocaleString()} tokens
-                  </span>
-                  <span>
-                    范围：{usage.workspaceId === "*" ? "全部工作空间" : usage.workspaceId}
-                  </span>
-                </div>
-                <div className="provider-table-wrap">
-                  <table className="provider-table">
-                    <thead>
-                      <tr>
-                        <th>模型</th>
-                        <th>对话轮数</th>
-                        <th>输入 tokens</th>
-                        <th>输出 tokens</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {usage.byModel.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="table-empty">
-                            该时间窗内还没有用量记录
-                          </td>
-                        </tr>
-                      ) : (
-                        usage.byModel.map((entry) => (
-                          <tr key={entry.model}>
-                            <td data-label="模型">
-                              <code>{entry.model}</code>
-                            </td>
-                            <td data-label="对话轮数">{entry.chatTurns}</td>
-                            <td data-label="输入">{entry.inputTokens.toLocaleString()}</td>
-                            <td data-label="输出">{entry.outputTokens.toLocaleString()}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            ) : (
-              <div className="settings-intro">
-                <span>用量数据暂不可用（可能未配置部署 Token 或接口未就绪）。</span>
-              </div>
-            )}
-            <div className="settings-intro">
-              <div>
-                <span className="settings-kicker">MODEL ROUTING</span>
-                <h2>服务商目录</h2>
-              </div>
-              <span>{providers.length} 个 Provider</span>
-            </div>
-            <div className="provider-table-wrap">
-              <table className="provider-table">
-                <thead>
-                  <tr>
-                    <th>名称</th>
-                    <th>Base URL</th>
-                    <th>API Key</th>
-                    <th>格式</th>
-                    <th>模型</th>
-                    <th>状态</th>
-                    <th>默认</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading && providers.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="table-empty">
-                        正在加载 Provider...
-                      </td>
-                    </tr>
-                  ) : null}
-                  {!loading && providers.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="table-empty">
-                        还没有 Provider
-                      </td>
-                    </tr>
-                  ) : null}
-                  {providers.map((provider) => (
-                    <tr key={provider.id}>
-                      <td data-label="Provider">
-                        <div className="provider-name">
-                          <span
-                            className={`provider-dot${provider.enabled ? "" : " is-disabled"}`}
-                          />
-                          <b>{provider.name}</b>
-                          <small>{provider.id}</small>
-                        </div>
-                      </td>
-                      <td data-label="Base URL">
-                        <code title={provider.baseUrl}>{provider.baseUrl}</code>
-                      </td>
-                      <td data-label="API Key">
-                        <span className="masked-key">{provider.apiKeyMasked ?? "未配置"}</span>
-                      </td>
-                      <td data-label="格式">
-                        <span className="format-pill">
-                          {PROVIDER_FORMAT_LABELS[provider.format]}
-                        </span>
-                      </td>
-                      <td data-label="模型">
-                        <span className="model-count">{provider.models.length}</span>
-                      </td>
-                      <td data-label="状态">
-                        <span className={`status-pill${provider.enabled ? " is-enabled" : ""}`}>
-                          {provider.enabled ? "启用" : "停用"}
-                        </span>
-                      </td>
-                      <td data-label="默认路由">
-                        {provider.isDefault ? (
-                          <span className="default-mark">DEFAULT</span>
-                        ) : (
-                          <button
-                            className="set-default-button"
-                            type="button"
-                            title={provider.enabled ? "设为默认" : "请先启用 Provider"}
-                            disabled={!provider.enabled || defaultingId !== null}
-                            onClick={() => void makeDefault(provider)}
-                          >
-                            <StarOutlined />
-                            <span>{defaultingId === provider.id ? "设置中" : "设为默认"}</span>
-                          </button>
-                        )}
-                      </td>
-                      <td data-label="操作">
-                        <div className="table-actions">
-                          <button
-                            type="button"
-                            title="编辑"
-                            aria-label={`编辑 ${provider.name}`}
-                            onClick={() => edit(provider)}
-                          >
-                            <EditOutlined />
-                          </button>
-                          {provider.isDefault ? null : (
-                            <button
-                              type="button"
-                              title="删除"
-                              aria-label={`删除 ${provider.name}`}
-                              onClick={() => {
-                                if (window.confirm(`删除 ${provider.name}？`))
-                                  void removeProvider(provider.id)
-                                    .then(refresh)
-                                    .catch((reason) =>
-                                      setError(
-                                        reason instanceof Error ? reason.message : "删除失败",
-                                      ),
-                                    );
-                              }}
-                            >
-                              <DeleteOutlined />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </main>
-        ) : activeSection === "schema-sources" ? (
-          <SchemaSourcesSection />
-        ) : activeSection === "mcp-gateway" ? (
-          <McpGatewaySection />
-        ) : activeSection === "apps" ? (
-          <PublishedAppsSection />
-        ) : activeSection === "identity" ? (
-          <IdentitySection
-            status={identityStatus}
-            loading={identityLoading}
-            error={identityError}
-            onRefresh={() => void refreshIdentity()}
-          />
-        ) : activeSection === "branding" ? (
-          <BrandingSection />
+  const providerColumns: ColumnsType<ProviderMetadata> = [
+    {
+      title: "名称",
+      dataIndex: "name",
+      key: "name",
+      render: (_: unknown, record: ProviderMetadata) => (
+        <Flex gap={8} align="center">
+          <Badge status={record.enabled ? "success" : "default"} />
+          <Typography.Text strong>{record.name}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{record.id}</Typography.Text>
+        </Flex>
+      ),
+    },
+    {
+      title: "Base URL",
+      dataIndex: "baseUrl",
+      key: "baseUrl",
+      render: (value: string) => (
+        <Typography.Text code ellipsis style={{ maxWidth: 200, fontSize: 12 }} title={value}>
+          {value}
+        </Typography.Text>
+      ),
+    },
+    { title: "API Key", dataIndex: "apiKeyMasked", key: "apiKeyMasked", render: (value: string | null) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{value ?? "未配置"}</Typography.Text> },
+    {
+      title: "格式",
+      dataIndex: "format",
+      key: "format",
+      render: (value: ProviderFormat) => <Tag>{PROVIDER_FORMAT_LABELS[value]}</Tag>,
+    },
+    {
+      title: "模型",
+      dataIndex: "models",
+      key: "models",
+      render: (value: string[]) => <Tag>{value.length}</Tag>,
+    },
+    {
+      title: "状态",
+      dataIndex: "enabled",
+      key: "enabled",
+      render: (value: boolean) => <Badge status={value ? "success" : "default"} text={value ? "启用" : "停用"} />,
+    },
+    {
+      title: "默认路由",
+      dataIndex: "isDefault",
+      key: "isDefault",
+      render: (_: unknown, record: ProviderMetadata) =>
+        record.isDefault ? (
+          <Tag>DEFAULT</Tag>
         ) : (
-          <ImChannelsSection />
-        )}
-      </div>
-      {draft
-        ? createPortal(
-            <ProviderModal
-              draft={draft}
-              setDraft={setDraft}
-              saving={saving}
-              onCancel={() => setDraft(null)}
-              onSubmit={() => void submit()}
-            />,
-            document.body,
-          )
-        : null}
-    </section>
+          <Button
+            type="text"
+            size="small"
+            icon={<StarOutlined spin={defaultingId === record.id} />}
+            disabled={!record.enabled || defaultingId !== null}
+            onClick={() => void makeDefault(record)}
+            aria-label={record.enabled ? `设 ${record.name} 为默认` : "请先启用 Provider"}
+          >
+            {defaultingId === record.id ? "设置中" : "设为默认"}
+          </Button>
+        ),
+    },
+    {
+      title: "操作",
+      key: "actions",
+      fixed: "right",
+      width: 110,
+      render: (_: unknown, record: ProviderMetadata) => (
+        <Flex gap={4}>
+          <Tooltip title="编辑">
+            <Button type="text" icon={<EditOutlined />} aria-label={`编辑 ${record.name}`} onClick={() => edit(record)} />
+          </Tooltip>
+          {record.isDefault ? null : (
+            <Popconfirm
+              title={`删除 ${record.name}？`}
+              description="该 Provider 的模型路由将一并清理，该操作不可恢复。"
+              okText="确认删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => void remove(record)}
+            >
+              <Tooltip title="删除">
+                <Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除 ${record.name}`} />
+              </Tooltip>
+            </Popconfirm>
+          )}
+        </Flex>
+      ),
+    },
+  ];
+
+  const usageColumns: ColumnsType<{ model: string; chatTurns: number; inputTokens: number; outputTokens: number }> = [
+    {
+      title: "模型",
+      dataIndex: "model",
+      key: "model",
+      render: (value: string) => <Typography.Text code style={{ fontSize: 12 }}>{value}</Typography.Text>,
+    },
+    { title: "对话轮数", dataIndex: "chatTurns", key: "chatTurns" },
+    { title: "输入 tokens", dataIndex: "inputTokens", key: "inputTokens", render: (value: number) => value.toLocaleString() },
+    { title: "输出 tokens", dataIndex: "outputTokens", key: "outputTokens", render: (value: number) => value.toLocaleString() },
+  ];
+
+  return (
+    <Flex vertical gap={12} style={{ flex: 1, minHeight: 0, padding: 16, overflowY: "auto" }}>
+      <Flex align="flex-start" justify="space-between" gap={12} wrap>
+        <Flex vertical gap={2}>
+          <Typography.Text type="secondary" style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2 }}>
+            RUNTIME CONFIGURATION
+          </Typography.Text>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            {sectionCopy[activeSection].title}
+          </Typography.Title>
+          <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0", fontSize: 12 }}>
+            {sectionCopy[activeSection].subtitle}
+          </Typography.Paragraph>
+        </Flex>
+        {activeSection === "providers" ? (
+          <Flex gap={8}>
+            <Button icon={<ReloadOutlined spin={loading} />} disabled={loading} onClick={() => void refresh()}>
+              刷新
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setDraft(emptyDraft())}>
+              新建 Provider
+            </Button>
+          </Flex>
+        ) : null}
+      </Flex>
+      <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 0 }}>
+        <Card size="small" styles={{ body: { padding: 8 } }} style={{ width: 230, flex: "0 0 auto" }}>
+          <Menu
+            mode="vertical"
+            selectedKeys={[activeSection]}
+            items={sectionMenuItems}
+            onSelect={(info) => selectSection(info.key as SettingsSection)}
+            style={{ borderInlineEnd: "none" }}
+          />
+        </Card>
+        <Flex vertical gap={12} style={{ flex: 1, minWidth: 0 }}>
+          {activeSection === "providers" ? (
+            <Flex vertical gap={12}>
+              {error ? <Alert type="error" showIcon message={error} /> : null}
+              <Card
+                size="small"
+                title="部署访问 Token"
+                extra={<Tag>{studioToken ? "已配置" : "未配置"}</Tag>}
+              >
+                <Form layout="vertical">
+                  <Form.Item label="主服务 Token" extra="与服务端 STUDIO_API_TOKEN 保持一致；本地未配置时留空">
+                    <Input.Password
+                      aria-label="主服务 Token"
+                      value={studioToken}
+                      onChange={(event) => {
+                        setStudioToken(event.target.value);
+                        setTokenSaved(false);
+                      }}
+                      autoComplete="new-password"
+                      placeholder="部署环境配置后在此填写"
+                    />
+                  </Form.Item>
+                  <Flex gap={8} align="center">
+                    <Button
+                      icon={<SaveOutlined />}
+                      onClick={() => {
+                        setStudioApiToken(studioToken);
+                        setTokenSaved(true);
+                        void refresh();
+                      }}
+                    >
+                      保存并验证
+                    </Button>
+                    {tokenSaved ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>已保存，Provider 列表已刷新验证。</Typography.Text> : null}
+                  </Flex>
+                </Form>
+              </Card>
+              <Card
+                size="small"
+                title="工作空间归属"
+                extra={<Tag>{workspaces.length}</Tag>}
+              >
+                {workspaceError ? <Alert type="error" showIcon message={workspaceError} style={{ marginBottom: 12 }} /> : null}
+                <Form layout="vertical">
+                  <Form.Item label="当前工作空间" extra="会话与用量按空间归集；切换后需刷新页面生效">
+                    <Select
+                      aria-label="当前工作空间"
+                      value={activeWorkspace}
+                      onChange={(value) => {
+                        setActiveWorkspace(value);
+                        setWorkspaceId(value);
+                        void refreshUsage(usageAll);
+                      }}
+                      options={[
+                        { value: "", label: "默认空间（未指定归属）" },
+                        ...workspaces
+                          .filter((workspace) => workspace.id !== "default")
+                          .map((workspace) => ({ value: workspace.id, label: workspace.name })),
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item label="新建工作空间" extra="用于把会话与用量按部门/项目归集">
+                    <Flex gap={8}>
+                      <Input
+                        aria-label="新建工作空间"
+                        value={newWorkspaceName}
+                        onChange={(event) => setNewWorkspaceName(event.target.value)}
+                        placeholder="例如：交付部"
+                      />
+                      <Button
+                        icon={<PlusOutlined />}
+                        disabled={!newWorkspaceName.trim()}
+                        onClick={() => {
+                          void createWorkspace({ name: newWorkspaceName })
+                            .then(() => {
+                              setNewWorkspaceName("");
+                              return refreshWorkspaces();
+                            })
+                            .catch((reason) =>
+                              setWorkspaceError(
+                                reason instanceof Error ? reason.message : "创建工作空间失败",
+                              ),
+                            );
+                        }}
+                      >
+                        新建
+                      </Button>
+                    </Flex>
+                  </Form.Item>
+                </Form>
+              </Card>
+              <Card
+                size="small"
+                title="近 30 天用量"
+                extra={
+                  <Flex gap={8} wrap>
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        const next = !usageAll;
+                        setUsageAll(next);
+                        void refreshUsage(next);
+                      }}
+                    >
+                      {usageAll ? "只看当前空间" : "查看全局合计"}
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      disabled={usageExporting !== null}
+                      onClick={() => void exportUsage("csv")}
+                    >
+                      {usageExporting === "csv" ? "导出中..." : "导出 CSV"}
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      disabled={usageExporting !== null}
+                      onClick={() => void exportUsage("json")}
+                    >
+                      {usageExporting === "json" ? "导出中..." : "导出 JSON"}
+                    </Button>
+                  </Flex>
+                }
+              >
+                {usageExportError ? (
+                  <Alert type="error" showIcon message={`用量导出失败：${usageExportError}`} style={{ marginBottom: 12 }} />
+                ) : null}
+                {usage ? (
+                  <Flex vertical gap={12}>
+                    <Flex gap={16} wrap>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        对话 {usage.totals.chatTurns} 轮 · 工具 {usage.totals.toolCalls} 次 · 合计{" "}
+                        {usage.totals.totalTokens.toLocaleString()} tokens
+                      </Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        范围：{usage.workspaceId === "*" ? "全部工作空间" : usage.workspaceId}
+                      </Typography.Text>
+                    </Flex>
+                    <Table
+                      size="small"
+                      rowKey="model"
+                      columns={usageColumns}
+                      dataSource={usage.byModel}
+                      pagination={usage.byModel.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
+                      scroll={{ x: "max-content" }}
+                      locale={{ emptyText: <Empty description="该时间窗内还没有用量记录" /> }}
+                    />
+                  </Flex>
+                ) : (
+                  <Empty description="用量数据暂不可用（可能未配置部署 Token 或接口未就绪）。" />
+                )}
+              </Card>
+              <Card
+                size="small"
+                title="服务商目录"
+                extra={<Tag>{providers.length}</Tag>}
+                styles={{ body: { padding: 0 } }}
+              >
+                <Table<ProviderMetadata>
+                  size="small"
+                  rowKey="id"
+                  columns={providerColumns}
+                  dataSource={providers}
+                  loading={loading}
+                  pagination={providers.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
+                  scroll={{ x: "max-content" }}
+                  locale={{ emptyText: <Empty description={loading ? "正在加载 Provider..." : "还没有 Provider"} /> }}
+                />
+              </Card>
+            </Flex>
+          ) : activeSection === "schema-sources" ? (
+            <SchemaSourcesSection />
+          ) : activeSection === "mcp-gateway" ? (
+            <McpGatewaySection />
+          ) : activeSection === "apps" ? (
+            <PublishedAppsSection />
+          ) : activeSection === "identity" ? (
+            <IdentitySection
+              status={identityStatus}
+              loading={identityLoading}
+              error={identityError}
+              onRefresh={() => void refreshIdentity()}
+            />
+          ) : activeSection === "branding" ? (
+            <BrandingSection />
+          ) : (
+            <ImChannelsSection />
+          )}
+        </Flex>
+      </Flex>
+      <ProviderModal
+        draft={draft}
+        setDraft={setDraft}
+        saving={saving}
+        onCancel={() => setDraft(null)}
+        onSubmit={() => void submit()}
+      />
+    </Flex>
   );
 }
 
@@ -888,14 +802,16 @@ function ProviderModal({
   onCancel,
   onSubmit,
 }: {
-  draft: Draft;
+  draft: Draft | null;
   setDraft: (draft: Draft) => void;
   saving: boolean;
   onCancel: () => void;
   onSubmit: () => void;
 }) {
+  const { message } = App.useApp();
   const [fetching, setFetching] = useState(false);
   const [modelInput, setModelInput] = useState("");
+  if (!draft) return null;
   const patch = (value: Partial<Draft>) => setDraft({ ...draft, ...value });
   const addModel = () => {
     const model = modelInput.trim();
@@ -910,8 +826,9 @@ function ProviderModal({
         ? await fetchProviderModels(draft.id)
         : await probeProviderModels({ baseUrl: draft.baseUrl, apiKey: draft.apiKey });
       patch({ models });
+      void message.success(`已获取 ${models.length} 个模型`);
     } catch (reason) {
-      window.alert(reason instanceof Error ? reason.message : "模型获取失败");
+      void message.error(reason instanceof Error ? reason.message : "模型获取失败");
     } finally {
       setFetching(false);
     }
@@ -920,146 +837,99 @@ function ProviderModal({
   // 自动获取模型需要 Base URL；编辑态需已入库的 id，新建态只需 Base URL。
   const canAutoFetch = draft.id ? true : Boolean(draft.baseUrl.trim());
   return (
-    <div
-      className="settings-modal-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel();
-      }}
+    <Modal
+      open
+      title={draft.id ? "编辑 Provider" : "新建 Provider"}
+      onCancel={onCancel}
+      footer={
+        <Flex gap={8} justify="flex-end">
+          <Button onClick={onCancel}>取消</Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={onSubmit}>
+            {saving ? "保存中" : "保存 Provider"}
+          </Button>
+        </Flex>
+      }
     >
-      <div
-        className="settings-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="provider-modal-title"
-      >
-        <div className="settings-modal-head">
-          <div>
-            <span className="settings-kicker">PROVIDER EDITOR</span>
-            <h2 id="provider-modal-title">{draft.id ? "编辑 Provider" : "新建 Provider"}</h2>
-          </div>
-          <button type="button" aria-label="关闭" onClick={onCancel}>
-            <CloseOutlined />
-          </button>
-        </div>
-        <div className="settings-modal-fields">
-          <label className="studio-field">
-            <span>名称</span>
-            <input
-              value={draft.name}
-              onChange={(event) => patch({ name: event.target.value })}
-              placeholder="例如 DeepSeek"
-            />
-          </label>
-          <label className="studio-field">
-            <span>Base URL</span>
-            <input
-              value={draft.baseUrl}
-              onChange={(event) => patch({ baseUrl: event.target.value })}
-              placeholder="https://api.example.com/v1"
-            />
-          </label>
-          <label className="studio-field">
-            <span>
-              接入格式 <small>决定请求协议与调用方式</small>
-            </span>
-            <select
-              value={draft.format}
-              onChange={(event) => patch({ format: event.target.value as ProviderFormat })}
-            >
-              {PROVIDER_FORMATS.map((format) => (
-                <option key={format} value={format}>
-                  {PROVIDER_FORMAT_LABELS[format]}
-                </option>
+      <Form layout="vertical" preserve={false}>
+        <Form.Item label="名称" required>
+          <Input
+            aria-label="Provider 名称"
+            value={draft.name}
+            onChange={(event) => patch({ name: event.target.value })}
+            placeholder="例如 DeepSeek"
+          />
+        </Form.Item>
+        <Form.Item label="Base URL" required>
+          <Input
+            aria-label="Base URL"
+            value={draft.baseUrl}
+            onChange={(event) => patch({ baseUrl: event.target.value })}
+            placeholder="https://api.example.com/v1"
+          />
+        </Form.Item>
+        <Form.Item label="接入格式" extra="决定请求协议与调用方式">
+          <Select
+            aria-label="接入格式"
+            value={draft.format}
+            onChange={(value) => patch({ format: value as ProviderFormat })}
+            options={PROVIDER_FORMATS.map((format) => ({
+              value: format,
+              label: PROVIDER_FORMAT_LABELS[format],
+            }))}
+          />
+        </Form.Item>
+        <Form.Item label="API Key" extra={draft.id ? "留空保持不变" : "可选"}>
+          <Input.Password
+            aria-label="API Key"
+            value={draft.apiKey}
+            onChange={(event) => patch({ apiKey: event.target.value })}
+            autoComplete="new-password"
+          />
+        </Form.Item>
+        <Form.Item label="模型列表" extra="至少添加一个模型">
+          <Flex vertical gap={8}>
+            <Flex gap={4} wrap>
+              {draft.models.map((model) => (
+                <Tag key={model} closable onClose={() => patch({ models: draft.models.filter((item) => item !== model) })}>
+                  {model}
+                </Tag>
               ))}
-            </select>
-          </label>
-          <label className="studio-field">
-            <span>
-              API Key <small>{draft.id ? "留空保持不变" : "可选"}</small>
-            </span>
-            <input
-              type="password"
-              value={draft.apiKey}
-              onChange={(event) => patch({ apiKey: event.target.value })}
-              autoComplete="new-password"
-            />
-          </label>
-          <div className="studio-field">
-            <span>模型列表</span>
-            <div className="model-editor">
-              <div className="model-tags">
-                {draft.models.map((model) => (
-                  <span className="model-tag" key={model}>
-                    {model}
-                    <button
-                      type="button"
-                      aria-label={`移除 ${model}`}
-                      onClick={() =>
-                        patch({ models: draft.models.filter((item) => item !== model) })
-                      }
-                    >
-                      <CloseOutlined />
-                    </button>
-                  </span>
-                ))}
-                {draft.models.length === 0 ? <small>至少添加一个模型</small> : null}
-              </div>
-              <div className="model-editor-input">
-                <input
-                  value={modelInput}
-                  onChange={(event) => setModelInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addModel();
-                    }
-                  }}
-                  placeholder="输入模型名后回车"
-                />
-                <button type="button" onClick={addModel}>
-                  <PlusOutlined />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void autoFetch()}
-                  disabled={fetching || !canAutoFetch}
-                  title={canAutoFetch ? "获取该 Provider 的模型列表" : "请先填写 Base URL"}
-                >
-                  <ReloadOutlined spin={fetching} /> {fetching ? "获取中" : "自动获取"}
-                </button>
-              </div>
-            </div>
-          </div>
-          <label className="toggle-field">
-            <span className="toggle-field__copy">
-              <b>启用 Provider</b>
-              <small>禁用后不会出现在 Workflow 选择器</small>
-            </span>
-            <span className="settings-switch">
-              <input
-                type="checkbox"
-                checked={draft.enabled}
-                onChange={(event) => patch({ enabled: event.target.checked })}
+              {draft.models.length === 0 ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>至少添加一个模型</Typography.Text>
+              ) : null}
+            </Flex>
+            <Flex gap={8}>
+              <Input
+                aria-label="模型名"
+                value={modelInput}
+                onChange={(event) => setModelInput(event.target.value)}
+                onPressEnter={addModel}
+                placeholder="输入模型名后回车"
               />
-              <span aria-hidden="true" />
-            </span>
-          </label>
-        </div>
-        <div className="settings-modal-actions">
-          <button className="studio-button secondary" type="button" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            className="studio-button primary"
-            type="button"
-            disabled={saving}
-            onClick={onSubmit}
-          >
-            <SaveOutlined /> {saving ? "保存中" : "保存 Provider"}
-          </button>
-        </div>
-      </div>
-    </div>
+              <Button icon={<PlusOutlined />} onClick={addModel} aria-label="添加模型">
+                添加
+              </Button>
+              <Tooltip title={canAutoFetch ? "获取该 Provider 的模型列表" : "请先填写 Base URL"}>
+                <Button
+                  icon={<ReloadOutlined spin={fetching} />}
+                  loading={fetching}
+                  disabled={fetching || !canAutoFetch}
+                  onClick={() => void autoFetch()}
+                >
+                  {fetching ? "获取中" : "自动获取"}
+                </Button>
+              </Tooltip>
+            </Flex>
+          </Flex>
+        </Form.Item>
+        <Form.Item label="启用 Provider" extra="禁用后不会出现在 Workflow 选择器">
+          <Switch
+            aria-label="启用 Provider"
+            checked={draft.enabled}
+            onChange={(checked) => patch({ enabled: checked })}
+          />
+        </Form.Item>
+      </Form>
+    </Modal>
   );
 }
