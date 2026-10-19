@@ -838,6 +838,7 @@ function ProviderModal({
   const canAutoFetch = draft.id ? true : Boolean(draft.baseUrl.trim());
   return (
     <Modal
+      centered
       open
       title={draft.id ? "编辑 Provider" : "新建 Provider"}
       onCancel={onCancel}

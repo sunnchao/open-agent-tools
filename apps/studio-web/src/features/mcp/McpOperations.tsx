@@ -1020,6 +1020,7 @@ export function ClientsView({ services }: { services: McpService[] }) {
       ) : null}
       {dialog === "grant" && client ? (
         <Modal
+          centered
           open
           title={editingGrant ? "编辑服务授权" : "添加服务授权"}
           closeIcon={<CloseOutlined />}
@@ -1042,6 +1043,7 @@ export function ClientsView({ services }: { services: McpService[] }) {
         </Modal>
       ) : null}
       <Modal
+        centered
         open={rawKey !== null}
         title="API Key 已创建"
         closeIcon={<CloseOutlined />}
@@ -1083,6 +1085,7 @@ function SimpleFormDialog({
   const [form] = Form.useForm();
   return (
     <Modal
+      centered
       open
       title={title}
       closeIcon={<CloseOutlined />}
@@ -1128,6 +1131,7 @@ function KeyDialog({
   const [form] = Form.useForm();
   return (
     <Modal
+      centered
       open
       title="签发 API Key"
       closeIcon={<CloseOutlined />}
@@ -1319,6 +1323,7 @@ export function AuditView() {
         />
       )}
       <Modal
+        centered
         open={selectedId !== null}
         title="审计事件详情"
         closeIcon={<CloseOutlined />}

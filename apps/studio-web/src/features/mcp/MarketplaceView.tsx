@@ -284,6 +284,7 @@ export function MarketplaceView() {
         />
       )}
       <Modal
+        centered
         open={trialService !== null}
         title={trialService ? `试用 ${trialService.name}` : "试用"}
         onCancel={() => setTrialService(null)}

@@ -487,6 +487,7 @@ function SchemaCatalogModal({
   if (!preview) return null;
   return (
     <Modal
+      centered
       open
       title={preview.database}
       onCancel={onClose}
@@ -603,6 +604,7 @@ function SchemaSourceModal({
 
   return (
     <Modal
+      centered
       open
       title={draft.id ? "编辑数据源" : "新建数据源"}
       onCancel={onCancel}

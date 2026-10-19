@@ -338,6 +338,7 @@ function ImChannelModal({
 
   return (
     <Modal
+      centered
       open
       title={draft.id ? "编辑渠道" : "新建渠道"}
       onCancel={onCancel}

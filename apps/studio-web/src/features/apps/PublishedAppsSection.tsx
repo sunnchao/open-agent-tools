@@ -492,6 +492,7 @@ export function PublishedAppsSection() {
       </Card>
 
       <Modal
+        centered
         title={quotaApp ? `调整配额-${quotaApp.name}` : "调整配额"}
         open={quotaApp !== null}
         onOk={() => void submitQuota()}
