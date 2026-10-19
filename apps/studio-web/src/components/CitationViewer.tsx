@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Button } from "antd";
 import { AuditOutlined, LoadingOutlined } from "../lib/icons.js";
 import { listChunks, type ChunkInfo } from "../features/rag/api.js";
 import { requestOpenChunk } from "../features/rag/chunkTarget.js";
@@ -148,9 +149,9 @@ export function CitationViewer({ citation }: CitationViewerProps) {
       ) : null}
 
       <div className="citation-viewer__actions">
-        <button type="button" className="studio-button" onClick={open}>
+        <Button type="default" size="small" onClick={open}>
           在知识库中打开
-        </button>
+        </Button>
       </div>
     </div>
   );

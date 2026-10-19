@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
+import { Collapse, Flex, Steps, Typography } from "antd";
 import { CheckOutlined, CloseOutlined, LoadingOutlined } from "../../lib/icons.js";
 import type { QueryAuditStatus, QueryStep } from "./api.js";
-import "./observatory.css";
 
 export const AUDIT_STATUS_LABELS: Record<QueryAuditStatus, string> = {
   running: "执行中",
@@ -9,6 +9,13 @@ export const AUDIT_STATUS_LABELS: Record<QueryAuditStatus, string> = {
   failed: "失败",
   clarifying: "待补充",
 };
+
+export function auditStatusTag(status: QueryAuditStatus): "processing" | "success" | "error" | "warning" {
+  if (status === "running") return "processing";
+  if (status === "succeeded") return "success";
+  if (status === "failed") return "error";
+  return "warning";
+}
 
 const STEP_STATUS_LABELS: Record<QueryStep["status"], string> = {
   pending: "待执行",
@@ -20,6 +27,13 @@ const STEP_STATUS_LABELS: Record<QueryStep["status"], string> = {
 
 export function formatDuration(durationMs: number): string {
   return durationMs < 1000 ? `${durationMs} ms` : `${(durationMs / 1000).toFixed(1)} s`;
+}
+
+function stepStatus(step: QueryStep["status"]): "wait" | "process" | "finish" | "error" {
+  if (step === "running") return "process";
+  if (step === "succeeded") return "finish";
+  if (step === "failed") return "error";
+  return "wait";
 }
 
 export function QueryExecution({
@@ -41,66 +55,98 @@ export function QueryExecution({
   }, [running]);
 
   return (
-    <div className="obs-execution">
+    <Flex vertical gap={8}>
       {auditId ? (
-        <p className="obs-request-id" title={auditId}>
+        <Typography.Paragraph type="secondary" copyable={{ text: auditId }} style={{ fontSize: 12, marginBottom: 0 }} title={auditId}>
           查询 ID · {auditId}
-        </p>
+        </Typography.Paragraph>
       ) : null}
-      <ol className="obs-steps" aria-label="查询执行步骤" aria-live="polite">
-        {steps.map((step, index) => {
+      <Steps
+        direction="vertical"
+        size="small"
+        current={steps.findIndex((step) => step.status === "running")}
+        items={steps.map((step) => {
           const duration =
             step.status === "running" && step.startedAt
               ? Math.max(0, now - Date.parse(step.startedAt))
               : step.durationMs;
-          return (
-            <li key={step.id} className={`obs-step is-${step.status}`}>
-              <span className="obs-step-mark" aria-hidden="true">
-                {step.status === "running" ? (
-                  <LoadingOutlined spin />
-                ) : step.status === "succeeded" ? (
-                  <CheckOutlined />
-                ) : step.status === "failed" ? (
-                  <CloseOutlined />
-                ) : (
-                  index + 1
-                )}
-              </span>
-              <div className="obs-step-content">
-                <div className="obs-step-heading">
-                  <strong>{step.label}</strong>
-                  <span>{STEP_STATUS_LABELS[step.status]}</span>
-                  {duration !== undefined ? <time>{formatDuration(duration)}</time> : null}
-                </div>
-                {step.message ? <p>{step.message}</p> : null}
-                {details && (step.input || step.output) ? (
-                  <details className="obs-step-payload">
-                    <summary>查看输入 / 输出</summary>
-                    {step.startedAt ? (
-                      <p>开始：{new Date(step.startedAt).toLocaleString()}</p>
-                    ) : null}
-                    {step.finishedAt ? (
-                      <p>结束：{new Date(step.finishedAt).toLocaleString()}</p>
-                    ) : null}
-                    {step.input ? (
-                      <>
-                        <b>输入</b>
-                        <pre>{JSON.stringify(step.input, null, 2)}</pre>
-                      </>
-                    ) : null}
-                    {step.output ? (
-                      <>
-                        <b>输出</b>
-                        <pre>{JSON.stringify(step.output, null, 2)}</pre>
-                      </>
-                    ) : null}
-                  </details>
+          return {
+            key: step.id,
+            status: stepStatus(step.status),
+            icon:
+              step.status === "running" ? (
+                <LoadingOutlined spin />
+              ) : step.status === "succeeded" ? (
+                <CheckOutlined />
+              ) : step.status === "failed" ? (
+                <CloseOutlined />
+              ) : undefined,
+            title: (
+              <Flex gap={8} align="center" wrap>
+                <Typography.Text strong style={{ fontSize: 13 }}>{step.label}</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {STEP_STATUS_LABELS[step.status]}
+                </Typography.Text>
+                {duration !== undefined ? (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {formatDuration(duration)}
+                  </Typography.Text>
                 ) : null}
-              </div>
-            </li>
-          );
+              </Flex>
+            ),
+            description: (
+              <Flex vertical gap={4}>
+                {step.message ? (
+                  <Typography.Paragraph type={step.status === "failed" ? "danger" : "secondary"} style={{ fontSize: 12, marginBottom: 0 }}>
+                    {step.message}
+                  </Typography.Paragraph>
+                ) : null}
+                {details && (step.input || step.output) ? (
+                  <Collapse
+                    size="small"
+                    items={[
+                      {
+                        key: "payload",
+                        label: "查看输入 / 输出",
+                        children: (
+                          <Flex vertical gap={4}>
+                            {step.startedAt ? (
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                开始：{new Date(step.startedAt).toLocaleString()}
+                              </Typography.Text>
+                            ) : null}
+                            {step.finishedAt ? (
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                结束：{new Date(step.finishedAt).toLocaleString()}
+                              </Typography.Text>
+                            ) : null}
+                            {step.input ? (
+                              <>
+                                <Typography.Text strong style={{ fontSize: 12 }}>输入</Typography.Text>
+                                <Typography.Paragraph code style={{ fontSize: 12 }}>
+                                  {JSON.stringify(step.input, null, 2)}
+                                </Typography.Paragraph>
+                              </>
+                            ) : null}
+                            {step.output ? (
+                              <>
+                                <Typography.Text strong style={{ fontSize: 12 }}>输出</Typography.Text>
+                                <Typography.Paragraph code style={{ fontSize: 12 }}>
+                                  {JSON.stringify(step.output, null, 2)}
+                                </Typography.Paragraph>
+                              </>
+                            ) : null}
+                          </Flex>
+                        ),
+                      },
+                    ]}
+                  />
+                ) : null}
+              </Flex>
+            ),
+          };
         })}
-      </ol>
-    </div>
+      />
+    </Flex>
   );
 }

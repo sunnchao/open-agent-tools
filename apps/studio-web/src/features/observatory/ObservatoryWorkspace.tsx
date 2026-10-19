@@ -1,5 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Input,
+  List,
+  Select,
+  Segmented,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import type { ColumnsType } from "antd/es/table";
+import {
   applyEdgeChanges,
   applyNodeChanges,
   Background,
@@ -17,13 +34,14 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  AuditOutlined,
   BranchesOutlined,
   ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
   TableOutlined,
 } from "../../lib/icons.js";
+import { StudioPage } from "../../components/studio/StudioPageHeader.js";
+import { StudioNotice, type StudioNoticeValue } from "../../components/studio/StudioNotice.js";
 import {
   edgeIdsInSet,
   fetchObservatoryGraph,
@@ -327,6 +345,7 @@ function formatColumns(table: ObservatoryTable | undefined, limit = 8): string {
 }
 
 export function ObservatoryWorkspace() {
+  const { message } = App.useApp();
   const [payload, setPayload] = useState<Awaited<ReturnType<typeof fetchObservatoryGraph>> | null>(
     null,
   );
@@ -335,7 +354,7 @@ export function ObservatoryWorkspace() {
   const [history, setHistory] = useState<HistoryTurn[]>([]);
   const [result, setResult] = useState<ObservatoryQueryResult | null>(null);
   const [busy, setBusy] = useState<"load" | "query" | "rebuild" | null>("load");
-  const [notice, setNotice] = useState<{ type: "error" | "success"; text: string } | null>(null);
+  const [notice, setNotice] = useState<StudioNoticeValue | null>(null);
   const [hotNames, setHotNames] = useState<Set<string>>(new Set());
   const [hotEdgeIds, setHotEdgeIds] = useState<Set<string>>(new Set());
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -664,6 +683,7 @@ export function ObservatoryWorkspace() {
       await rebuildObservatoryGraph(selectedSourceId);
       await refresh(selectedSourceId);
       setNotice({ type: "success", text: "图谱已重建" });
+      void message.success("图谱已重建");
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
@@ -690,357 +710,355 @@ export function ObservatoryWorkspace() {
       })
       .join("\n\n");
 
+  const resultColumns: ColumnsType<Record<string, unknown>> = (rows[0] ? Object.keys(rows[0]) : []).map((key) => ({
+    title: key,
+    dataIndex: key,
+    key,
+    ellipsis: true,
+    render: (value: unknown) => String(value ?? ""),
+  }));
+
   return (
-    <section className="domain-workspace observatory-workspace">
-      <header className="domain-header">
-        <div>
-          <p className="domain-eyebrow">Text-to-SQL / Schema GraphRAG</p>
-          <h1>Schema Observatory</h1>
-        </div>
-        <div className="domain-header-actions">
-          <label className="obs-source-selector">
-            <TableOutlined />
-            <select
-              aria-label="Schema 数据源"
-              value={selectedSourceId}
-              onChange={(event) => selectSource(event.target.value)}
-              disabled={sources.length === 0 || busy !== null}
-            >
-              {sources.length === 0 ? <option value="">未配置数据源</option> : null}
-              {sources.map((source) => (
-                <option key={source.id} value={source.id}>
-                  {source.name}
-                  {source.isDefault ? " · 默认" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            className="studio-button secondary"
-            type="button"
-            title="管理 Schema 数据源"
-            onClick={() => {
-              sessionStorage.setItem("open-agent-tools.settings-section", "schema-sources");
-              window.location.hash = "settings";
-            }}
-          >
-            <SettingOutlined /> 管理
-          </button>
-          <button
-            className="studio-button secondary"
-            type="button"
+    <StudioPage
+      eyebrow="Text-to-SQL / Schema GraphRAG"
+      title="Schema Observatory"
+      description="用自然语言问运营数据，SQL 生成与执行全程留痕可审计。"
+      actions={
+        <>
+          <Select
+            aria-label="Schema 数据源"
+            value={selectedSourceId || undefined}
+            onChange={(value) => selectSource(value)}
+            disabled={sources.length === 0 || busy !== null}
+            placeholder={sources.length === 0 ? "未配置数据源" : "选择数据源"}
+            options={sources.map((source) => ({
+              value: source.id,
+              label: `${source.name}${source.isDefault ? " · 默认" : ""}`,
+            }))}
+            style={{ minWidth: 180 }}
+          />
+          <Tooltip title="管理 Schema 数据源">
+            <Button
+              icon={<SettingOutlined />}
+              onClick={() => {
+                sessionStorage.setItem("open-agent-tools.settings-section", "schema-sources");
+                window.location.hash = "settings";
+              }}
+              aria-label="管理 Schema 数据源"
+            />
+          </Tooltip>
+          <Button
+            icon={<ReloadOutlined spin={busy === "load"} />}
             disabled={!selectedSourceId || busy !== null}
             onClick={() => void refresh(selectedSourceId)}
           >
-            <ReloadOutlined /> 刷新
-          </button>
-          <button
-            className="studio-button secondary"
-            type="button"
+            刷新
+          </Button>
+          <Button
+            loading={busy === "rebuild"}
             disabled={!selectedSourceId || busy !== null}
             onClick={() => void rebuild()}
           >
             {busy === "rebuild" ? "重建中..." : "重建图谱"}
-          </button>
-        </div>
-      </header>
-
-      {notice ? (
-        <div className={`workspace-notice ${notice.type}`} role="status">
-          {notice.text}
-        </div>
-      ) : null}
-
-      <nav className="obs-view-tabs" aria-label="问数视图">
-        <button
-          type="button"
-          className={view === "query" ? "is-active" : ""}
-          aria-pressed={view === "query"}
-          onClick={() => setView("query")}
-        >
-          <SearchOutlined /> 数据问数
-        </button>
-        <button
-          type="button"
-          className={view === "audit" ? "is-active" : ""}
-          aria-pressed={view === "audit"}
-          onClick={() => setView("audit")}
-        >
-          <AuditOutlined /> 审计日志
-        </button>
-      </nav>
-
-      {view === "audit" ? (
-        <QueryAuditView
-          key={`${selectedSourceId}:${result?.auditId ?? ""}`}
-          sourceId={selectedSourceId}
-        />
-      ) : (
-        <div className="graph-layout obs-layout">
-          <aside className="graph-side-panel">
-            <div className="panel-heading">
-              <span>问运营数据</span>
-            </div>
-            <div className="obs-ask">
-              <textarea
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                placeholder="例如：最近消费日志最多的模型是哪些？"
-              />
-              <button
-                className="studio-button primary"
-                type="button"
-                disabled={!selectedSourceId || !question.trim() || busy !== null}
-                onClick={() => void runQuery(question)}
-              >
-                <SearchOutlined /> {busy === "query" ? "执行中..." : "生成并执行 SQL"}
-              </button>
-              {carriedUserTurns(history) > 0 ? (
-                <div className="obs-followup">
-                  <span className="obs-followup__badge">
-                    <BranchesOutlined /> 追问中 · 已带 {carriedUserTurns(history)} 轮上下文
-                  </span>
-                  <button
-                    type="button"
-                    className="obs-chip"
-                    disabled={busy !== null}
-                    onClick={resetThread}
-                  >
-                    新会话
-                  </button>
-                </div>
-              ) : (
-                <p className="obs-ask-hint">提问后可继续追问(例如「那 3 月呢」「换成渠道维度」)</p>
-              )}
-              {activeSource?.semanticProfile === "oneapi" ? (
-                <div className="obs-chips">
-                  {EXAMPLES.map((item) => (
-                    <button
-                      key={item}
-                      className="obs-chip"
-                      type="button"
-                      disabled={busy !== null}
-                      onClick={() => {
-                        setQuestion(item);
-                        void runQuery(item);
-                      }}
-                    >
-                      {item}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              <div className="obs-stat">
-                {payload ? (
-                  <>
-                    <b>{activeSource?.name ?? payload.database}</b>
-                    <span>
-                      {payload.database} · {payload.tables.length} 张表 ·{" "}
-                      {payload.graph.stats.relations} 条引用
-                    </span>
-                  </>
-                ) : (
-                  <span>{busy === "load" ? "正在加载图谱..." : "未加载"}</span>
-                )}
-              </div>
-              <div className="obs-execution-heading">
-                <strong>执行过程</strong>
-                {result ? <span>{formatDuration(result.durationMs)}</span> : null}
-              </div>
-              <QueryExecution steps={steps} auditId={auditId} />
-              <div className="obs-chain">
-                <strong>{chainTitle}</strong>
-                {chainRef ? <div className="obs-ref">{chainRef}</div> : null}
-                {chainNames.length > 0 ? (
-                  <ul>
-                    {chainNames.map((name) => {
-                      const table = tables.get(name);
-                      return (
-                        <li key={name}>
-                          <b>{name}</b>
-                          {table ? ` · ~${table.rows} 行` : ""}
-                          <div>{formatColumns(table)}</div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : (
-                  <p>点击连线高亮 2 跳引用链，并列出相关表字段。</p>
-                )}
-              </div>
-            </div>
-          </aside>
-
-          <div className="graph-canvas-panel">
-            <div className="graph-canvas-heading">
-              <span>
-                <TableOutlined /> schema 图
-              </span>
-              <span className="graph-legend">
-                <span className="graph-legend-item">
-                  <span className="graph-legend-dot" style={{ background: "#d9822b" }} />
-                  当前链
-                </span>
-              </span>
-            </div>
-            <SchemaCanvas
-              data={payload?.graph ?? null}
-              hotNames={hotNames}
-              hotEdgeIds={hotEdgeIds}
-              selectedEdgeId={selectedEdgeId}
-              onNodeClick={selectNode}
-              onEdgeClick={selectEdge}
-              onPaneClick={clearSelection}
+          </Button>
+        </>
+      }
+      extra={<StudioNotice notice={notice} />}
+    >
+      <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 0, padding: 16, overflowY: "auto" }}>
+        <Flex vertical gap={12} style={{ flex: 1, minWidth: 0 }}>
+          <Card size="small">
+            <Segmented<"query" | "audit">
+              aria-label="问数视图"
+              value={view}
+              onChange={(value) => setView(value)}
+              options={[
+                { value: "query", label: "数据问数", icon: <SearchOutlined /> },
+                { value: "audit", label: "审计日志" },
+              ]}
+              block
             />
-            <div className="graph-canvas-hint">
-              点击连线高亮引用链；点击空白取消；拖拽节点调整布局。
-            </div>
-          </div>
-
-          <aside className="graph-inspector obs-inspector">
-            <div className="panel-heading">
-              <span>Selected schema</span>
-            </div>
-            <pre className="obs-pre">{schemaText || "提问或点选引用链后显示相关表字段"}</pre>
-            <div className="panel-heading">
-              <span>SQL</span>
-              <span className="obs-sql-source">
-                {result?.generatedSql && sqlDraft.trim() !== result.generatedSql.trim()
-                  ? "草稿已编辑"
-                  : "只读校验后执行"}
-              </span>
-            </div>
-            {result?.clarifying ? (
-              <pre className="obs-pre obs-sql">{result.clarifying}</pre>
-            ) : (
-              <textarea
-                className="obs-sql-editor"
-                aria-label="可编辑 SQL"
-                value={sqlDraft || liveSql}
-                onChange={(event) => setSqlDraft(event.target.value)}
-                placeholder="生成 SQL 后可检查并编辑，再创建子审计重跑"
-                spellCheck={false}
-              />
-            )}
-            {activeParentAuditId && !result?.clarifying ? (
-              <div className="obs-rerun-actions">
-                <button
-                  className="studio-button secondary"
-                  type="button"
-                  disabled={busy !== null || !liveSql.trim()}
-                  onClick={() => {
-                    setSqlDraft(liveSql);
-                    void rerun(liveSql, activeParentAuditId);
-                  }}
-                >
-                  原样重跑
-                </button>
-                <button
-                  className="studio-button primary"
-                  type="button"
-                  disabled={busy !== null || !(sqlDraft || liveSql).trim()}
-                  onClick={() => void rerun(sqlDraft || liveSql, activeParentAuditId)}
-                >
-                  校验并重跑编辑 SQL
-                </button>
-                <span>重跑会创建新的审计记录，父记录保持不变。</span>
-              </div>
-            ) : null}
-            <div className="panel-heading">
-              <span>Result</span>
-            </div>
-            <div className="obs-result">
-              {result?.error ? <div className="workspace-notice error">{result.error}</div> : null}
-              {result?.clarifying ? <p>{result.clarifying}</p> : null}
-              {result?.truncated ? (
-                <p className="panel-state">
-                  仅展示前 {rows.length} 条，已达安全上限。可缩小范围后重试。
-                </p>
-              ) : null}
-              {rows.length > 0 ? (
-                <div className="obs-table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        {Object.keys(rows[0] ?? {}).map((key) => (
-                          <th key={key}>{key}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((row, index) => (
-                        <tr key={index}>
-                          {Object.keys(rows[0] ?? {}).map((key) => (
-                            <td key={key}>{String(row[key] ?? "")}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null}
-              {!result ? (
-                <p className="panel-state">
-                  {busy === "query"
-                    ? "查询执行中，完成后显示结果"
-                    : "指定条数后返回对应结果；未指定时会先确认"}
-                </p>
-              ) : null}
-              {result?.clarifying ? (
-                <div className="obs-clarify">
-                  {activeClarification ? (
-                    <div className="obs-clarification-contract">
-                      <p>
-                        第 {activeClarification.round} 轮 · 待补充：
-                        {activeClarification.slots.map((slot) => slot.label).join("、")}
-                      </p>
-                      {activeClarification.candidates.length ? (
-                        <div className="obs-clarify-candidates">
-                          {activeClarification.candidates.map((candidate) => (
-                            <button
-                              key={`${candidate.label}:${candidate.value}`}
-                              type="button"
-                              className="obs-chip"
-                              title={candidate.description}
-                              onClick={() => setClarify(candidate.value)}
-                            >
-                              {candidate.label}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  <label htmlFor="obs-clarify">回答追问后继续生成 SQL</label>
-                  <textarea
-                    id="obs-clarify"
-                    value={clarify}
-                    onChange={(event) => setClarify(event.target.value)}
-                    placeholder="例如：渠道表的 weight 字段"
+          </Card>
+          {view === "audit" ? (
+            <QueryAuditView
+              key={`${selectedSourceId}:${result?.auditId ?? ""}`}
+              sourceId={selectedSourceId}
+            />
+          ) : (
+            <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 480 }}>
+              <Card
+                size="small"
+                title="问运营数据"
+                style={{ width: 330, flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}
+              >
+                <Flex vertical gap={8}>
+                  <Input.TextArea
+                    aria-label="运营问题"
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    placeholder="例如：最近消费日志最多的模型是哪些？"
+                    rows={3}
                   />
-                  <div className="obs-clarify-actions">
-                    <button
-                      className="studio-button primary"
-                      type="button"
-                      disabled={!clarify.trim() || busy !== null}
-                      onClick={() => void runQuery(clarify, true)}
-                    >
-                      继续查询
-                    </button>
-                    <button className="studio-button secondary" type="button" onClick={resetThread}>
-                      新问题
-                    </button>
-                  </div>
+                  <Button
+                    type="primary"
+                    icon={<SearchOutlined />}
+                    loading={busy === "query"}
+                    disabled={!selectedSourceId || !question.trim() || busy !== null}
+                    onClick={() => void runQuery(question)}
+                    block
+                  >
+                    {busy === "query" ? "执行中..." : "生成并执行 SQL"}
+                  </Button>
+                  {carriedUserTurns(history) > 0 ? (
+                    <Flex gap={8} align="center" wrap>
+                      <Tag icon={<BranchesOutlined />}>
+                        追问中 · 已带 {carriedUserTurns(history)} 轮上下文
+                      </Tag>
+                      <Button size="small" disabled={busy !== null} onClick={resetThread}>
+                        新会话
+                      </Button>
+                    </Flex>
+                  ) : (
+                    <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+                      提问后可继续追问（例如「那 3 月呢」「换成渠道维度」）
+                    </Typography.Paragraph>
+                  )}
+                  {activeSource?.semanticProfile === "oneapi" ? (
+                    <Flex gap={4} wrap>
+                      {EXAMPLES.map((item) => (
+                        <Button
+                          key={item}
+                          size="small"
+                          type="dashed"
+                          disabled={busy !== null}
+                          onClick={() => {
+                            setQuestion(item);
+                            void runQuery(item);
+                          }}
+                        >
+                          {item}
+                        </Button>
+                      ))}
+                    </Flex>
+                  ) : null}
+                  <Card size="small" type="inner" title="当前图谱">
+                    {payload ? (
+                      <Flex vertical gap={2}>
+                        <Typography.Text strong style={{ fontSize: 13 }}>
+                          {activeSource?.name ?? payload.database}
+                        </Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {payload.database} · {payload.tables.length} 张表 ·{" "}
+                          {payload.graph.stats.relations} 条引用
+                        </Typography.Text>
+                      </Flex>
+                    ) : (
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {busy === "load" ? "正在加载图谱..." : "未加载"}
+                      </Typography.Text>
+                    )}
+                  </Card>
+                  <Card
+                    size="small"
+                    type="inner"
+                    title="执行过程"
+                    extra={result ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>{formatDuration(result.durationMs)}</Typography.Text> : undefined}
+                  >
+                    <QueryExecution steps={steps} auditId={auditId} />
+                  </Card>
+                  <Card
+                    size="small"
+                    type="inner"
+                    title={chainTitle}
+                    extra={chainRef ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>{chainRef}</Typography.Text> : undefined}
+                  >
+                    {chainNames.length > 0 ? (
+                      <List
+                        size="small"
+                        dataSource={chainNames}
+                        rowKey={(name: string) => name}
+                        renderItem={(name: string) => {
+                          const table = tables.get(name);
+                          return (
+                            <List.Item>
+                              <List.Item.Meta
+                                title={<Typography.Text strong style={{ fontSize: 13 }}>{name}</Typography.Text>}
+                                description={
+                                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                    {table ? `~${table.rows} 行` : ""} {formatColumns(table)}
+                                  </Typography.Text>
+                                }
+                              />
+                            </List.Item>
+                          );
+                        }}
+                      />
+                    ) : (
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+                        点击连线高亮 2 跳引用链，并列出相关表字段。
+                      </Typography.Paragraph>
+                    )}
+                  </Card>
+                </Flex>
+              </Card>
+
+              <Card
+                size="small"
+                title={
+                  <Flex gap={8} align="center">
+                    <TableOutlined />
+                    <Typography.Text strong>schema 图</Typography.Text>
+                    <Tag>当前链</Tag>
+                  </Flex>
+                }
+                extra={
+                  <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+                    点击连线高亮引用链；点击空白取消；拖拽节点调整布局。
+                  </Typography.Paragraph>
+                }
+                style={{ flex: 1, minWidth: 0, minHeight: 480, display: "flex", flexDirection: "column" }}
+                styles={{ body: { flex: 1, minHeight: 420, padding: 8 } }}
+              >
+                <div style={{ flex: 1, minHeight: 420 }}>
+                  <SchemaCanvas
+                    data={payload?.graph ?? null}
+                    hotNames={hotNames}
+                    hotEdgeIds={hotEdgeIds}
+                    selectedEdgeId={selectedEdgeId}
+                    onNodeClick={selectNode}
+                    onEdgeClick={selectEdge}
+                    onPaneClick={clearSelection}
+                  />
                 </div>
-              ) : null}
-              {result && rows.length === 0 && !result.clarifying && !result.error ? (
-                <p className="panel-state">无数据</p>
-              ) : null}
-            </div>
-          </aside>
-        </div>
-      )}
-    </section>
+              </Card>
+
+              <Card
+                size="small"
+                title="Selected schema"
+                extra={
+                  result?.generatedSql && sqlDraft.trim() !== result.generatedSql.trim() ? (
+                    <Tag color="warning">草稿已编辑</Tag>
+                  ) : (
+                    <Tag>只读校验后执行</Tag>
+                  )
+                }
+                style={{ width: 360, flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}
+              >
+                <Flex vertical gap={12}>
+                  <Typography.Paragraph code style={{ fontSize: 12, maxHeight: 160, overflowY: "auto" }}>
+                    {schemaText || "提问或点选引用链后显示相关表字段"}
+                  </Typography.Paragraph>
+                  {result?.clarifying ? (
+                    <Alert showIcon type="info" message={result.clarifying} />
+                  ) : (
+                    <Input.TextArea
+                      aria-label="可编辑 SQL"
+                      value={sqlDraft || liveSql}
+                      onChange={(event) => setSqlDraft(event.target.value)}
+                      placeholder="生成 SQL 后可检查并编辑，再创建子审计重跑"
+                      spellCheck={false}
+                      rows={8}
+                      style={{ fontFamily: "monospace", fontSize: 12 }}
+                    />
+                  )}
+                  {activeParentAuditId && !result?.clarifying ? (
+                    <Flex vertical gap={8}>
+                      <Flex gap={8} wrap>
+                        <Button
+                          disabled={busy !== null || !liveSql.trim()}
+                          onClick={() => {
+                            setSqlDraft(liveSql);
+                            void rerun(liveSql, activeParentAuditId);
+                          }}
+                        >
+                          原样重跑
+                        </Button>
+                        <Button
+                          type="primary"
+                          disabled={busy !== null || !(sqlDraft || liveSql).trim()}
+                          onClick={() => void rerun(sqlDraft || liveSql, activeParentAuditId)}
+                        >
+                          校验并重跑编辑 SQL
+                        </Button>
+                      </Flex>
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+                        重跑会创建新的审计记录，父记录保持不变。
+                      </Typography.Paragraph>
+                    </Flex>
+                  ) : null}
+                  <Card size="small" type="inner" title="Result">
+                    {result?.error ? <Alert showIcon type="error" message={result.error} style={{ marginBottom: 8 }} /> : null}
+                    {result?.clarifying ? <Typography.Paragraph>{result.clarifying}</Typography.Paragraph> : null}
+                    {result?.truncated ? (
+                      <Alert
+                        showIcon
+                        type="warning"
+                        message={`仅展示前 ${rows.length} 条，已达安全上限。可缩小范围后重试。`}
+                        style={{ marginBottom: 8 }}
+                      />
+                    ) : null}
+                    {rows.length > 0 ? (
+                      <Table
+                        size="small"
+                        rowKey={(_, index) => String(index)}
+                        columns={resultColumns}
+                        dataSource={rows}
+                        pagination={rows.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
+                        scroll={{ x: "max-content", y: 300 }}
+                      />
+                    ) : null}
+                    {!result ? (
+                      <Empty
+                        description={busy === "query" ? "查询执行中，完成后显示结果" : "指定条数后返回对应结果；未指定时会先确认"}
+                      />
+                    ) : null}
+                    {result?.clarifying ? (
+                      <Flex vertical gap={8}>
+                        {activeClarification ? (
+                          <Card size="small" type="inner" title={`第 ${activeClarification.round} 轮 · 待补充：${activeClarification.slots.map((slot) => slot.label).join("、")}`}>
+                            {activeClarification.candidates.length ? (
+                              <Flex gap={4} wrap>
+                                {activeClarification.candidates.map((candidate) => (
+                                  <Tooltip key={`${candidate.label}:${candidate.value}`} title={candidate.description}>
+                                    <Button size="small" type="dashed" onClick={() => setClarify(candidate.value)}>
+                                      {candidate.label}
+                                    </Button>
+                                  </Tooltip>
+                                ))}
+                              </Flex>
+                            ) : null}
+                          </Card>
+                        ) : null}
+                        <Input.TextArea
+                          aria-label="回答追问后继续生成 SQL"
+                          value={clarify}
+                          onChange={(event) => setClarify(event.target.value)}
+                          placeholder="例如：渠道表的 weight 字段"
+                          rows={2}
+                        />
+                        <Flex gap={8}>
+                          <Button
+                            type="primary"
+                            disabled={!clarify.trim() || busy !== null}
+                            onClick={() => void runQuery(clarify, true)}
+                          >
+                            继续查询
+                          </Button>
+                          <Button onClick={resetThread}>新问题</Button>
+                        </Flex>
+                      </Flex>
+                    ) : null}
+                    {result && rows.length === 0 && !result.clarifying && !result.error ? (
+                      <Empty description="无数据" />
+                    ) : null}
+                  </Card>
+                </Flex>
+              </Card>
+            </Flex>
+          )}
+        </Flex>
+      </Flex>
+    </StudioPage>
   );
 }
 

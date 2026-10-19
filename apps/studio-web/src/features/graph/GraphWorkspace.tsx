@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  Alert,
+  App,
+  Badge,
+  Button,
+  Card,
+  Descriptions,
+  Empty,
+  Flex,
+  Input,
+  List,
+  Spin,
+  Tag,
+  Typography,
+} from "antd";
+import {
   applyEdgeChanges,
   applyNodeChanges,
   Background,
@@ -19,9 +34,10 @@ import "@xyflow/react/dist/style.css";
 import {
   ApartmentOutlined,
   ReloadOutlined,
-  SearchOutlined,
   SyncOutlined,
 } from "../../lib/icons.js";
+import { StudioPage } from "../../components/studio/StudioPageHeader.js";
+import { StudioNotice, type StudioNoticeValue } from "../../components/studio/StudioNotice.js";
 import {
   listEntities,
   neighborsOf,
@@ -306,25 +322,30 @@ function GraphSyncBar({
         ? `图谱与知识库已同步 · ${status.ragSources.length} 篇文档 / ${status.stats.entities} 实体 / ${status.stats.relations} 关系`
         : `图谱与知识库不一致：${detail.join("，")}`;
 
+  const alertType = tone === "ok" ? "success" : tone === "building" ? "info" : "warning";
   return (
-    <div className={`graph-sync-bar is-${tone}`} role="status">
-      <span className="graph-sync-dot" />
-      <span className="graph-sync-label">{label}</span>
-      {drifted > 0 && pending === 0 ? (
-        <button
-          className="studio-button secondary"
-          type="button"
-          onClick={onReconcile}
-          disabled={syncing}
-        >
-          <SyncOutlined spin={syncing} /> {syncing ? "同步中" : "一键同步"}
-        </button>
-      ) : null}
-    </div>
+    <Alert
+      showIcon
+      type={alertType}
+      message={label}
+      action={
+        drifted > 0 && pending === 0 ? (
+          <Button
+            size="small"
+            icon={<SyncOutlined spin={syncing} />}
+            loading={syncing}
+            onClick={onReconcile}
+          >
+            {syncing ? "同步中" : "一键同步"}
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }
 
 export function GraphWorkspace() {
+  const { message } = App.useApp();
   const [query, setQuery] = useState("");
   const [exportData, setExportData] = useState<GraphExport | null>(null);
   const [selected, setSelected] = useState<EntityInfo | null>(null);
@@ -336,7 +357,7 @@ export function GraphWorkspace() {
   const [entities, setEntities] = useState<EntityInfo[]>([]);
   const [relTypes, setRelTypes] = useState<RelationTypeStat[]>([]);
   const [busy, setBusy] = useState<"search" | "expand" | "list" | null>(null);
-  const [notice, setNotice] = useState<{ type: "error" | "success"; text: string } | null>(null);
+  const [notice, setNotice] = useState<StudioNoticeValue | null>(null);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
 
@@ -395,10 +416,12 @@ export function GraphWorkspace() {
       if (result.rebuilt.length > 0) parts.push(`重建 ${result.rebuilt.length} 篇`);
       if (result.removed.length > 0) parts.push(`清理 ${result.removed.length} 项残留`);
       if (result.failed.length > 0) parts.push(`${result.failed.length} 篇失败`);
+      const text = parts.length > 0 ? `同步完成：${parts.join("，")}` : "已是最新状态";
       setNotice({
         type: result.failed.length > 0 ? "error" : "success",
-        text: parts.length > 0 ? `同步完成：${parts.join("，")}` : "已是最新状态",
+        text,
       });
+      if (result.failed.length === 0) void message.success(text);
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
@@ -421,10 +444,8 @@ export function GraphWorkspace() {
         return;
       }
       setExportData(result.subgraph);
-      setNotice({
-        type: "success",
-        text: `命中种子: ${result.seeds.map((s) => s.name).join("、") || "无"}`,
-      });
+      const hitText = `命中种子: ${result.seeds.map((s) => s.name).join("、") || "无"}`;
+      setNotice({ type: "success", text: hitText });
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
@@ -462,169 +483,168 @@ export function GraphWorkspace() {
   const stats = exportData?.stats ?? null;
 
   return (
-    <section className="domain-workspace graph-workspace">
-      <header className="domain-header">
-        <div>
-          <p className="domain-eyebrow">上下文工程 / 知识图谱</p>
-          <h1>知识图谱</h1>
-        </div>
-        <div className="domain-header-actions">
-          <span className="capability-state is-on">
-            <span /> GraphRAG
-          </span>
-          <button
-            className="studio-button secondary"
-            type="button"
+    <StudioPage
+      eyebrow="上下文工程 / 知识图谱"
+      title="知识图谱"
+      description="从知识库抽取实体与关系，检索子图验证问答依据。"
+      actions={
+        <>
+          <Badge status="success" text="GraphRAG" />
+          <Button
+            icon={<ReloadOutlined spin={busy === "list"} />}
             onClick={() => {
               setNotice(null);
               void refreshEntities();
               void refreshSync();
             }}
           >
-            <ReloadOutlined /> 刷新
-          </button>
-        </div>
-      </header>
+            刷新
+          </Button>
+        </>
+      }
+      extra={<StudioNotice notice={notice} />}
+    >
+      <Flex vertical gap={12} style={{ flex: 1, minHeight: 0, padding: 16, overflowY: "auto" }}>
+        <GraphSyncBar status={sync} syncing={syncing} onReconcile={() => void handleReconcile()} />
+        <Card size="small">
+          <Flex gap={8} align="center">
+            <Input.Search
+              aria-label="子图检索"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onSearch={() => void runSearch()}
+              placeholder="输入实体名或问题，定位种子并扩展子图（如：OpenAI）"
+              loading={busy === "search"}
+              enterButton="子图检索"
+              style={{ flex: 1 }}
+            />
+          </Flex>
+        </Card>
 
-      <GraphSyncBar status={sync} syncing={syncing} onReconcile={() => void handleReconcile()} />
+        <Flex gap={12} align="flex-start" style={{ flex: "1 1 auto", minHeight: 480 }}>
+          <Card
+            size="small"
+            title="实体索引"
+            extra={<Tag>{entities.length}</Tag>}
+            style={{ width: 280, flex: "0 0 auto", maxHeight: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}
+            styles={{ body: { padding: 8, overflowY: "auto" } }}
+          >
+            {busy === "list" ? (
+              <Flex justify="center" style={{ padding: 24 }}>
+                <Spin aria-label="正在加载实体" />
+              </Flex>
+            ) : entities.length === 0 ? (
+              <Empty description="上传文档后自动抽取实体；也可先手动触发抽取。" />
+            ) : (
+              <List
+                size="small"
+                dataSource={entities}
+                rowKey="id"
+                renderItem={(entity) => {
+                  const color = colorFor(entity.type);
+                  return (
+                    <List.Item
+                      onClick={() => {
+                        setQuery(entity.name);
+                        void runSearch();
+                      }}
+                      style={{ cursor: "pointer", borderRadius: 8, padding: "6px 8px" }}
+                    >
+                      <List.Item.Meta
+                        avatar={<Badge color={color.stroke} />}
+                        title={<Typography.Text strong ellipsis style={{ maxWidth: 130 }}>{entity.name}</Typography.Text>}
+                        description={entity.type}
+                      />
+                    </List.Item>
+                  );
+                }}
+              />
+            )}
+          </Card>
 
-      {notice ? (
-        <div className={`workspace-notice ${notice.type}`} role="status">
-          {notice.text}
-        </div>
-      ) : null}
-
-      <div className="graph-search-bar">
-        <SearchOutlined />
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void runSearch();
-          }}
-          placeholder="输入实体名或问题，定位种子并扩展子图（如：OpenAI）"
-        />
-        <button
-          className="studio-button primary"
-          type="button"
-          disabled={!query.trim() || busy === "search"}
-          onClick={() => void runSearch()}
-        >
-          {busy === "search" ? "检索中..." : "子图检索"}
-        </button>
-      </div>
-
-      <div className="graph-layout">
-        <aside className="graph-side-panel">
-          <div className="panel-heading">
-            <span>实体索引</span>
-            <span className="count-badge">{entities.length}</span>
-          </div>
-          {busy === "list" ? <div className="panel-state">正在加载实体...</div> : null}
-          {!busy && entities.length === 0 ? (
-            <div className="panel-state">上传文档后自动抽取实体；也可先手动触发抽取。</div>
-          ) : null}
-          <div className="graph-entity-list">
-            {entities.map((entity) => {
-              const color = colorFor(entity.type);
-              return (
-                <button
-                  type="button"
-                  key={entity.id}
-                  className="graph-entity-item"
-                  onClick={() => {
-                    setQuery(entity.name);
-                    void runSearch();
-                  }}
-                >
-                  <span className="graph-entity-dot" style={{ background: color.stroke }} />
-                  <span className="graph-entity-name">{entity.name}</span>
-                  <span className="graph-entity-type">{entity.type}</span>
-                </button>
-              );
-            })}
-          </div>
-        </aside>
-
-        <div className="graph-canvas-panel">
-          <div className="graph-canvas-heading">
-            <span>
-              <ApartmentOutlined /> 子图{" "}
-              {stats ? `${stats.entities} 实体 · ${stats.relations} 关系` : "未检索"}
-            </span>
-            <span className="graph-legend">
-              {Object.keys(TYPE_COLORS).map((type) => (
-                <span key={type} className="graph-legend-item">
-                  <span
-                    className="graph-legend-dot"
-                    style={{ background: colorFor(type).stroke }}
-                  />
-                  {type}
-                </span>
-              ))}
-            </span>
-          </div>
-          <GraphCanvas
-            data={exportData}
-            selectedEdgeId={selectedRelation?.edge.id ?? null}
-            onNodeClick={(id) => void expandEntity(id)}
-            onEdgeClick={selectRelation}
-            onPaneClick={() => setSelectedRelation(null)}
-          />
-          <div className="graph-canvas-hint">
-            点击节点展开 2 跳邻域；点击连线查看关系；拖拽节点调整布局。
-          </div>
-        </div>
-
-        <aside className="graph-inspector">
-          <div className="panel-heading">
-            <span>{selectedRelation ? "关系详情" : "实体详情"}</span>
-          </div>
-          {selectedRelation ? (
-            <div className="graph-relation-detail">
-              <span>{selectedRelation.sourceName}</span>
-              <strong>{selectedRelation.edge.relType}</strong>
-              <span>{selectedRelation.targetName}</span>
-              <small>权重 {selectedRelation.edge.weight}</small>
+          <Card
+            size="small"
+            title={
+              <Flex gap={8} align="center">
+                <ApartmentOutlined />
+                <Typography.Text strong>
+                  子图 {stats ? `${stats.entities} 实体 · ${stats.relations} 关系` : "未检索"}
+                </Typography.Text>
+              </Flex>
+            }
+            extra={
+              <Flex gap={4} wrap>
+                {Object.keys(TYPE_COLORS).map((type) => (
+                  <Tag key={type} color="default">
+                    {type}
+                  </Tag>
+                ))}
+              </Flex>
+            }
+            style={{ flex: 1, minWidth: 0, minHeight: 480, display: "flex", flexDirection: "column" }}
+            styles={{ body: { flex: 1, minHeight: 420, padding: 8, display: "flex", flexDirection: "column" } }}
+          >
+            <div style={{ flex: 1, minHeight: 420 }}>
+              <GraphCanvas
+                data={exportData}
+                selectedEdgeId={selectedRelation?.edge.id ?? null}
+                onNodeClick={(id) => void expandEntity(id)}
+                onEdgeClick={selectRelation}
+                onPaneClick={() => setSelectedRelation(null)}
+              />
             </div>
-          ) : selected ? (
-            <div className="graph-inspector-content">
-              <div className="graph-inspector-name">{selected.name}</div>
-              <div className="graph-inspector-type">{selected.type}</div>
-              {Object.keys(selected.props ?? {}).length > 0 ? (
-                <div className="graph-inspector-props">
-                  {Object.entries(selected.props).map(([key, value]) => (
-                    <div key={key} className="graph-prop-row">
-                      <span>{key}</span>
-                      <span>{value}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="graph-inspector-empty">
-                  该实体暂无附加属性（规则抽取通常无 props）。
-                </p>
-              )}
-            </div>
-          ) : (
-            <div className="panel-state">点击图中节点或连线查看详情</div>
-          )}
-          {relTypes.length > 0 ? (
-            <div className="graph-rel-types">
-              <div className="panel-heading">
-                <span>关系分布</span>
-              </div>
-              {relTypes.map((item) => (
-                <div key={item.relType} className="graph-rel-row">
-                  <span>{item.relType}</span>
-                  <span className="count-badge">{item.count}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </aside>
-      </div>
-    </section>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: "8px 0 0" }}>
+              点击节点展开 2 跳邻域；点击连线查看关系；拖拽节点调整布局。
+            </Typography.Paragraph>
+          </Card>
+
+          <Card
+            size="small"
+            title={selectedRelation ? "关系详情" : "实体详情"}
+            style={{ width: 300, flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}
+          >
+            {selectedRelation ? (
+              <Descriptions size="small" column={1} bordered>
+                <Descriptions.Item label="起点">{selectedRelation.sourceName}</Descriptions.Item>
+                <Descriptions.Item label="关系">{selectedRelation.edge.relType}</Descriptions.Item>
+                <Descriptions.Item label="终点">{selectedRelation.targetName}</Descriptions.Item>
+                <Descriptions.Item label="权重">{selectedRelation.edge.weight}</Descriptions.Item>
+              </Descriptions>
+            ) : selected ? (
+              <Flex vertical gap={8}>
+                <Typography.Title level={5} style={{ margin: 0 }}>{selected.name}</Typography.Title>
+                <Tag style={{ alignSelf: "flex-start" }}>{selected.type}</Tag>
+                {Object.keys(selected.props ?? {}).length > 0 ? (
+                  <Descriptions size="small" column={1} bordered>
+                    {Object.entries(selected.props).map(([key, value]) => (
+                      <Descriptions.Item key={key} label={key}>{value}</Descriptions.Item>
+                    ))}
+                  </Descriptions>
+                ) : (
+                  <Empty description="该实体暂无附加属性（规则抽取通常无 props）。" />
+                )}
+              </Flex>
+            ) : (
+              <Empty description="点击图中节点或连线查看详情" />
+            )}
+            {relTypes.length > 0 ? (
+              <Card size="small" type="inner" title="关系分布" style={{ marginTop: 12 }}>
+                <List
+                  size="small"
+                  dataSource={relTypes}
+                  rowKey="relType"
+                  renderItem={(item) => (
+                    <List.Item extra={<Tag>{item.count}</Tag>}>
+                      <Typography.Text>{item.relType}</Typography.Text>
+                    </List.Item>
+                  )}
+                />
+              </Card>
+            ) : null}
+          </Card>
+        </Flex>
+      </Flex>
+    </StudioPage>
   );
 }
 

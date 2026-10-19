@@ -1,5 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
+  Button,
+  Card,
+  Collapse,
+  DatePicker,
+  Descriptions,
+  Drawer,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  List,
+  Pagination,
+  Select,
+  Spin,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import type { ColumnsType } from "antd/es/table";
+import {
   AuditOutlined,
   DownloadOutlined,
   ReloadOutlined,
@@ -18,7 +40,7 @@ import {
   type QuerySqlSource,
 } from "./api.js";
 import { auditExportPath, downloadExport, type ExportFormat } from "./export.js";
-import { AUDIT_STATUS_LABELS, formatDuration, QueryExecution } from "./QueryExecution.js";
+import { AUDIT_STATUS_LABELS, auditStatusTag, formatDuration, QueryExecution } from "./QueryExecution.js";
 
 const PAGE_SIZE = 20;
 
@@ -43,6 +65,10 @@ const SQL_SOURCES: Array<{ value: QuerySqlSource; label: string }> = [
   { value: "original", label: "原样" },
   { value: "edited", label: "人工编辑" },
 ];
+
+const STATUS_OPTIONS: Array<{ value: QueryAuditStatus; label: string }> = (
+  Object.keys(AUDIT_STATUS_LABELS) as QueryAuditStatus[]
+).map((value) => ({ value, label: AUDIT_STATUS_LABELS[value] }));
 
 export function QueryAuditView({ sourceId }: { sourceId: string }) {
   const [records, setRecords] = useState<QueryAuditSummary[]>([]);
@@ -176,376 +202,394 @@ export function QueryAuditView({ sourceId }: { sourceId: string }) {
     }
   };
 
+  const columns: ColumnsType<QueryAuditSummary> = [
+    {
+      title: "时间 / 查询 ID",
+      dataIndex: "startedAt",
+      key: "startedAt",
+      width: 170,
+      render: (_: unknown, item: QueryAuditSummary) => (
+        <Flex vertical gap={0}>
+          <Typography.Text style={{ fontSize: 12 }}>{new Date(item.startedAt).toLocaleString()}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }} title={item.id}>
+            {item.id.slice(0, 8)}
+          </Typography.Text>
+        </Flex>
+      ),
+    },
+    {
+      title: "问题 / 数据源",
+      dataIndex: "question",
+      key: "question",
+      ellipsis: true,
+      render: (_: unknown, item: QueryAuditSummary) => (
+        <Flex vertical gap={0} style={{ minWidth: 0 }}>
+          <Button type="link" size="small" style={{ padding: 0, textAlign: "left", height: "auto" }} onClick={() => setSelectedId(item.id)}>
+            <Typography.Text ellipsis title={item.question} style={{ maxWidth: 260 }}>
+              {item.question}
+            </Typography.Text>
+          </Button>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {item.sourceName ?? item.sourceId ?? "默认数据源"}
+          </Typography.Text>
+        </Flex>
+      ),
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      key: "status",
+      width: 80,
+      render: (value: QueryAuditStatus) => <Tag color={auditStatusTag(value)}>{AUDIT_STATUS_LABELS[value]}</Tag>,
+    },
+    {
+      title: "链路",
+      key: "chain",
+      width: 170,
+      render: (_: unknown, item: QueryAuditSummary) => (
+        <Flex vertical gap={4}>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {item.entrypoint} · {item.source} · {item.sqlSource}
+          </Typography.Text>
+          {item.parentAuditId ? (
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: 0, height: "auto", fontSize: 12 }}
+              onClick={() => setSelectedId(item.parentAuditId)}
+            >
+              父审计 {item.parentAuditId.slice(0, 8)}
+            </Button>
+          ) : null}
+        </Flex>
+      ),
+    },
+    {
+      title: "耗时",
+      dataIndex: "durationMs",
+      key: "durationMs",
+      width: 90,
+      render: (value: number) => <Typography.Text style={{ fontSize: 12 }}>{formatDuration(value)}</Typography.Text>,
+    },
+    {
+      title: "行数",
+      dataIndex: "rowCount",
+      key: "rowCount",
+      width: 70,
+      render: (value: number | null) => value ?? "—",
+    },
+  ];
+
   return (
-    <div className="obs-audit-view">
-      <form
-        className="obs-audit-toolbar"
-        onSubmit={(event) => {
-          event.preventDefault();
+    <Flex vertical gap={12}>
+      <Card size="small">
+        <Form layout="inline" onFinish={() => {
           setKeyword(search.trim());
           setOffset(0);
           refresh();
+        }} style={{ rowGap: 8, flexWrap: "wrap" }}>
+          <Form.Item style={{ marginBottom: 0, minWidth: 220, flex: 1 }}>
+            <Input.Search
+              aria-label="搜索审计日志"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onSearch={(value) => {
+                setKeyword(value.trim());
+                setOffset(0);
+                refresh();
+              }}
+              placeholder="搜索问题或查询 ID"
+              allowClear
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Select
+              aria-label="审计数据源范围"
+              value={allSources ? "all" : "current"}
+              onChange={(value) => {
+                setAllSources(value === "all");
+                setOffset(0);
+                setSelectedId(null);
+                setRecord(null);
+              }}
+              options={[
+                { value: "current", label: "当前数据源" },
+                { value: "all", label: "全部数据源" },
+              ]}
+              style={{ width: 130 }}
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Select
+              aria-label="审计执行状态"
+              value={status}
+              onChange={(value) => {
+                setStatus(value as QueryAuditStatus | "");
+                setOffset(0);
+              }}
+              options={[{ value: "", label: "全部状态" }, ...STATUS_OPTIONS.map((item) => ({ value: item.value as string, label: item.label }))]}
+              style={{ width: 120 }}
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Select
+              aria-label="审计入口"
+              value={entrypoint}
+              onChange={(value) => {
+                setEntrypoint(value as QueryEntrypoint | "");
+                setOffset(0);
+              }}
+              options={[{ value: "", label: "全部入口" }, ...ENTRYPOINTS.map((item) => ({ value: item.value as string, label: item.label }))]}
+              style={{ width: 130 }}
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Select
+              aria-label="审计来源"
+              value={auditSource}
+              onChange={(value) => {
+                setAuditSource(value as QueryAuditSource | "");
+                setOffset(0);
+              }}
+              options={[{ value: "", label: "全部来源" }, ...AUDIT_SOURCES.map((item) => ({ value: item.value as string, label: item.label }))]}
+              style={{ width: 120 }}
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Select
+              aria-label="SQL 来源"
+              value={sqlSource}
+              onChange={(value) => {
+                setSqlSource(value as QuerySqlSource | "");
+                setOffset(0);
+              }}
+              options={[{ value: "", label: "全部 SQL 来源" }, ...SQL_SOURCES.map((item) => ({ value: item.value as string, label: item.label }))]}
+              style={{ width: 140 }}
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Input
+              aria-label="审计 actor"
+              value={actor}
+              onChange={(event) => setActor(event.target.value.trim())}
+              placeholder="actor 指纹"
+              style={{ width: 130 }}
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <DatePicker
+              showTime
+              placeholder="从"
+              aria-label="审计开始时间"
+              onChange={(value) => {
+                setFrom(value ? value.toISOString() : "");
+                setOffset(0);
+              }}
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <DatePicker
+              showTime
+              placeholder="至"
+              aria-label="审计结束时间"
+              onChange={(value) => {
+                setTo(value ? value.toISOString() : "");
+                setOffset(0);
+              }}
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Flex gap={8} align="center" wrap>
+              <Button type="primary" htmlType="submit" icon={<SearchOutlined />}>
+                搜索
+              </Button>
+              <Tooltip title="刷新">
+                <Button icon={<ReloadOutlined />} onClick={refresh} aria-label="刷新审计日志" />
+              </Tooltip>
+              <Button
+                icon={<DownloadOutlined />}
+                loading={exporting === "csv"}
+                disabled={exporting !== null}
+                onClick={() => void exportAudits("csv")}
+              >
+                {exporting === "csv" ? "导出中..." : "导出 CSV"}
+              </Button>
+              <Button
+                icon={<DownloadOutlined />}
+                loading={exporting === "json"}
+                disabled={exporting !== null}
+                onClick={() => void exportAudits("json")}
+              >
+                {exporting === "json" ? "导出中..." : "导出 JSON"}
+              </Button>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{total} 条记录</Typography.Text>
+            </Flex>
+          </Form.Item>
+        </Form>
+      </Card>
+      {error ? <Alert type="error" showIcon message={error} role="alert" /> : null}
+      {exportError ? <Alert type="error" showIcon message={`导出失败：${exportError}`} role="alert" /> : null}
+      <Flex gap={12} align="flex-start">
+        <Card
+          size="small"
+          style={{ flex: 1, minWidth: 0 }}
+          styles={{ body: { padding: 0 } }}
+        >
+          <Table<QueryAuditSummary>
+            size="small"
+            rowKey="id"
+            columns={columns}
+            dataSource={records}
+            loading={loading}
+            pagination={false}
+            scroll={{ x: "max-content" }}
+            onRow={(item) => ({
+              onClick: () => setSelectedId(item.id),
+              style: {
+                cursor: "pointer",
+                background: selectedId === item.id ? "#f0f5ff" : undefined,
+              },
+            })}
+            locale={{ emptyText: <Empty description="暂无匹配的查询记录" /> }}
+          />
+          <Flex justify="flex-end" style={{ padding: 12 }}>
+            <Pagination
+              size="small"
+              current={Math.floor(offset / PAGE_SIZE) + 1}
+              total={total}
+              pageSize={PAGE_SIZE}
+              showSizeChanger={false}
+              onChange={(page) => setOffset((page - 1) * PAGE_SIZE)}
+              disabled={loading}
+            />
+          </Flex>
+        </Card>
+      </Flex>
+      <Drawer
+        title="查询详情"
+        open={selectedId !== null}
+        onClose={() => {
+          setSelectedId(null);
+          setRecord(null);
+          setDetail(null);
         }}
+        width={640}
+        destroyOnClose={false}
+        extra={<AuditOutlined />}
       >
-        <label className="obs-audit-search">
-          <SearchOutlined />
-          <input
-            aria-label="搜索审计日志"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜索问题或查询 ID"
-          />
-        </label>
-        <select
-          aria-label="审计数据源范围"
-          value={allSources ? "all" : "current"}
-          onChange={(event) => {
-            setAllSources(event.target.value === "all");
-            setOffset(0);
-            setSelectedId(null);
-            setRecord(null);
-          }}
-        >
-          <option value="current">当前数据源</option>
-          <option value="all">全部数据源</option>
-        </select>
-        <select
-          aria-label="审计执行状态"
-          value={status}
-          onChange={(event) => {
-            setStatus(event.target.value as QueryAuditStatus | "");
-            setOffset(0);
-          }}
-        >
-          <option value="">全部状态</option>
-          {Object.entries(AUDIT_STATUS_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="审计入口"
-          value={entrypoint}
-          onChange={(event) => {
-            setEntrypoint(event.target.value as QueryEntrypoint | "");
-            setOffset(0);
-          }}
-        >
-          <option value="">全部入口</option>
-          {ENTRYPOINTS.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="审计来源"
-          value={auditSource}
-          onChange={(event) => {
-            setAuditSource(event.target.value as QueryAuditSource | "");
-            setOffset(0);
-          }}
-        >
-          <option value="">全部来源</option>
-          {AUDIT_SOURCES.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="SQL 来源"
-          value={sqlSource}
-          onChange={(event) => {
-            setSqlSource(event.target.value as QuerySqlSource | "");
-            setOffset(0);
-          }}
-        >
-          <option value="">全部 SQL 来源</option>
-          {SQL_SOURCES.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-        <input
-          className="obs-audit-filter-input"
-          aria-label="审计 actor"
-          value={actor}
-          onChange={(event) => setActor(event.target.value.trim())}
-          placeholder="actor 指纹"
-        />
-        <label className="obs-audit-time-filter">
-          从
-          <input
-            aria-label="审计开始时间"
-            type="datetime-local"
-            value={from}
-            onChange={(event) => {
-              setFrom(event.target.value);
-              setOffset(0);
-            }}
-          />
-        </label>
-        <label className="obs-audit-time-filter">
-          至
-          <input
-            aria-label="审计结束时间"
-            type="datetime-local"
-            value={to}
-            onChange={(event) => {
-              setTo(event.target.value);
-              setOffset(0);
-            }}
-          />
-        </label>
-        <button className="studio-button secondary" type="submit">
-          搜索
-        </button>
-        <button className="studio-button secondary" type="button" onClick={refresh}>
-          <ReloadOutlined /> 刷新
-        </button>
-        <button
-          className="studio-button secondary"
-          type="button"
-          disabled={exporting !== null}
-          onClick={() => void exportAudits("csv")}
-        >
-          <DownloadOutlined /> {exporting === "csv" ? "导出中..." : "导出 CSV"}
-        </button>
-        <button
-          className="studio-button secondary"
-          type="button"
-          disabled={exporting !== null}
-          onClick={() => void exportAudits("json")}
-        >
-          <DownloadOutlined /> {exporting === "json" ? "导出中..." : "导出 JSON"}
-        </button>
-        <span className="obs-audit-count">{total} 条记录</span>
-      </form>
-      {error ? (
-        <div className="workspace-notice error" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {exportError ? (
-        <div className="workspace-notice error" role="alert">
-          导出失败:{exportError}
-        </div>
-      ) : null}
-      <div className="obs-audit-layout">
-        <div className="obs-audit-list">
-          <div className="obs-table-wrap">
-            <table aria-label="问数审计日志">
-              <thead>
-                <tr>
-                  <th>时间 / 查询 ID</th>
-                  <th>问题 / 数据源</th>
-                  <th>状态</th>
-                  <th>链路</th>
-                  <th>耗时</th>
-                  <th>行数</th>
-                </tr>
-              </thead>
-              <tbody>
-                {records.map((item) => (
-                  <tr key={item.id} className={selectedId === item.id ? "is-selected" : ""}>
-                    <td>
-                      <time>{new Date(item.startedAt).toLocaleString()}</time>
-                      <small title={item.id}>{item.id.slice(0, 8)}</small>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="obs-audit-question"
-                        onClick={() => setSelectedId(item.id)}
-                      >
-                        {item.question}
-                      </button>
-                      <small>{item.sourceName ?? item.sourceId ?? "默认数据源"}</small>
-                    </td>
-                    <td>
-                      <span className={`obs-status is-${item.status}`}>
-                        {AUDIT_STATUS_LABELS[item.status]}
-                      </span>
-                    </td>
-                    <td>
-                      <small>
-                        {item.entrypoint} · {item.source} · {item.sqlSource}
-                      </small>
-                      {item.parentAuditId ? (
-                        <button
-                          type="button"
-                          className="obs-audit-link"
-                          onClick={() => setSelectedId(item.parentAuditId)}
-                        >
-                          父审计 {item.parentAuditId.slice(0, 8)}
-                        </button>
-                      ) : null}
-                    </td>
-                    <td>{formatDuration(item.durationMs)}</td>
-                    <td>{item.rowCount ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {loading ? (
-            <p className="panel-state" role="status">
-              正在加载审计日志...
-            </p>
-          ) : records.length === 0 ? (
-            <p className="panel-state">
-              <AuditOutlined /> 暂无匹配的查询记录
-            </p>
-          ) : null}
-          <div className="obs-audit-pagination">
-            <button
-              className="studio-button secondary"
-              type="button"
-              disabled={loading || offset === 0}
-              onClick={() => setOffset((value) => Math.max(0, value - PAGE_SIZE))}
-            >
-              上一页
-            </button>
-            <span>
-              第 {Math.floor(offset / PAGE_SIZE) + 1} / {Math.max(1, Math.ceil(total / PAGE_SIZE))}{" "}
-              页
-            </span>
-            <button
-              className="studio-button secondary"
-              type="button"
-              disabled={loading || offset + PAGE_SIZE >= total}
-              onClick={() => setOffset((value) => value + PAGE_SIZE)}
-            >
-              下一页
-            </button>
-          </div>
-        </div>
-        <aside className="obs-audit-detail" aria-label="查询审计详情">
-          <div className="panel-heading">
-            <span>查询详情</span>
-          </div>
-          {detailError ? (
-            <div className="workspace-notice error" role="alert">
-              {detailError}
-            </div>
-          ) : null}
-          {!record ? (
-            <p className="panel-state">
-              {selectedId && !detailError ? "正在加载详情..." : "选择一条记录查看执行过程"}
-            </p>
+        {detailError ? <Alert type="error" showIcon message={detailError} role="alert" style={{ marginBottom: 12 }} /> : null}
+        {!record ? (
+          selectedId && !detailError ? (
+            <Flex justify="center" style={{ padding: 48 }}>
+              <Spin aria-label="正在加载详情" />
+            </Flex>
           ) : (
-            <>
-              <div className="obs-audit-metadata">
-                <strong>{record.question}</strong>
-                <span className={`obs-status is-${record.status}`}>
-                  {AUDIT_STATUS_LABELS[record.status]}
-                </span>
-                <dl>
-                  <dt>数据源</dt>
-                  <dd>{record.sourceName ?? record.sourceId ?? "默认数据源"}</dd>
-                  <dt>Actor</dt>
-                  <dd title={record.actor}>
-                    {record.actor} · {record.actorType === "legacy" ? "历史记录" : "部署 operator"}
-                  </dd>
-                  <dt>入口 / 来源</dt>
-                  <dd>
-                    {record.entrypoint} · {record.source} · SQL {record.sqlSource}
-                  </dd>
-                  <dt>原始问题</dt>
-                  <dd>{record.originalQuestion || record.question}</dd>
-                  <dt>总耗时</dt>
-                  <dd>{formatDuration(record.durationMs)}</dd>
-                  <dt>模型</dt>
-                  <dd>{record.model ?? "—"}</dd>
-                  <dt>Provider</dt>
-                  <dd>{record.providerId ?? "—"}</dd>
-                  <dt>相关表</dt>
-                  <dd>{record.selectedTables.join("、") || "—"}</dd>
-                  <dt>开始时间</dt>
-                  <dd>{new Date(record.startedAt).toLocaleString()}</dd>
-                  <dt>结束时间</dt>
-                  <dd>
-                    {record.finishedAt ? new Date(record.finishedAt).toLocaleString() : "执行中"}
-                  </dd>
-                </dl>
-                {detail?.parent ? (
-                  <p className="obs-audit-lineage">
-                    父审计：
-                    <button type="button" onClick={() => setSelectedId(detail.parent!.id)}>
-                      {detail.parent.id.slice(0, 8)}
-                    </button>
-                  </p>
-                ) : null}
-                {detail?.children.length ? (
-                  <p className="obs-audit-lineage">
-                    子审计：
-                    {detail.children.map((child) => (
-                      <button key={child.id} type="button" onClick={() => setSelectedId(child.id)}>
-                        {child.id.slice(0, 8)}
-                      </button>
+            <Empty description="选择一条记录查看执行过程" />
+          )
+        ) : (
+          <Flex vertical gap={12}>
+            <Flex gap={8} align="center" wrap>
+              <Typography.Title level={5} style={{ margin: 0, flex: 1 }}>{record.question}</Typography.Title>
+              <Tag color={auditStatusTag(record.status)}>{AUDIT_STATUS_LABELS[record.status]}</Tag>
+            </Flex>
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label="数据源">{record.sourceName ?? record.sourceId ?? "默认数据源"}</Descriptions.Item>
+              <Descriptions.Item label="Actor">
+                <Typography.Text ellipsis title={record.actor} style={{ maxWidth: 360 }}>
+                  {record.actor} · {record.actorType === "legacy" ? "历史记录" : "部署 operator"}
+                </Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="入口 / 来源">
+                {record.entrypoint} · {record.source} · SQL {record.sqlSource}
+              </Descriptions.Item>
+              <Descriptions.Item label="原始问题">{record.originalQuestion || record.question}</Descriptions.Item>
+              <Descriptions.Item label="总耗时">{formatDuration(record.durationMs)}</Descriptions.Item>
+              <Descriptions.Item label="模型">{record.model ?? "—"}</Descriptions.Item>
+              <Descriptions.Item label="Provider">{record.providerId ?? "—"}</Descriptions.Item>
+              <Descriptions.Item label="相关表">{record.selectedTables.join("、") || "—"}</Descriptions.Item>
+              <Descriptions.Item label="开始时间">{new Date(record.startedAt).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="结束时间">
+                {record.finishedAt ? new Date(record.finishedAt).toLocaleString() : "执行中"}
+              </Descriptions.Item>
+            </Descriptions>
+            {detail?.parent ? (
+              <Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>
+                父审计：
+                <Button type="link" size="small" style={{ padding: 0, height: "auto" }} onClick={() => setSelectedId(detail.parent!.id)}>
+                  {detail.parent.id.slice(0, 8)}
+                </Button>
+              </Typography.Paragraph>
+            ) : null}
+            {detail?.children.length ? (
+              <Flex gap={4} wrap align="center">
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>子审计：</Typography.Text>
+                {detail.children.map((child) => (
+                  <Button key={child.id} type="link" size="small" style={{ padding: "0 4px", height: "auto" }} onClick={() => setSelectedId(child.id)}>
+                    {child.id.slice(0, 8)}
+                  </Button>
+                ))}
+              </Flex>
+            ) : null}
+            {record.error ? <Alert type="error" showIcon message={record.error} /> : null}
+            {record.clarification ? (
+              <Card size="small" title={`第 ${record.clarification.round} 轮 · 待补充：${record.clarification.slots.map((slot) => slot.label).join("、")}`}>
+                <Typography.Paragraph style={{ fontSize: 12 }}>{record.clarification.clarifying}</Typography.Paragraph>
+                {record.clarification.candidates.length ? (
+                  <Flex gap={4} wrap>
+                    {record.clarification.candidates.map((candidate) => (
+                      <Tag key={`${candidate.label}:${candidate.value}`}>{candidate.label}</Tag>
                     ))}
-                  </p>
+                  </Flex>
                 ) : null}
-                {record.error ? <p className="workspace-notice error">{record.error}</p> : null}
-                {record.clarification ? (
-                  <div className="obs-clarification-contract">
-                    <p>
-                      第 {record.clarification.round} 轮 · 待补充：
-                      {record.clarification.slots.map((slot) => slot.label).join("、")}
-                    </p>
-                    <p>{record.clarification.clarifying}</p>
-                    {record.clarification.candidates.length ? (
-                      <div className="obs-clarify-candidates">
-                        {record.clarification.candidates.map((candidate) => (
-                          <span key={`${candidate.label}:${candidate.value}`}>
-                            {candidate.label}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : record.clarifying ? (
-                  <p>{record.clarifying}</p>
-                ) : null}
-                {record.history.length ? (
-                  <details>
-                    <summary>查询上下文（{record.history.length} 条）</summary>
-                    {record.history.map((turn, index) => (
-                      <p key={index}>
-                        <b>{turn.role === "user" ? "用户" : "助手"}：</b>
-                        {turn.content}
-                      </p>
-                    ))}
-                  </details>
-                ) : null}
-              </div>
+              </Card>
+            ) : record.clarifying ? (
+              <Typography.Paragraph>{record.clarifying}</Typography.Paragraph>
+            ) : null}
+            {record.history.length ? (
+              <Collapse
+                size="small"
+                items={[
+                  {
+                    key: "history",
+                    label: `查询上下文（${record.history.length} 条）`,
+                    children: (
+                      <List
+                        size="small"
+                        dataSource={record.history}
+                        renderItem={(turn) => (
+                          <List.Item>
+                            <Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>
+                              <b>{turn.role === "user" ? "用户：" : "助手："}</b>
+                              {turn.content}
+                            </Typography.Paragraph>
+                          </List.Item>
+                        )}
+                      />
+                    ),
+                  },
+                ]}
+              />
+            ) : null}
+            <Card size="small" title="执行过程">
               <QueryExecution steps={record.steps} auditId={record.id} details />
-              {record.sql ? (
-                <>
-                  <div className="panel-heading">
-                    <span>SQL</span>
-                  </div>
-                  <pre className="obs-pre obs-sql">{record.sql}</pre>
-                </>
-              ) : null}
-              <div className="obs-audit-rerun">
-                <div className="panel-heading">
-                  <span>基于此审计重跑</span>
-                </div>
-                <textarea
+            </Card>
+            {record.sql ? (
+              <Card size="small" title="SQL">
+                <Typography.Paragraph code style={{ fontSize: 12 }}>{record.sql}</Typography.Paragraph>
+              </Card>
+            ) : null}
+            <Card size="small" title="基于此审计重跑">
+              <Flex vertical gap={8}>
+                <Input.TextArea
                   aria-label="审计重跑 SQL"
                   value={rerunSql}
                   onChange={(event) => setRerunSql(event.target.value)}
                   placeholder="仅允许单条只读 SELECT，服务端会重新校验"
+                  rows={4}
                   spellCheck={false}
                 />
-                <div className="obs-rerun-actions">
-                  <button
-                    className="studio-button secondary"
-                    type="button"
+                <Flex gap={8}>
+                  <Button
                     disabled={
                       rerunning ||
                       Boolean(record.parentAuditId) ||
@@ -554,28 +598,38 @@ export function QueryAuditView({ sourceId }: { sourceId: string }) {
                     onClick={() => setRerunSql(record.executedSql ?? record.generatedSql ?? "")}
                   >
                     恢复执行 SQL
-                  </button>
-                  <button
-                    className="studio-button primary"
-                    type="button"
+                  </Button>
+                  <Button
+                    type="primary"
+                    loading={rerunning}
                     disabled={rerunning || Boolean(record.parentAuditId) || !rerunSql.trim()}
                     onClick={() => void rerun()}
                   >
                     {rerunning ? "重跑中..." : "创建子审计并重跑"}
-                  </button>
-                </div>
-                {rerunNotice ? <p className="obs-rerun-notice">{rerunNotice}</p> : null}
-              </div>
-              {record.rowCount !== null ? (
-                <details className="obs-audit-preview">
-                  <summary>结果预览 · {record.rowCount} 行</summary>
-                  <pre>{JSON.stringify(record.resultPreview, null, 2)}</pre>
-                </details>
-              ) : null}
-            </>
-          )}
-        </aside>
-      </div>
-    </div>
+                  </Button>
+                </Flex>
+                {rerunNotice ? <Alert showIcon type="info" message={rerunNotice} /> : null}
+              </Flex>
+            </Card>
+            {record.rowCount !== null ? (
+              <Collapse
+                size="small"
+                items={[
+                  {
+                    key: "preview",
+                    label: `结果预览 · ${record.rowCount} 行`,
+                    children: (
+                      <Typography.Paragraph code style={{ fontSize: 12 }}>
+                        {JSON.stringify(record.resultPreview, null, 2)}
+                      </Typography.Paragraph>
+                    ),
+                  },
+                ]}
+              />
+            ) : null}
+          </Flex>
+        )}
+      </Drawer>
+    </Flex>
   );
 }
