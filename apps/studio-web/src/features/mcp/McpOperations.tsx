@@ -1,17 +1,38 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  App,
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  InputNumber,
+  List,
+  Modal,
+  Select,
+  Spin,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import type { ColumnsType } from "antd/es/table";
 import {
   AuditOutlined,
   CheckOutlined,
   CloseOutlined,
-  CopyOutlined,
   DeleteOutlined,
   KeyOutlined,
-  LoadingOutlined,
   PlusOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
   UserOutlined,
 } from "../../lib/icons.js";
+import { confirmAction } from "../../components/studio/confirmAction.js";
 import {
   createApiKey,
   createClient,
@@ -64,52 +85,36 @@ function nameFilter(value: string[] | null): string {
   return value.length === 0 ? "无" : value.join(", ");
 }
 
-function Notice({ error, notice }: { error: string; notice?: string }) {
-  if (!error && !notice) return null;
-  return (
-    <div className={`workspace-notice ${error ? "error" : "success"}`} role="status">
-      {error || notice}
-    </div>
-  );
+function buildStatus(value: BuildJobSummary["status"]): "default" | "processing" | "success" | "error" {
+  switch (value) {
+    case "RUNNING":
+      return "processing";
+    case "SUCCEEDED":
+      return "success";
+    case "FAILED":
+      return "error";
+    default:
+      return "default";
+  }
 }
 
-function Empty({ icon, text }: { icon: ReactNode; text: string }) {
-  return (
-    <div className="operations-empty">
-      {icon}
-      <p>{text}</p>
-    </div>
-  );
+function keyStatus(value: ApiKeyRecord["status"]): "success" | "default" {
+  return value === "ACTIVE" ? "success" : "default";
 }
 
-function OperationDialog({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="studio-dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="studio-dialog operations-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header>
-          <h2>{title}</h2>
-          <button type="button" aria-label="关闭" onClick={onClose}>
-            <CloseOutlined />
-          </button>
-        </header>
-        {children}
-      </section>
-    </div>
-  );
+function usageStatus(value: UsageEventRecord["status"]): "processing" | "success" | "error" {
+  switch (value) {
+    case "SUCCEEDED":
+      return "success";
+    case "FAILED":
+      return "error";
+    default:
+      return "processing";
+  }
+}
+
+function auditStatus(value: AuditEventSummary["outcome"]): "success" | "error" {
+  return value === "SUCCEEDED" ? "success" : "error";
 }
 
 export function BuildsView() {
@@ -137,72 +142,115 @@ export function BuildsView() {
     [builds, status],
   );
 
+  const columns: ColumnsType<BuildJobSummary> = [
+    {
+      title: "服务 / 版本",
+      key: "service",
+      render: (_, item) => (
+        <Flex vertical gap={0}>
+          <Typography.Text strong>{item.serviceName}</Typography.Text>
+          <Typography.Text type="secondary">v{item.versionNumber}</Typography.Text>
+        </Flex>
+      ),
+    },
+    {
+      title: "类型",
+      dataIndex: "kind",
+      key: "kind",
+      width: 110,
+      render: (value: BuildJobSummary["kind"]) => <Tag>{value}</Tag>,
+    },
+    {
+      title: "阶段",
+      key: "stage",
+      render: (_, item) => (
+        <Flex vertical gap={0}>
+          <Typography.Text>{item.stage}</Typography.Text>
+          <Typography.Text type="secondary">
+            {item.errorCode ?? `第 ${item.attempt} 次`}
+          </Typography.Text>
+        </Flex>
+      ),
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      key: "status",
+      width: 150,
+      render: (value: BuildJobSummary["status"]) => (
+        <Flex align="center" gap={6}>
+          <Badge status={buildStatus(value)} />
+          <Tag color={buildStatus(value)}>{value}</Tag>
+        </Flex>
+      ),
+    },
+    {
+      title: "更新时间",
+      dataIndex: "updatedAt",
+      key: "updatedAt",
+      render: (value: string) => (
+        <Typography.Text type="secondary">{formatDate(value)}</Typography.Text>
+      ),
+    },
+  ];
+
   return (
-    <div className="mcp-operations-view">
-      <div className="operations-toolbar">
-        <div>
-          <b>构建任务</b>
-          <span>
-            {visible.length} / {builds.length}
-          </span>
-        </div>
-        <label className="compact-select">
-          <span>状态</span>
-          <select
-            value={status}
-            onChange={(event) => setStatus(event.target.value as typeof status)}
-          >
-            <option value="ALL">全部</option>
-            <option value="QUEUED">排队中</option>
-            <option value="RUNNING">执行中</option>
-            <option value="SUCCEEDED">成功</option>
-            <option value="FAILED">失败</option>
-          </select>
-        </label>
-        <button
-          className="icon-command"
-          type="button"
-          title="刷新"
-          aria-label="刷新"
-          onClick={() => void load()}
-        >
-          <ReloadOutlined />
-        </button>
-      </div>
-      <Notice error={error} />
-      {loading ? <Empty icon={<LoadingOutlined spin />} text="正在读取构建任务" /> : null}
-      {!loading && visible.length === 0 ? (
-        <Empty icon={<AuditOutlined />} text="暂无构建记录" />
-      ) : null}
-      {!loading && visible.length > 0 ? (
-        <div className="operations-table build-table" role="table" aria-label="构建任务">
-          <div className="operations-table-head" role="row">
-            <span>服务 / 版本</span>
-            <span>类型</span>
-            <span>阶段</span>
-            <span>状态</span>
-            <span>更新时间</span>
-          </div>
-          {visible.map((item) => (
-            <div className="operations-table-row" role="row" key={item.id}>
-              <span>
-                <b>{item.serviceName}</b>
-                <small>v{item.versionNumber}</small>
-              </span>
-              <code>{item.kind}</code>
-              <span>
-                <b>{item.stage}</b>
-                <small>{item.errorCode ?? `第 ${item.attempt} 次`}</small>
-              </span>
-              <span className={`operation-status status-${item.status.toLowerCase()}`}>
-                {item.status}
-              </span>
-              <time dateTime={item.updatedAt}>{formatDate(item.updatedAt)}</time>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
+    <Flex vertical gap={12}>
+      <Card size="small">
+        <Flex justify="space-between" align="center" gap={8} wrap>
+          <Flex align="center" gap={8}>
+            <Typography.Text strong>构建任务</Typography.Text>
+            <Tag>
+              {visible.length} / {builds.length}
+            </Tag>
+          </Flex>
+          <Flex align="center" gap={8}>
+            <Select
+              aria-label="状态"
+              value={status}
+              style={{ width: 120 }}
+              onChange={(value: string) => setStatus(value as typeof status)}
+              options={[
+                { value: "ALL", label: "全部" },
+                { value: "QUEUED", label: "排队中" },
+                { value: "RUNNING", label: "执行中" },
+                { value: "SUCCEEDED", label: "成功" },
+                { value: "FAILED", label: "失败" },
+              ]}
+            />
+            <Tooltip title="刷新">
+              <Button
+                type="text"
+                icon={<ReloadOutlined />}
+                aria-label="刷新"
+                onClick={() => void load()}
+              />
+            </Tooltip>
+          </Flex>
+        </Flex>
+      </Card>
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {loading ? (
+        <Card size="small">
+          <Flex justify="center" style={{ padding: 24 }}>
+            <Spin tip="正在读取构建任务" />
+          </Flex>
+        </Card>
+      ) : visible.length === 0 ? (
+        <Card size="small">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无构建记录" />
+        </Card>
+      ) : (
+        <Table<BuildJobSummary>
+          size="small"
+          rowKey="id"
+          columns={columns}
+          dataSource={visible}
+          pagination={{ pageSize: 20 }}
+          scroll={{ x: 720 }}
+        />
+      )}
+    </Flex>
   );
 }
 
@@ -303,11 +351,13 @@ function GrantForm({
     ),
   ];
 
+  const submitDisabled =
+    busy || !serviceId || capabilityLoading || !capabilities || Boolean(capabilityError);
+
   return (
-    <form
-      className="dialog-form"
-      onSubmit={(event) => {
-        event.preventDefault();
+    <Form
+      layout="vertical"
+      onFinish={() => {
         if (!capabilities) return;
         const constrainedScopes = constrainGrantScopes(selectedScopes, capabilities);
         void onSubmit(serviceId, {
@@ -318,39 +368,41 @@ function GrantForm({
         });
       }}
     >
-      <label className="studio-field">
-        <span>服务</span>
-        <select
-          value={serviceId}
+      <Form.Item label="服务">
+        <Select
+          aria-label="服务"
+          value={serviceId || undefined}
           disabled={Boolean(initial)}
-          onChange={(event) => {
-            setServiceId(event.target.value);
+          placeholder="选择服务"
+          onChange={(value: string) => {
+            setServiceId(value);
             setSelectedScopes(new Set(["mcp:connect"]));
             setAllTools(false);
             setAllPrompts(false);
             setToolNames("");
             setPromptNames("");
           }}
-        >
-          {services.map((service) => (
-            <option value={service.id} key={service.id}>
-              {service.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      {capabilityLoading ? <p className="muted-copy">正在读取当前发布版本能力...</p> : null}
-      {capabilityError ? <Notice error={capabilityError} /> : null}
+          options={services.map((service) => ({ value: service.id, label: service.name }))}
+        />
+      </Form.Item>
+      {capabilityLoading ? (
+        <Flex align="center" gap={8} style={{ marginBottom: 12 }}>
+          <Spin size="small" />
+          <Typography.Text type="secondary">正在读取当前发布版本能力...</Typography.Text>
+        </Flex>
+      ) : null}
+      {capabilityError ? (
+        <Alert type="error" showIcon message={capabilityError} style={{ marginBottom: 12 }} />
+      ) : null}
       {capabilities && !capabilityError ? (
-        <p className="muted-copy">
+        <Typography.Paragraph type="secondary">
           {capabilities.versionNumber === null
             ? "当前没有已发布版本"
             : `当前发布版本 v${capabilities.versionNumber} · ${capabilities.toolCount} Tools · ${capabilities.promptCount} Prompts`}
-        </p>
+        </Typography.Paragraph>
       ) : null}
-      <fieldset className="grant-fieldset">
-        <legend>Scopes</legend>
-        <div className="grant-scope-grid">
+      <Form.Item label="Scopes">
+        <Flex vertical gap={4}>
           {scopes.map((scope) => {
             const supported = capabilities
               ? supportsGrantScope(scope.value, capabilities)
@@ -358,84 +410,78 @@ function GrantForm({
             const disabled =
               scope.value === "mcp:connect" || capabilityLoading || !capabilities || !supported;
             return (
-              <label className={disabled ? "is-disabled" : undefined} key={scope.value}>
-                <input
-                  type="checkbox"
-                  checked={selectedScopes.has(scope.value)}
-                  disabled={disabled}
-                  onChange={() => toggleScope(scope.value)}
-                />
-                <span>{scope.label}</span>
-              </label>
+              <Checkbox
+                key={scope.value}
+                checked={selectedScopes.has(scope.value)}
+                disabled={disabled}
+                onChange={() => toggleScope(scope.value)}
+              >
+                {scope.label}
+              </Checkbox>
             );
           })}
-        </div>
-      </fieldset>
-      <div className="field-grid">
-        <label className="studio-field">
-          <span>
-            Tool 白名单{" "}
-            <small>
-              <input
-                type="checkbox"
-                checked={allTools}
-                disabled={capabilityLoading || !capabilities || capabilities.toolCount === 0}
-                onChange={(event) => setAllTools(event.target.checked)}
-              />{" "}
+        </Flex>
+      </Form.Item>
+      <Flex gap={8}>
+        <Form.Item label="Tool 白名单" style={{ flex: 1, marginBottom: 0 }}>
+          <Flex vertical gap={8}>
+            <Checkbox
+              checked={allTools}
+              disabled={capabilityLoading || !capabilities || capabilities.toolCount === 0}
+              onChange={(event) => setAllTools(event.target.checked)}
+            >
               全部
-            </small>
-          </span>
-          <input
-            disabled={
-              allTools || capabilityLoading || !capabilities || capabilities.toolCount === 0
-            }
-            value={toolNames}
-            onChange={(event) => setToolNames(event.target.value)}
-            placeholder="echo, search"
-          />
-        </label>
-        <label className="studio-field">
-          <span>
-            Prompt 白名单{" "}
-            <small>
-              <input
-                type="checkbox"
-                checked={allPrompts}
-                disabled={capabilityLoading || !capabilities || capabilities.promptCount === 0}
-                onChange={(event) => setAllPrompts(event.target.checked)}
-              />{" "}
+            </Checkbox>
+            <Input
+              aria-label="Tool 白名单"
+              disabled={
+                allTools || capabilityLoading || !capabilities || capabilities.toolCount === 0
+              }
+              value={toolNames}
+              onChange={(event) => setToolNames(event.target.value)}
+              placeholder="echo, search"
+            />
+          </Flex>
+        </Form.Item>
+        <Form.Item label="Prompt 白名单" style={{ flex: 1, marginBottom: 0 }}>
+          <Flex vertical gap={8}>
+            <Checkbox
+              checked={allPrompts}
+              disabled={capabilityLoading || !capabilities || capabilities.promptCount === 0}
+              onChange={(event) => setAllPrompts(event.target.checked)}
+            >
               全部
-            </small>
-          </span>
-          <input
-            disabled={
-              allPrompts || capabilityLoading || !capabilities || capabilities.promptCount === 0
-            }
-            value={promptNames}
-            onChange={(event) => setPromptNames(event.target.value)}
-            placeholder="summary, rewrite"
-          />
-        </label>
-      </div>
-      <div className="dialog-actions">
-        <button className="studio-button secondary" type="button" onClick={onClose}>
-          取消
-        </button>
-        <button
-          className="studio-button primary"
-          type="submit"
-          disabled={
-            busy || !serviceId || capabilityLoading || !capabilities || Boolean(capabilityError)
-          }
+            </Checkbox>
+            <Input
+              aria-label="Prompt 白名单"
+              disabled={
+                allPrompts || capabilityLoading || !capabilities || capabilities.promptCount === 0
+              }
+              value={promptNames}
+              onChange={(event) => setPromptNames(event.target.value)}
+              placeholder="summary, rewrite"
+            />
+          </Flex>
+        </Form.Item>
+      </Flex>
+      <Flex gap={8} justify="flex-end" style={{ marginTop: 16 }}>
+        <Button onClick={onClose}>取消</Button>
+        <Button
+          type="primary"
+          htmlType="submit"
+          loading={busy}
+          disabled={submitDisabled}
+          icon={<SafetyCertificateOutlined />}
         >
-          {busy ? <LoadingOutlined spin /> : <SafetyCertificateOutlined />} 保存授权
-        </button>
-      </div>
-    </form>
+          保存授权
+        </Button>
+      </Flex>
+    </Form>
   );
 }
 
 export function ClientsView({ services }: { services: McpService[] }) {
+  const { message } = App.useApp();
   const [clients, setClients] = useState<ApiClientRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
@@ -518,6 +564,7 @@ export function ClientsView({ services }: { services: McpService[] }) {
     try {
       await action();
       setNotice(success);
+      message.success(success);
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -526,284 +573,421 @@ export function ClientsView({ services }: { services: McpService[] }) {
   };
 
   const client = clients.find((item) => item.id === selectedId) ?? null;
+  const activeKeys = keys.filter((key) => key.status === "ACTIVE").length;
+
+  const keyColumns: ColumnsType<ApiKeyRecord> = [
+    {
+      title: "Key ID",
+      dataIndex: "id",
+      key: "id",
+      render: (value: string) => <Typography.Text code>{value.slice(0, 12)}</Typography.Text>,
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      key: "status",
+      width: 130,
+      render: (value: ApiKeyRecord["status"]) => (
+        <Flex align="center" gap={6}>
+          <Badge status={keyStatus(value)} />
+          <Tag color={keyStatus(value)}>{value}</Tag>
+        </Flex>
+      ),
+    },
+    {
+      title: "最近使用",
+      dataIndex: "lastUsedAt",
+      key: "lastUsedAt",
+      render: (value: string | null) => (
+        <Typography.Text type="secondary">{formatDate(value)}</Typography.Text>
+      ),
+    },
+    {
+      title: "过期时间",
+      dataIndex: "expiresAt",
+      key: "expiresAt",
+      render: (value: string | null) => (
+        <Typography.Text type="secondary">{formatDate(value)}</Typography.Text>
+      ),
+    },
+    {
+      title: "操作",
+      key: "actions",
+      width: 70,
+      render: (_, record) =>
+        record.status === "ACTIVE" && client ? (
+          <Tooltip title="撤销 Key">
+            <Button
+              type="text"
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              aria-label="撤销 Key"
+              onClick={() =>
+                confirmAction({
+                  title: "撤销这个 API Key？",
+                  content: "撤销后该 Key 立即失效，正在使用它的调用会失败，且不可恢复。",
+                  okText: "撤销",
+                  danger: true,
+                  onOk: () =>
+                    void perform("API Key 已撤销", async () => {
+                      await revokeApiKey(client.id, record.id);
+                      await loadAccess(client.id);
+                    }),
+                })
+              }
+            />
+          </Tooltip>
+        ) : null,
+    },
+  ];
+
+  const usageColumns: ColumnsType<UsageEventRecord> = [
+    {
+      title: "时间",
+      dataIndex: "createdAt",
+      key: "createdAt",
+      render: (value: string) => (
+        <Typography.Text type="secondary">{formatDate(value)}</Typography.Text>
+      ),
+    },
+    {
+      title: "服务",
+      dataIndex: "serviceId",
+      key: "serviceId",
+      render: (value: string) => (
+        <Typography.Text code>
+          {services.find((service) => service.id === value)?.name ?? value.slice(0, 8)}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: "Tool",
+      dataIndex: "toolName",
+      key: "toolName",
+      render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      key: "status",
+      width: 140,
+      render: (value: UsageEventRecord["status"]) => (
+        <Flex align="center" gap={6}>
+          <Badge status={usageStatus(value)} />
+          <Tag color={usageStatus(value)}>{value}</Tag>
+        </Flex>
+      ),
+    },
+    {
+      title: "耗时",
+      dataIndex: "durationMs",
+      key: "durationMs",
+      width: 110,
+      render: (value: number | null) => (
+        <Typography.Text type="secondary">{value === null ? "—" : `${value} ms`}</Typography.Text>
+      ),
+    },
+  ];
 
   return (
-    <div className="mcp-operations-view client-view">
-      <div className="operations-toolbar">
-        <div>
-          <b>API 客户端</b>
-          <span>{clients.length} 个客户端</span>
-        </div>
-        <button
-          className="icon-command"
-          type="button"
-          title="刷新"
-          aria-label="刷新"
-          onClick={() => void loadClients()}
-        >
-          <ReloadOutlined />
-        </button>
-        <button
-          className="studio-button primary compact"
-          type="button"
-          onClick={() => setDialog("client")}
-        >
-          <PlusOutlined /> 新建客户端
-        </button>
-      </div>
-      <Notice error={error} notice={notice} />
-      {loading ? <Empty icon={<LoadingOutlined spin />} text="正在读取客户端" /> : null}
-      {!loading && clients.length === 0 ? (
-        <Empty icon={<UserOutlined />} text="暂无 API 客户端" />
-      ) : null}
-      {!loading && clients.length > 0 ? (
-        <div className="client-layout">
-          <aside className="client-list">
-            {clients.map((item) => (
-              <button
-                type="button"
-                className={item.id === selectedId ? "is-active" : ""}
-                key={item.id}
-                onClick={() => setSelectedId(item.id)}
-              >
-                <span>
-                  <b>{item.name}</b>
-                  <small>{item.status}</small>
-                </span>
-                <code>{item.id.slice(0, 8)}</code>
-              </button>
-            ))}
-          </aside>
+    <Flex vertical gap={12}>
+      <Card size="small">
+        <Flex justify="space-between" align="center" gap={8} wrap>
+          <Flex align="center" gap={8}>
+            <Typography.Text strong>API 客户端</Typography.Text>
+            <Tag>{clients.length} 个客户端</Tag>
+          </Flex>
+          <Flex gap={8}>
+            <Tooltip title="刷新">
+              <Button
+                type="text"
+                icon={<ReloadOutlined />}
+                aria-label="刷新"
+                onClick={() => void loadClients()}
+              />
+            </Tooltip>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setDialog("client")}>
+              新建客户端
+            </Button>
+          </Flex>
+        </Flex>
+      </Card>
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {notice ? <Alert type="success" showIcon closable message={notice} /> : null}
+      {loading ? (
+        <Card size="small">
+          <Flex justify="center" style={{ padding: 24 }}>
+            <Spin tip="正在读取客户端" />
+          </Flex>
+        </Card>
+      ) : clients.length === 0 ? (
+        <Card size="small">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 API 客户端" />
+        </Card>
+      ) : (
+        <Flex gap={12} align="flex-start">
+          <Card
+            size="small"
+            title="客户端"
+            extra={<Tag>{clients.length}</Tag>}
+            style={{ width: 280, flex: "0 0 auto" }}
+            styles={{ body: { padding: 8 } }}
+          >
+            <List
+              size="small"
+              rowKey="id"
+              dataSource={clients}
+              renderItem={(item) => (
+                <List.Item
+                  style={{ cursor: "pointer", borderRadius: 8, padding: "8px 12px" }}
+                  onClick={() => setSelectedId(item.id)}
+                >
+                  <Flex justify="space-between" align="center" style={{ width: "100%" }} gap={8}>
+                    <Flex vertical gap={0} style={{ minWidth: 0 }}>
+                      <Typography.Text strong ellipsis>
+                        {item.name}
+                      </Typography.Text>
+                      <Typography.Text type="secondary">{item.status}</Typography.Text>
+                    </Flex>
+                    <Flex align="center" gap={4}>
+                      {item.id === selectedId ? <Tag color="blue">当前</Tag> : null}
+                      <Typography.Text type="secondary" code>
+                        {item.id.slice(0, 8)}
+                      </Typography.Text>
+                    </Flex>
+                  </Flex>
+                </List.Item>
+              )}
+            />
+          </Card>
           {client ? (
-            <div className="client-detail">
-              <section className="access-section">
-                <header>
-                  <div>
-                    <h2>API Keys</h2>
-                    <p>{keys.filter((key) => key.status === "ACTIVE").length} 个有效 Key</p>
-                  </div>
-                  <button
-                    className="studio-button secondary compact"
-                    type="button"
-                    onClick={() => setDialog("key")}
-                  >
-                    <KeyOutlined /> 签发 Key
-                  </button>
-                </header>
-                <div className="operations-table key-table">
-                  <div className="operations-table-head">
-                    <span>Key ID</span>
-                    <span>状态</span>
-                    <span>最近使用</span>
-                    <span>过期时间</span>
-                    <span />
-                  </div>
-                  {keys.map((key) => (
-                    <div className="operations-table-row" key={key.id}>
-                      <code>{key.id.slice(0, 12)}</code>
-                      <span className={`operation-status status-${key.status.toLowerCase()}`}>
-                        {key.status}
-                      </span>
-                      <time>{formatDate(key.lastUsedAt)}</time>
-                      <time>{formatDate(key.expiresAt)}</time>
-                      {key.status === "ACTIVE" ? (
-                        <button
-                          className="icon-command danger"
-                          type="button"
-                          title="撤销 Key"
-                          aria-label="撤销 Key"
-                          onClick={() => {
-                            if (!window.confirm("撤销这个 API Key？")) return;
-                            void perform("API Key 已撤销", async () => {
-                              await revokeApiKey(client.id, key.id);
-                              await loadAccess(client.id);
-                            });
-                          }}
-                        >
-                          <DeleteOutlined />
-                        </button>
-                      ) : (
-                        <span />
-                      )}
-                    </div>
-                  ))}
-                  {keys.length === 0 ? <div className="inline-empty">暂无 API Key</div> : null}
-                </div>
-              </section>
-              <section className="access-section quota-section">
-                <header>
-                  <div>
-                    <h2>配额与用量</h2>
-                    <p>
-                      今日 {usage.summary.total} 次 · 成功 {usage.summary.succeeded} · 失败{" "}
-                      {usage.summary.failed}
-                    </p>
-                  </div>
-                  <button
-                    className="studio-button secondary compact"
-                    type="button"
-                    onClick={() => {
-                      const selected = quotas.find((quota) => quota.serviceId === quotaServiceId);
-                      setQuotaQps(String(selected?.qpsLimit ?? 0));
-                      setQuotaDaily(String(selected?.dailyCallLimit ?? 0));
-                    }}
-                  >
-                    读取当前值
-                  </button>
-                </header>
-                <div className="quota-grid">
-                  <label className="studio-field">
-                    <span>作用范围</span>
-                    <select
-                      value={quotaServiceId}
-                      onChange={(event) => {
-                        const next = event.target.value;
-                        setQuotaServiceId(next);
-                        const selected = quotas.find((quota) => quota.serviceId === (next || null));
+            <Flex vertical gap={12} style={{ flex: 1, minWidth: 0 }}>
+              <Card
+                size="small"
+                title="API Keys"
+                extra={
+                  <Flex gap={8} align="center">
+                    <Tag>{activeKeys} 个有效 Key</Tag>
+                    <Button size="small" icon={<KeyOutlined />} onClick={() => setDialog("key")}>
+                      签发 Key
+                    </Button>
+                  </Flex>
+                }
+              >
+                <Table<ApiKeyRecord>
+                  size="small"
+                  rowKey="id"
+                  columns={keyColumns}
+                  dataSource={keys}
+                  pagination={false}
+                  locale={{
+                    emptyText: (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 API Key" />
+                    ),
+                  }}
+                />
+              </Card>
+              <Card
+                size="small"
+                title="配额与用量"
+                extra={
+                  <Tag>
+                    今日 {usage.summary.total} 次 · 成功 {usage.summary.succeeded} · 失败{" "}
+                    {usage.summary.failed}
+                  </Tag>
+                }
+              >
+                <Form layout="vertical">
+                  <Flex gap={8} wrap>
+                    <Form.Item label="作用范围" style={{ flex: "2 1 200px", minWidth: 180 }}>
+                      <Select
+                        aria-label="作用范围"
+                        value={quotaServiceId}
+                        onChange={(value: string) => {
+                          setQuotaServiceId(value);
+                          const selected = quotas.find(
+                            (quota) => quota.serviceId === (value || null),
+                          );
+                          setQuotaQps(String(selected?.qpsLimit ?? 0));
+                          setQuotaDaily(String(selected?.dailyCallLimit ?? 0));
+                        }}
+                        options={[
+                          { value: "", label: "客户端全局 QPS" },
+                          ...services.map((service) => ({
+                            value: service.id,
+                            label: `${service.name} · 日调用`,
+                          })),
+                        ]}
+                      />
+                    </Form.Item>
+                    <Form.Item label="QPS 上限" style={{ flex: "1 1 120px", minWidth: 120 }}>
+                      <InputNumber
+                        aria-label="QPS 上限"
+                        min={0}
+                        style={{ width: "100%" }}
+                        value={Number(quotaQps) || 0}
+                        onChange={(value) => setQuotaQps(String(value ?? 0))}
+                      />
+                    </Form.Item>
+                    <Form.Item label="日调用上限" style={{ flex: "1 1 120px", minWidth: 120 }}>
+                      <InputNumber
+                        aria-label="日调用上限"
+                        min={0}
+                        style={{ width: "100%" }}
+                        value={Number(quotaDaily) || 0}
+                        onChange={(value) => setQuotaDaily(String(value ?? 0))}
+                      />
+                    </Form.Item>
+                  </Flex>
+                  <Flex gap={8} wrap>
+                    <Button
+                      onClick={() => {
+                        const selected = quotas.find(
+                          (quota) => quota.serviceId === (quotaServiceId || null),
+                        );
                         setQuotaQps(String(selected?.qpsLimit ?? 0));
                         setQuotaDaily(String(selected?.dailyCallLimit ?? 0));
                       }}
                     >
-                      <option value="">客户端全局 QPS</option>
-                      {services.map((service) => (
-                        <option key={service.id} value={service.id}>
-                          {service.name} · 日调用
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="studio-field">
-                    <span>QPS 上限</span>
-                    <input
-                      type="number"
-                      min="0"
-                      value={quotaQps}
-                      onChange={(event) => setQuotaQps(event.target.value)}
-                    />
-                  </label>
-                  <label className="studio-field">
-                    <span>日调用上限</span>
-                    <input
-                      type="number"
-                      min="0"
-                      value={quotaDaily}
-                      onChange={(event) => setQuotaDaily(event.target.value)}
-                    />
-                  </label>
-                  <button
-                    className="studio-button primary compact"
-                    type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      void perform("配额已保存", async () => {
-                        await upsertClientQuota(client.id, {
-                          serviceId: quotaServiceId || null,
-                          qpsLimit: Number(quotaQps) || 0,
-                          dailyCallLimit: Number(quotaDaily) || 0,
-                        });
-                        await loadAccess(client.id);
-                      })
-                    }
-                  >
-                    保存配额
-                  </button>
-                </div>
-                <p className="muted-copy">
+                      读取当前值
+                    </Button>
+                    <Button
+                      type="primary"
+                      loading={busy}
+                      onClick={() =>
+                        void perform("配额已保存", async () => {
+                          await upsertClientQuota(client.id, {
+                            serviceId: quotaServiceId || null,
+                            qpsLimit: Number(quotaQps) || 0,
+                            dailyCallLimit: Number(quotaDaily) || 0,
+                          });
+                          await loadAccess(client.id);
+                        })
+                      }
+                    >
+                      保存配额
+                    </Button>
+                  </Flex>
+                </Form>
+                <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>
                   0 表示不限；QPS 为客户端全局，日调用上限按 client + service 生效。
-                </p>
-                <div className="operations-table usage-table" role="table" aria-label="最近用量">
-                  <div className="operations-table-head">
-                    <span>时间</span>
-                    <span>服务</span>
-                    <span>Tool</span>
-                    <span>状态</span>
-                    <span>耗时</span>
-                  </div>
-                  {usage.events.slice(0, 20).map((event) => (
-                    <div className="operations-table-row" key={event.id}>
-                      <time>{formatDate(event.createdAt)}</time>
-                      <code>
-                        {services.find((service) => service.id === event.serviceId)?.name ??
-                          event.serviceId.slice(0, 8)}
-                      </code>
-                      <code>{event.toolName}</code>
-                      <span className={`operation-status status-${event.status.toLowerCase()}`}>
-                        {event.status}
-                      </span>
-                      <span>{event.durationMs === null ? "—" : `${event.durationMs} ms`}</span>
-                    </div>
-                  ))}
-                  {usage.events.length === 0 ? (
-                    <div className="inline-empty">暂无用量记录</div>
-                  ) : null}
-                </div>
-              </section>
-              <section className="access-section">
-                <header>
-                  <div>
-                    <h2>服务授权</h2>
-                    <p>{grants.length} 条 Grant</p>
-                  </div>
-                  <button
-                    className="studio-button secondary compact"
-                    type="button"
-                    onClick={() => {
-                      setEditingGrant(undefined);
-                      setDialog("grant");
-                    }}
-                  >
-                    <PlusOutlined /> 添加授权
-                  </button>
-                </header>
-                <div className="grant-list">
-                  {grants.map((grant) => (
-                    <article className="grant-row" key={grant.id}>
-                      <div>
-                        <b>
-                          {services.find((item) => item.id === grant.serviceId)?.name ??
-                            grant.serviceId}
-                        </b>
-                        <small>{grant.scopes.join(" · ")}</small>
-                      </div>
-                      <div>
-                        <span>Tools: {nameFilter(grant.toolNames)}</span>
-                        <span>Prompts: {nameFilter(grant.promptNames)}</span>
-                      </div>
-                      <span className="grant-actions">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingGrant(grant);
-                            setDialog("grant");
-                          }}
-                        >
-                          编辑
-                        </button>
-                        <button
-                          className="icon-command danger"
-                          type="button"
-                          title="删除授权"
-                          aria-label="删除授权"
-                          onClick={() => {
-                            if (!window.confirm("删除这条服务授权？")) return;
-                            void perform("服务授权已删除", async () => {
-                              await deleteGrant(client.id, grant.serviceId);
-                              await loadAccess(client.id);
-                            });
-                          }}
-                        >
-                          <DeleteOutlined />
-                        </button>
-                      </span>
-                    </article>
-                  ))}
-                  {grants.length === 0 ? <div className="inline-empty">暂无服务授权</div> : null}
-                </div>
-              </section>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+                </Typography.Paragraph>
+                <Table<UsageEventRecord>
+                  size="small"
+                  rowKey="id"
+                  aria-label="最近用量"
+                  columns={usageColumns}
+                  dataSource={usage.events.slice(0, 20)}
+                  pagination={false}
+                  scroll={{ x: 640 }}
+                  locale={{
+                    emptyText: (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无用量记录" />
+                    ),
+                  }}
+                />
+              </Card>
+              <Card
+                size="small"
+                title="服务授权"
+                extra={
+                  <Flex gap={8} align="center">
+                    <Tag>{grants.length} 条 Grant</Tag>
+                    <Button
+                      size="small"
+                      icon={<PlusOutlined />}
+                      onClick={() => {
+                        setEditingGrant(undefined);
+                        setDialog("grant");
+                      }}
+                    >
+                      添加授权
+                    </Button>
+                  </Flex>
+                }
+              >
+                {grants.length === 0 ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无服务授权" />
+                ) : (
+                  <List
+                    size="small"
+                    rowKey="id"
+                    dataSource={grants}
+                    renderItem={(grant) => (
+                      <List.Item
+                        actions={[
+                          <Button
+                            key="edit"
+                            type="link"
+                            size="small"
+                            onClick={() => {
+                              setEditingGrant(grant);
+                              setDialog("grant");
+                            }}
+                          >
+                            编辑
+                          </Button>,
+                          <Tooltip key="delete" title="删除授权">
+                            <Button
+                              type="text"
+                              danger
+                              size="small"
+                              icon={<DeleteOutlined />}
+                              aria-label="删除授权"
+                              onClick={() =>
+                                confirmAction({
+                                  title: "删除这条服务授权？",
+                                  content:
+                                    "删除后该客户端将无法再调用此服务的 Tools 与 Prompts，且不可恢复。",
+                                  okText: "删除",
+                                  danger: true,
+                                  onOk: () =>
+                                    void perform("服务授权已删除", async () => {
+                                      await deleteGrant(client.id, grant.serviceId);
+                                      await loadAccess(client.id);
+                                    }),
+                                })
+                              }
+                            />
+                          </Tooltip>,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          title={
+                            services.find((item) => item.id === grant.serviceId)?.name ??
+                            grant.serviceId
+                          }
+                          description={
+                            <Flex vertical gap={2}>
+                              <Typography.Text type="secondary">
+                                {grant.scopes.join(" · ")}
+                              </Typography.Text>
+                              <Typography.Text type="secondary">
+                                Tools: {nameFilter(grant.toolNames)}
+                              </Typography.Text>
+                              <Typography.Text type="secondary">
+                                Prompts: {nameFilter(grant.promptNames)}
+                              </Typography.Text>
+                            </Flex>
+                          }
+                        />
+                      </List.Item>
+                    )}
+                  />
+                )}
+              </Card>
+            </Flex>
+          ) : (
+            <Card size="small" style={{ flex: 1 }}>
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="请选择左侧客户端查看详情"
+              />
+            </Card>
+          )}
+        </Flex>
+      )}
 
       {dialog === "client" ? (
         <SimpleFormDialog
@@ -837,9 +1021,12 @@ export function ClientsView({ services }: { services: McpService[] }) {
         />
       ) : null}
       {dialog === "grant" && client ? (
-        <OperationDialog
+        <Modal
+          open
           title={editingGrant ? "编辑服务授权" : "添加服务授权"}
-          onClose={() => setDialog(null)}
+          closeIcon={<CloseOutlined />}
+          onCancel={() => setDialog(null)}
+          footer={null}
         >
           <GrantForm
             services={services}
@@ -854,37 +1041,29 @@ export function ClientsView({ services }: { services: McpService[] }) {
               })
             }
           />
-        </OperationDialog>
+        </Modal>
       ) : null}
-      {rawKey ? (
-        <OperationDialog title="API Key 已创建" onClose={() => setRawKey(null)}>
-          <div className="dialog-form">
-            <p className="muted-copy">原始 Key 仅展示一次。</p>
-            <div className="secret-key">
-              <code>{rawKey}</code>
-              <button
-                className="icon-command"
-                type="button"
-                title="复制"
-                aria-label="复制"
-                onClick={() => void navigator.clipboard.writeText(rawKey)}
-              >
-                <CopyOutlined />
-              </button>
-            </div>
-            <div className="dialog-actions">
-              <button
-                className="studio-button primary"
-                type="button"
-                onClick={() => setRawKey(null)}
-              >
-                完成
-              </button>
-            </div>
-          </div>
-        </OperationDialog>
-      ) : null}
-    </div>
+      <Modal
+        open={rawKey !== null}
+        title="API Key 已创建"
+        closeIcon={<CloseOutlined />}
+        onCancel={() => setRawKey(null)}
+        footer={
+          <Flex justify="flex-end">
+            <Button type="primary" onClick={() => setRawKey(null)}>
+              完成
+            </Button>
+          </Flex>
+        }
+      >
+        <Typography.Paragraph type="secondary">原始 Key 仅展示一次，请立即复制保存。</Typography.Paragraph>
+        {rawKey ? (
+          <Typography.Paragraph code copyable={{ text: rawKey }}>
+            {rawKey}
+          </Typography.Paragraph>
+        ) : null}
+      </Modal>
+    </Flex>
   );
 }
 
@@ -903,30 +1082,39 @@ function SimpleFormDialog({
   onClose: () => void;
   onSubmit: (value: string) => Promise<void>;
 }) {
+  const [form] = Form.useForm();
   return (
-    <OperationDialog title={title} onClose={onClose}>
-      <form
-        className="dialog-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          const value = String(new FormData(event.currentTarget).get(inputName) ?? "").trim();
+    <Modal
+      open
+      title={title}
+      closeIcon={<CloseOutlined />}
+      onCancel={onClose}
+      footer={null}
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        onFinish={(values: Record<string, unknown>) => {
+          const value = String(values[inputName] ?? "").trim();
           if (value) void onSubmit(value);
         }}
       >
-        <label className="studio-field">
-          <span>{label}</span>
-          <input required name={inputName} />
-        </label>
-        <div className="dialog-actions">
-          <button className="studio-button secondary" type="button" onClick={onClose}>
-            取消
-          </button>
-          <button className="studio-button primary" type="submit" disabled={busy}>
-            {busy ? <LoadingOutlined spin /> : <CheckOutlined />} 创建
-          </button>
-        </div>
-      </form>
-    </OperationDialog>
+        <Form.Item
+          label={label}
+          name={inputName}
+          rules={[{ required: true, message: `请输入${label}` }]}
+        >
+          <Input autoFocus />
+        </Form.Item>
+        <Flex gap={8} justify="flex-end">
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" htmlType="submit" loading={busy} icon={<CheckOutlined />}>
+            创建
+          </Button>
+        </Flex>
+      </Form>
+    </Modal>
   );
 }
 
@@ -939,30 +1127,35 @@ function KeyDialog({
   onClose: () => void;
   onSubmit: (expiresAt: string | null) => Promise<void>;
 }) {
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const value = String(new FormData(event.currentTarget).get("expiresAt") ?? "");
-    void onSubmit(value ? new Date(value).toISOString() : null);
-  };
+  const [form] = Form.useForm();
   return (
-    <OperationDialog title="签发 API Key" onClose={onClose}>
-      <form className="dialog-form" onSubmit={submit}>
-        <label className="studio-field">
-          <span>
-            过期时间 <small>可选</small>
-          </span>
-          <input type="datetime-local" name="expiresAt" />
-        </label>
-        <div className="dialog-actions">
-          <button className="studio-button secondary" type="button" onClick={onClose}>
-            取消
-          </button>
-          <button className="studio-button primary" type="submit" disabled={busy}>
-            {busy ? <LoadingOutlined spin /> : <KeyOutlined />} 签发
-          </button>
-        </div>
-      </form>
-    </OperationDialog>
+    <Modal
+      open
+      title="签发 API Key"
+      closeIcon={<CloseOutlined />}
+      onCancel={onClose}
+      footer={null}
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        onFinish={(values: Record<string, unknown>) => {
+          const raw = String(values["expiresAt"] ?? "");
+          void onSubmit(raw ? new Date(raw).toISOString() : null);
+        }}
+      >
+        <Form.Item label="过期时间" name="expiresAt" extra="可选，不填表示不过期">
+          <Input type="datetime-local" />
+        </Form.Item>
+        <Flex gap={8} justify="flex-end">
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" htmlType="submit" loading={busy} icon={<KeyOutlined />}>
+            签发
+          </Button>
+        </Flex>
+      </Form>
+    </Modal>
   );
 }
 
@@ -994,98 +1187,157 @@ export function AuditView() {
 
   useEffect(() => void load(), [load]);
 
+  const applySearch = (value: string) => {
+    const next = value.trim();
+    if (next === appliedAction) void load();
+    else setAppliedAction(next);
+  };
+
+  const columns: ColumnsType<AuditEventSummary> = [
+    {
+      title: "时间",
+      dataIndex: "createdAt",
+      key: "createdAt",
+      render: (value: string) => (
+        <Typography.Text type="secondary">{formatDate(value)}</Typography.Text>
+      ),
+    },
+    {
+      title: "操作者",
+      key: "actor",
+      render: (_, item) => (
+        <Flex vertical gap={0}>
+          <Typography.Text strong>{item.actorId}</Typography.Text>
+          <Typography.Text type="secondary">{item.actorRole}</Typography.Text>
+        </Flex>
+      ),
+    },
+    {
+      title: "动作",
+      dataIndex: "action",
+      key: "action",
+      render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
+    },
+    {
+      title: "目标",
+      key: "target",
+      render: (_, item) => (
+        <Flex vertical gap={0}>
+          <Typography.Text strong title={item.target} ellipsis style={{ maxWidth: 220 }}>
+            {item.target}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            {item.requestId} · {item.durationMs}ms
+          </Typography.Text>
+        </Flex>
+      ),
+    },
+    {
+      title: "结果",
+      dataIndex: "outcome",
+      key: "outcome",
+      width: 170,
+      render: (value: AuditEventSummary["outcome"], item) => (
+        <Flex vertical gap={2}>
+          <Flex align="center" gap={6}>
+            <Badge status={auditStatus(value)} />
+            <Tag color={auditStatus(value)}>{value}</Tag>
+          </Flex>
+          <Typography.Text type="secondary">HTTP {item.statusCode}</Typography.Text>
+        </Flex>
+      ),
+    },
+    {
+      title: "操作",
+      key: "actions",
+      width: 110,
+      render: (_, item) => (
+        <Button type="link" size="small" onClick={() => setSelectedId(item.id)}>
+          查看详情
+        </Button>
+      ),
+    },
+  ];
+
   return (
-    <div className="mcp-operations-view">
-      <div className="operations-toolbar">
-        <div>
-          <b>审计事件</b>
-          <span>{events.length} 条最近记录</span>
-        </div>
-        <label className="compact-select">
-          <span>结果</span>
-          <select
-            value={outcome}
-            onChange={(event) => setOutcome(event.target.value as typeof outcome)}
-          >
-            <option value="ALL">全部</option>
-            <option value="SUCCEEDED">成功</option>
-            <option value="FAILED">失败</option>
-          </select>
-        </label>
-        <label className="audit-search">
-          <span>动作</span>
-          <input
-            value={action}
-            onChange={(event) => setAction(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") setAppliedAction(action.trim());
-            }}
-            placeholder="例如 service.publish"
-          />
-        </label>
-        <button
-          className="icon-command"
-          type="button"
-          title="查询"
-          aria-label="查询"
-          onClick={() => {
-            const next = action.trim();
-            if (next === appliedAction) void load();
-            else setAppliedAction(next);
-          }}
-        >
-          <ReloadOutlined />
-        </button>
-      </div>
-      <Notice error={error} />
-      {loading ? <Empty icon={<LoadingOutlined spin />} text="正在读取审计事件" /> : null}
-      {!loading && events.length === 0 ? (
-        <Empty icon={<AuditOutlined />} text="没有匹配的审计事件" />
-      ) : null}
-      {!loading && events.length > 0 ? (
-        <div className="operations-table audit-table">
-          <div className="operations-table-head">
-            <span>时间</span>
-            <span>操作者</span>
-            <span>动作</span>
-            <span>目标</span>
-            <span>结果</span>
-            <span>内容</span>
-          </div>
-          {events.map((item) => (
-            <div className="operations-table-row" key={item.id}>
-              <time dateTime={item.createdAt}>{formatDate(item.createdAt)}</time>
-              <span>
-                <b>{item.actorId}</b>
-                <small>{item.actorRole}</small>
-              </span>
-              <code>{item.action}</code>
-              <span>
-                <b title={item.target}>{item.target}</b>
-                <small>
-                  {item.requestId} · {item.durationMs}ms
-                </small>
-              </span>
-              <span className={`operation-status status-${item.outcome.toLowerCase()}`}>
-                {item.outcome}
-                <small>HTTP {item.statusCode}</small>
-              </span>
-              <button
-                className="studio-button secondary compact"
-                type="button"
-                onClick={() => setSelectedId(item.id)}
-              >
-                查看详情
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {selectedId ? (
-        <OperationDialog title="审计事件详情" onClose={() => setSelectedId(null)}>
-          <AuditEventDetails key={selectedId} eventId={selectedId} />
-        </OperationDialog>
-      ) : null}
-    </div>
+    <Flex vertical gap={12}>
+      <Card size="small">
+        <Flex justify="space-between" align="center" gap={8} wrap>
+          <Flex align="center" gap={8}>
+            <Typography.Text strong>审计事件</Typography.Text>
+            <Tag>{events.length} 条最近记录</Tag>
+          </Flex>
+          <Flex align="center" gap={8} wrap>
+            <Select
+              aria-label="结果"
+              value={outcome}
+              style={{ width: 110 }}
+              onChange={(value: string) => setOutcome(value as typeof outcome)}
+              options={[
+                { value: "ALL", label: "全部" },
+                { value: "SUCCEEDED", label: "成功" },
+                { value: "FAILED", label: "失败" },
+              ]}
+            />
+            <Input.Search
+              aria-label="动作"
+              value={action}
+              onChange={(event) => setAction(event.target.value)}
+              onSearch={applySearch}
+              placeholder="例如 service.publish"
+              allowClear
+              style={{ width: 220 }}
+            />
+            <Tooltip title="刷新">
+              <Button
+                type="text"
+                icon={<ReloadOutlined />}
+                aria-label="刷新"
+                onClick={() => void load()}
+              />
+            </Tooltip>
+          </Flex>
+        </Flex>
+      </Card>
+      {error ? <Alert type="error" showIcon message={error} /> : null}
+      {loading ? (
+        <Card size="small">
+          <Flex justify="center" style={{ padding: 24 }}>
+            <Spin tip="正在读取审计事件" />
+          </Flex>
+        </Card>
+      ) : events.length === 0 ? (
+        <Card size="small">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的审计事件" />
+        </Card>
+      ) : (
+        <Table<AuditEventSummary>
+          size="small"
+          rowKey="id"
+          columns={columns}
+          dataSource={events}
+          pagination={{ pageSize: 20 }}
+          scroll={{ x: 900 }}
+        />
+      )}
+      <Modal
+        open={selectedId !== null}
+        title="审计事件详情"
+        closeIcon={<CloseOutlined />}
+        onCancel={() => setSelectedId(null)}
+        footer={null}
+        width={720}
+      >
+        {selectedId ? <AuditEventDetails key={selectedId} eventId={selectedId} /> : null}
+      </Modal>
+    </Flex>
   );
 }
+
+// Re-exported for tests that assert the management view union.
+export function __McpOperationsViewGuard(view: McpManagementView): McpManagementView {
+  return view;
+}
+
+void UserOutlined;
+void AuditOutlined;
