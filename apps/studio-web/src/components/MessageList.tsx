@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FloatButton } from "antd";
+import { Button, FloatButton } from "antd";
 import { ArrowDownOutlined } from "../lib/icons.js";
 import type { Message } from "../types.js";
 import { MessageBubble } from "./MessageBubble.js";
@@ -55,15 +55,15 @@ export function MessageList({
           <p>选择下面的示例开始，或直接在下方输入消息。</p>
           <div className="chat-welcome__suggestions">
             {SUGGESTIONS.map((item) => (
-              <button
+              <Button
                 key={item.title}
-                type="button"
                 className="chat-welcome__card"
                 onClick={() => onSuggestion?.(item.prompt)}
+                style={{ height: "auto", textAlign: "left" }}
               >
                 <b>{item.title}</b>
                 <span>{item.desc}</span>
-              </button>
+              </Button>
             ))}
           </div>
         </div>

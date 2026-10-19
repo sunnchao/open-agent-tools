@@ -170,14 +170,13 @@ export function EmployeeApp({ slug }: EmployeeAppProps) {
               {profile.suggestions.length > 0 ? (
                 <div className="employee-app__suggestions">
                   {profile.suggestions.map((item) => (
-                    <button
+                    <Button
                       key={item.title}
-                      type="button"
                       onClick={() => send(item.prompt)}
                       className="employee-app__suggestion"
                     >
                       {item.title}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               ) : null}

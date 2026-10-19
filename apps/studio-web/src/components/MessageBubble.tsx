@@ -217,16 +217,18 @@ function RagCitations({ citations }: { citations?: RagCitation[] }) {
           const isOpen = expanded === index;
           return (
             <li className="rag-citation" key={`${citation.source}-${citation.chunkIndex}-${index}`}>
-              <button
-                type="button"
+              <Button
+                type="text"
+                block
                 className="rag-citation__toggle"
                 aria-expanded={isOpen}
                 onClick={() => setExpanded(isOpen ? null : index)}
+                style={{ height: "auto", textAlign: "left" }}
               >
                 <span className="rag-citation__source">{citation.source}</span>
                 <span className="rag-citation__index">第 {Number(citation.chunkIndex) + 1} 段</span>
                 <span className="rag-citation__snippet">{citation.content}</span>
-              </button>
+              </Button>
               {isOpen ? <CitationViewer citation={citation} /> : null}
             </li>
           );
