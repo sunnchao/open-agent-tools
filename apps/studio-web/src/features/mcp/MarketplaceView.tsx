@@ -1,12 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Input } from "antd";
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  List,
+  Modal,
+  Select,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
 import {
   ApiOutlined,
   CheckCircleFilled,
   KeyOutlined,
   LoadingOutlined,
   ReloadOutlined,
-  SearchOutlined,
   SendOutlined,
   TagOutlined,
   ToolOutlined,
@@ -32,6 +47,7 @@ function toolCountLabel(service: MarketplaceService): string {
 }
 
 export function MarketplaceView() {
+  const { message } = App.useApp();
   const [services, setServices] = useState<MarketplaceService[]>([]);
   const [clients, setClients] = useState<ApiClientRecord[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string>("");
@@ -40,7 +56,6 @@ export function MarketplaceView() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [trialService, setTrialService] = useState<MarketplaceService | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [toolName, setToolName] = useState("");
@@ -107,7 +122,6 @@ export function MarketplaceView() {
     if (!selectedClientId) return;
     setBusy(service.id);
     setError("");
-    setNotice("");
     try {
       const scopes: McpScope[] = ["mcp:connect"];
       if (service.toolsUnknown || (service.toolCount ?? 0) > 0) {
@@ -120,7 +134,7 @@ export function MarketplaceView() {
         promptNames: null,
       });
       setGrants(await listGrants(selectedClientId));
-      setNotice(`已为客户端订阅 ${service.name}`);
+      void message.success(`已为客户端订阅 ${service.name}`);
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -161,201 +175,176 @@ export function MarketplaceView() {
   };
 
   return (
-    <div className="mcp-operations-view marketplace-view">
-      <div className="operations-toolbar marketplace-toolbar">
-        <div>
-          <b>工具市场</b>
-          <span>{services.length} 个已发布服务</span>
-        </div>
-        <label className="compact-select">
-          <span>订阅客户端</span>
-          <select
-            value={selectedClientId}
-            onChange={(event) => setSelectedClientId(event.target.value)}
-          >
-            <option value="">选择客户端</option>
-            {clients.map((client) => (
-              <option value={client.id} key={client.id}>
-                {client.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="studio-search marketplace-search">
-          <SearchOutlined />
-          <Input
+    <Flex vertical gap={12}>
+      <Card size="small">
+        <Flex gap={12} align="center" wrap>
+          <Flex vertical gap={0}>
+            <Typography.Text strong>工具市场</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {services.length} 个已发布服务
+            </Typography.Text>
+          </Flex>
+          <Form.Item label="订阅客户端" style={{ marginBottom: 0 }}>
+            <Select
+              aria-label="订阅客户端"
+              value={selectedClientId || undefined}
+              onChange={(value) => setSelectedClientId(value)}
+              placeholder="选择客户端"
+              options={clients.map((client) => ({ value: client.id, label: client.name }))}
+              style={{ minWidth: 160 }}
+            />
+          </Form.Item>
+          <Input.Search
+            aria-label="搜索服务"
             value={search}
-            autoComplete="off"
             onChange={(event) => setSearch(event.target.value)}
             placeholder="搜索服务、Tool 或 Prompt"
+            allowClear
+            style={{ flex: 1, minWidth: 200 }}
           />
-        </label>
-        <button
-          className="icon-command"
-          type="button"
-          title="刷新"
-          aria-label="刷新"
-          onClick={() => void load()}
-        >
-          <ReloadOutlined />
-        </button>
-      </div>
-      {error ? <div className="workspace-notice error">{error}</div> : null}
-      {notice ? <div className="workspace-notice success">{notice}</div> : null}
+          <Tooltip title="刷新">
+            <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
+          </Tooltip>
+        </Flex>
+      </Card>
+      {error ? <Alert type="error" showIcon message={error} role="alert" /> : null}
       {loading ? (
-        <div className="operations-empty">
-          <LoadingOutlined spin />
-          <p>正在读取已发布服务</p>
-        </div>
-      ) : null}
-      {!loading && visible.length === 0 ? (
-        <div className="operations-empty">
-          <SearchOutlined />
-          <p>没有匹配的服务</p>
-        </div>
-      ) : null}
-      <div className="marketplace-grid">
-        {visible.map((service) => {
-          const subscribed = grants.some((grant) => grant.serviceId === service.id);
-          return (
-            <article className="marketplace-card" key={service.id}>
-              <header>
-                <span className="marketplace-card__icon">
-                  <ApiOutlined />
-                </span>
-                <div>
-                  <b>{service.name}</b>
-                  <small>
-                    /{service.slug} · v{service.versionNumber}
-                  </small>
-                </div>
-                <span className="marketplace-card__type">
-                  {service.type === "REMOTE_MCP" ? "REMOTE" : "MANAGED"}
-                </span>
-              </header>
-              <div className="marketplace-card__meta">
-                <span>
-                  <ToolOutlined /> {toolCountLabel(service)}
-                </span>
-                <span>
-                  <TagOutlined /> {service.promptCount} Prompts
-                </span>
-              </div>
-              {service.tools.length > 0 ? (
-                <div className="marketplace-card__tools">
-                  {service.tools.slice(0, 4).map((tool) => (
-                    <span key={tool.name}>{tool.name}</span>
-                  ))}
-                  {service.tools.length > 4 ? <small>+{service.tools.length - 4}</small> : null}
-                </div>
-              ) : (
-                <p className="marketplace-card__unknown">
-                  {service.toolsUnknown
-                    ? "Remote MCP 的 Tool 数量需连接上游后才知道，当前不展示为 0。"
-                    : "该服务没有 Tool。"}
-                </p>
-              )}
-              <footer>
-                <button
-                  className="studio-button secondary compact"
-                  type="button"
-                  onClick={() => openTrial(service)}
+        <Flex justify="center" style={{ padding: 48 }}>
+          <Spin aria-label="正在读取已发布服务" />
+        </Flex>
+      ) : visible.length === 0 ? (
+        <Empty description="没有匹配的服务" />
+      ) : (
+        <List
+          grid={{ gutter: 12, xs: 1, sm: 2, md: 2, lg: 3, xl: 3, xxl: 4 }}
+          dataSource={visible}
+          rowKey="id"
+          renderItem={(service) => {
+            const subscribed = grants.some((grant) => grant.serviceId === service.id);
+            return (
+              <List.Item>
+                <Card
+                  size="small"
+                  title={
+                    <Flex gap={8} align="center">
+                      <ApiOutlined />
+                      <Typography.Text strong ellipsis style={{ maxWidth: 140 }}>
+                        {service.name}
+                      </Typography.Text>
+                    </Flex>
+                  }
+                  extra={<Tag>{service.type === "REMOTE_MCP" ? "REMOTE" : "MANAGED"}</Tag>}
                 >
-                  <SendOutlined /> 试用
-                </button>
-                <button
-                  className="studio-button primary compact"
-                  type="button"
-                  disabled={!selectedClientId || busy === service.id || subscribed}
-                  onClick={() => void subscribe(service)}
-                >
-                  {busy === service.id ? (
-                    <LoadingOutlined spin />
-                  ) : subscribed ? (
-                    <CheckCircleFilled />
-                  ) : (
-                    <KeyOutlined />
-                  )}
-                  {subscribed ? "已订阅" : "一键订阅"}
-                </button>
-              </footer>
-            </article>
-          );
-        })}
-      </div>
-      {trialService ? (
-        <div
-          className="studio-dialog-backdrop"
-          role="presentation"
-          onMouseDown={() => setTrialService(null)}
-        >
-          <section
-            className="studio-dialog operations-dialog marketplace-trial"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`试用 ${trialService.name}`}
-            onMouseDown={(event) => event.stopPropagation()}
+                  <Flex vertical gap={8}>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      /{service.slug} · v{service.versionNumber}
+                    </Typography.Text>
+                    <Flex gap={8} wrap>
+                      <Tag icon={<ToolOutlined />}>{toolCountLabel(service)}</Tag>
+                      <Tag icon={<TagOutlined />}>{service.promptCount} Prompts</Tag>
+                    </Flex>
+                    {service.tools.length > 0 ? (
+                      <Flex gap={4} wrap>
+                        {service.tools.slice(0, 4).map((tool) => (
+                          <Tag key={tool.name}>{tool.name}</Tag>
+                        ))}
+                        {service.tools.length > 4 ? (
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            +{service.tools.length - 4}
+                          </Typography.Text>
+                        ) : null}
+                      </Flex>
+                    ) : (
+                      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+                        {service.toolsUnknown
+                          ? "Remote MCP 的 Tool 数量需连接上游后才知道，当前不展示为 0。"
+                          : "该服务没有 Tool。"}
+                      </Typography.Paragraph>
+                    )}
+                    <Flex gap={8}>
+                      <Button size="small" icon={<SendOutlined />} onClick={() => openTrial(service)}>
+                        试用
+                      </Button>
+                      <Button
+                        size="small"
+                        type="primary"
+                        icon={busy === service.id ? <LoadingOutlined spin /> : subscribed ? <CheckCircleFilled /> : <KeyOutlined />}
+                        loading={busy === service.id}
+                        disabled={!selectedClientId || busy === service.id || subscribed}
+                        onClick={() => void subscribe(service)}
+                      >
+                        {subscribed ? "已订阅" : "一键订阅"}
+                      </Button>
+                    </Flex>
+                  </Flex>
+                </Card>
+              </List.Item>
+            );
+          }}
+        />
+      )}
+      <Modal
+        open={trialService !== null}
+        title={trialService ? `试用 ${trialService.name}` : "试用"}
+        onCancel={() => setTrialService(null)}
+        footer={null}
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          临时 Key 只保存在当前页面内存，不会写入本地存储或服务端 usage 记录之外的字段。
+        </Typography.Paragraph>
+        <Form layout="vertical" preserve={false}>
+          <Form.Item label="Gateway API Key" extra="临时">
+            <Input.Password
+              aria-label="Gateway API Key"
+              value={apiKey}
+              autoComplete="off"
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder="mcp_..."
+            />
+          </Form.Item>
+          <Form.Item label="Tool">
+            {trialService?.toolsUnknown ? (
+              <Input
+                aria-label="Tool"
+                value={toolName}
+                onChange={(event) => setToolName(event.target.value)}
+                placeholder="输入 Remote MCP Tool 名"
+              />
+            ) : (
+              <Select
+                aria-label="Tool"
+                value={toolName || undefined}
+                onChange={(value) => setToolName(value)}
+                options={(trialService?.tools ?? []).map((tool) => ({ value: tool.name, label: tool.name }))}
+                placeholder="选择 Tool"
+              />
+            )}
+          </Form.Item>
+          <Form.Item label="参数 JSON">
+            <Input.TextArea
+              aria-label="参数 JSON"
+              value={trialArguments}
+              onChange={(event) => setTrialArguments(event.target.value)}
+              rows={5}
+            />
+          </Form.Item>
+          <Button
+            type="primary"
+            block
+            icon={busy === "trial" ? <LoadingOutlined spin /> : <SendOutlined />}
+            loading={busy === "trial"}
+            disabled={busy === "trial" || !apiKey.trim() || !toolName.trim()}
+            onClick={() => void runTrial()}
           >
-            <header>
-              <h2>试用 {trialService.name}</h2>
-              <button type="button" aria-label="关闭" onClick={() => setTrialService(null)}>
-                ×
-              </button>
-            </header>
-            <div className="dialog-form">
-              <p className="muted-copy">
-                临时 Key 只保存在当前页面内存，不会写入本地存储或服务端 usage 记录之外的字段。
-              </p>
-              <label className="studio-field">
-                <span>
-                  Gateway API Key <small>临时</small>
-                </span>
-                <Input.Password
-                  value={apiKey}
-                  autoComplete="off"
-                  onChange={(event) => setApiKey(event.target.value)}
-                  placeholder="mcp_..."
-                />
-              </label>
-              <label className="studio-field">
-                <span>Tool</span>
-                {trialService.toolsUnknown ? (
-                  <input
-                    value={toolName}
-                    onChange={(event) => setToolName(event.target.value)}
-                    placeholder="输入 Remote MCP Tool 名"
-                  />
-                ) : (
-                  <select value={toolName} onChange={(event) => setToolName(event.target.value)}>
-                    {trialService.tools.map((tool) => (
-                      <option key={tool.name} value={tool.name}>
-                        {tool.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </label>
-              <label className="studio-field">
-                <span>参数 JSON</span>
-                <textarea
-                  value={trialArguments}
-                  onChange={(event) => setTrialArguments(event.target.value)}
-                  rows={5}
-                />
-              </label>
-              <button
-                className="studio-button primary full-width"
-                type="button"
-                disabled={busy === "trial" || !apiKey.trim() || !toolName.trim()}
-                onClick={() => void runTrial()}
-              >
-                {busy === "trial" ? <LoadingOutlined spin /> : <SendOutlined />} 调用 Tool
-              </button>
-              {trialResult ? <pre className="studio-code">{trialResult}</pre> : null}
-            </div>
-          </section>
-        </div>
-      ) : null}
-    </div>
+            调用 Tool
+          </Button>
+          {trialResult ? (
+            <Typography.Paragraph code style={{ fontSize: 12, marginTop: 8 }}>
+              {trialResult}
+            </Typography.Paragraph>
+          ) : null}
+        </Form>
+      </Modal>
+    </Flex>
   );
 }
