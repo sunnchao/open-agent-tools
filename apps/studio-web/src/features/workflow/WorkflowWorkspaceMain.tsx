@@ -1473,10 +1473,10 @@ function WorkflowCanvas({
       ) : null}
 
       <div className={`workflow-layout mobile-view-${mobileView}`}>
-        <Flex vertical className="node-palette">
-          <Flex className="panel-heading">
-            <Typography.Text>节点库</Typography.Text>
-            <Badge className="palette-count" count={filteredPalette.length} showZero />
+        <Flex vertical style={{ padding: "0 10px" }}>
+          <Flex align="center" justify="space-between" style={{ padding: "12px 4px" }}>
+            <Typography.Text strong>节点库</Typography.Text>
+            <Badge count={filteredPalette.length} showZero />
           </Flex>
           <Input
             className="palette-search"
@@ -1652,9 +1652,9 @@ function WorkflowCanvas({
           </div>
         </div>
 
-        <Flex vertical className="workflow-inspector inspector-panel">
-          <Flex className="panel-heading">
-            <Typography.Text>
+        <Flex vertical className="workflow-inspector" style={{ padding: 0 }}>
+          <Flex align="center" justify="space-between" style={{ padding: "12px 14px" }}>
+            <Typography.Text strong>
               {inspectorView === "history" ? "运行历史" : selectedNode ? "节点配置" : "运行预览"}
             </Typography.Text>
             {selectedNode && inspectorView === "current" ? (
