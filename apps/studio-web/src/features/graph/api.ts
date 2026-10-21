@@ -1,4 +1,5 @@
 import { studioFetch } from "../../lib/client.js";
+import type { MessageUsage } from "../../types.js";
 
 /** 图谱节点（与后端 GraphExport.GraphNode 对齐）。 */
 export interface GraphNode {
@@ -22,11 +23,16 @@ export interface GraphExport {
   stats: { entities: number; relations: number };
 }
 
+export interface DocumentGraph extends GraphExport {
+  nodes: EntityInfo[];
+}
+
 export interface EntityInfo extends GraphNode {
   props: Record<string, string>;
 }
 
 export interface GraphRetrieveResult {
+  usage?: MessageUsage;
   query: string;
   seeds: Array<{ id: string; name: string; type: string }>;
   formatted: string;
@@ -54,17 +60,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** 子图检索：种子定位 + 多跳扩展。 */
-export function retrieveGraph(query: string, maxHops = 2): Promise<GraphRetrieveResult> {
+export function retrieveGraph(
+  query: string,
+  maxHops = 2,
+  sources?: string[],
+): Promise<GraphRetrieveResult> {
   return request("/graph/retrieve", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ query, maxHops }),
+    body: JSON.stringify({ query, maxHops, ...(sources !== undefined ? { sources } : {}) }),
   });
 }
 
+export function documentGraph(source: string): Promise<DocumentGraph> {
+  return request(`/graph/documents/${encodeURIComponent(source)}`);
+}
+
 /** 单实体 2 跳邻居子图（点击节点动态展开）。 */
-export function neighborsOf(entityId: string, hops = 2): Promise<GraphExport> {
-  return request(`/graph/neighbors/${encodeURIComponent(entityId)}?hops=${hops}`);
+export function neighborsOf(entityId: string, hops = 2, source?: string): Promise<GraphExport> {
+  const params = new URLSearchParams({ hops: String(hops) });
+  if (source !== undefined) params.set("source", source);
+  return request(`/graph/neighbors/${encodeURIComponent(entityId)}?${params.toString()}`);
 }
 
 /** 实体列表（分页 + 类型 + 搜索）。 */
@@ -100,6 +116,7 @@ export interface GraphSourceState {
 
 /** 知识库与图谱库的一致性快照。 */
 export interface SyncStatus {
+  usage?: MessageUsage;
   inSync: boolean;
   missing: string[];
   stale: string[];
@@ -112,6 +129,7 @@ export interface SyncStatus {
 }
 
 export interface ReconcileResult {
+  usage?: MessageUsage;
   rebuilt: string[];
   removed: string[];
   failed: Array<{ source: string; error: string }>;

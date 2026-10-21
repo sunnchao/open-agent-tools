@@ -1,4 +1,6 @@
 import type { RemoteServiceConfig } from "@open-agent-tools/mcp-contracts";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
 /** 远程服务暴露的一条 Tool 定义（取自上游 tools/list）。 */
 export interface RemoteToolDefinition {
@@ -34,14 +36,15 @@ export interface RemoteMcpProxyOptions {
 }
 
 /**
- * 把第三方 MCP Server 接入统一网关：以 streamable-http JSON-RPC 透传
- * initialize / tools/list / tools/call。
+ * 把第三方 MCP Server 接入统一网关：
+ * - streamable-http：以 JSON-RPC 透传 initialize / tools/list / tools/call；
+ * - sse：经 SDK Client 建连（GET 事件流 + POST 消息），上游多为旧版 MCP Server。
  *
  * 鉴权与审计仍在 Gateway 完成（API Key 校验、Scope、audit 事件），
  * 本类只负责与上游建立会话的协议细节：
- * - 首次调用执行 initialize 并保存 Mcp-Session-Id，后续请求带上；
+ * - streamable-http：首次调用执行 initialize 并保存 Mcp-Session-Id，后续请求带上；
  * - 上游返回 SSE 或 JSON 均可解析；
- * - 超时由 AbortController 控制。
+ * - 超时由 AbortController/定时器控制。
  */
 export class RemoteMcpProxy {
   readonly #config: RemoteServiceConfig;
@@ -57,29 +60,32 @@ export class RemoteMcpProxy {
 
   /** 拉取上游 Tool 列表（自动完成 initialize）。 */
   async listTools(): Promise<RemoteToolDefinition[]> {
+    if (this.#config.transport === "sse") {
+      return this.#withSseClient(async (client) => {
+        const result = await client.listTools(undefined, { timeout: this.#config.timeoutMs });
+        return normalizeTools(result.tools ?? []);
+      });
+    }
     const result = (await this.#request("tools/list", {})) as {
       tools?: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown }>;
     };
     const tools = Array.isArray(result.tools) ? result.tools : [];
-    return tools
-      .filter((tool): tool is { name: string; description?: unknown; inputSchema?: unknown } =>
-        typeof tool?.name === "string" && tool.name.length > 0,
-      )
-      .map((tool) => ({
-        name: tool.name,
-        ...(typeof tool.description === "string" ? { description: tool.description } : {}),
-        inputSchema:
-          typeof tool.inputSchema === "object" && tool.inputSchema !== null
-            ? (tool.inputSchema as Record<string, unknown>)
-            : { type: "object" },
-      }));
+    return normalizeTools(tools);
   }
 
   /** 透传 tools/call 到上游。 */
-  async callTool(
-    name: string,
-    args: Record<string, unknown>,
-  ): Promise<RemoteToolResult> {
+  async callTool(name: string, args: Record<string, unknown>): Promise<RemoteToolResult> {
+    if (this.#config.transport === "sse") {
+      return this.#withSseClient(async (client) => {
+        const result = await client.callTool({ name, arguments: args }, undefined, {
+          timeout: this.#config.timeoutMs,
+        });
+        return {
+          content: (result as { content?: unknown }).content ?? null,
+          ...(result.isError === true ? { isError: true } : {}),
+        };
+      });
+    }
     const result = (await this.#request("tools/call", { name, arguments: args })) as {
       content?: unknown;
       isError?: unknown;
@@ -87,6 +93,63 @@ export class RemoteMcpProxy {
     return {
       content: result.content ?? null,
       ...(result.isError === true ? { isError: true } : {}),
+    };
+  }
+
+  /** SSE 上游：每次调用独立建连、用完即关（代理实例本来就是按网关请求创建的）。 */
+  async #withSseClient<T>(task: (client: Client) => Promise<T>): Promise<T> {
+    const headers: Record<string, string> = { ...this.#sseAuthHeaders() };
+    const innerFetch = this.#fetch;
+    // SSE 首个 GET 由 EventSource 发起（不支持自定义 header），用包装 fetch 注入鉴权头。
+    const authedFetch = (async (url: unknown, init?: Record<string, unknown>) => {
+      const merged = {
+        ...(init ?? {}),
+        headers: {
+          ...headers,
+          ...((init?.["headers"] as Record<string, string> | undefined) ?? {}),
+        },
+      };
+      return innerFetch(url as string, merged as RequestInit);
+    }) as unknown as typeof globalThis.fetch;
+    const client = new Client({ name: "open-agent-tools-gateway", version: "1.0.0" });
+    const transport = new SSEClientTransport(new URL(this.#config.url), {
+      fetch: authedFetch,
+      requestInit: { headers },
+    });
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      await Promise.race([
+        client.connect(transport),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new RemoteMcpError("Remote MCP request timed out")),
+            this.#config.timeoutMs,
+          );
+        }),
+      ]);
+      return await task(client);
+    } catch (error) {
+      if (error instanceof RemoteMcpError) throw error;
+      if (error instanceof Error && /timed out|timeout/i.test(error.message)) {
+        throw new RemoteMcpError("Remote MCP request timed out");
+      }
+      throw new RemoteMcpError(
+        error instanceof Error
+          ? `Remote MCP request failed: ${error.message}`
+          : "Remote MCP request failed",
+      );
+    } finally {
+      if (timeout !== null) clearTimeout(timeout);
+      await client.close().catch(() => undefined);
+    }
+  }
+
+  #sseAuthHeaders(): Record<string, string> {
+    return {
+      ...(this.#config.token === undefined
+        ? {}
+        : { authorization: `Bearer ${this.#config.token}` }),
+      ...(this.#config.headers ?? {}),
     };
   }
 
@@ -152,7 +215,9 @@ export class RemoteMcpProxy {
         throw new RemoteMcpError("Remote MCP request timed out");
       }
       throw new RemoteMcpError(
-        error instanceof Error ? `Remote MCP request failed: ${error.message}` : "Remote MCP request failed",
+        error instanceof Error
+          ? `Remote MCP request failed: ${error.message}`
+          : "Remote MCP request failed",
       );
     } finally {
       clearTimeout(timer);
@@ -171,10 +236,33 @@ export class RemoteMcpProxy {
   }
 }
 
+/** 上游 Tool 归一化：过滤非法条目、缺 inputSchema 时补默认空对象。 */
+function normalizeTools(
+  tools: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown }>,
+): RemoteToolDefinition[] {
+  return tools
+    .filter(
+      (tool): tool is { name: string; description?: unknown; inputSchema?: unknown } =>
+        typeof tool?.name === "string" && tool.name.length > 0,
+    )
+    .map((tool) => ({
+      name: tool.name,
+      ...(typeof tool.description === "string" ? { description: tool.description } : {}),
+      inputSchema:
+        typeof tool.inputSchema === "object" && tool.inputSchema !== null
+          ? (tool.inputSchema as Record<string, unknown>)
+          : { type: "object" },
+    }));
+}
+
 /** 解析上游响应：JSON 直返，或 SSE（data: 行）中的最后一个 JSON 负载。 */
 function parseBody(text: string, contentType: string | null): unknown {
   if (text.length === 0) return null;
-  if (contentType?.includes("text/event-stream") || text.startsWith("event:") || text.startsWith("data:")) {
+  if (
+    contentType?.includes("text/event-stream") ||
+    text.startsWith("event:") ||
+    text.startsWith("data:")
+  ) {
     const payloads = text
       .split("\n")
       .filter((line) => line.startsWith("data:"))

@@ -10,6 +10,7 @@ import {
   Form,
   Input,
   List,
+  Modal,
   Popconfirm,
   Select,
   Spin,
@@ -252,23 +253,19 @@ export function ReportsWorkspace() {
         title: "行数",
         dataIndex: "rowCount",
         key: "rowCount",
-        render: (value: number | null) => (value ?? "—"),
+        render: (value: number | null) => value ?? "—",
       },
       {
         title: "操作",
         key: "actions",
         render: (_: unknown, record: ReportRun) => (
-          <Button
-            type="link"
-            size="small"
-            onClick={() => setOpenRunId(openRunId === record.id ? null : record.id)}
-          >
-            {openRunId === record.id ? "收起" : "查看"}
+          <Button type="link" size="small" onClick={() => setOpenRunId(record.id)}>
+            查看详情
           </Button>
         ),
       },
     ],
-    [openRunId],
+    [],
   );
 
   const previewColumns: ColumnsType<Record<string, unknown>> = useMemo(() => {
@@ -291,7 +288,10 @@ export function ReportsWorkspace() {
       description="把问数变成周期报表,保存后按周期自动执行。"
       actions={
         <>
-          <Badge status={enabledCount > 0 ? "success" : "default"} text={`${enabledCount} 个启用`} />
+          <Badge
+            status={enabledCount > 0 ? "success" : "default"}
+            text={`${enabledCount} 个启用`}
+          />
           <Button
             icon={<ReloadOutlined />}
             disabled={loading}
@@ -309,7 +309,11 @@ export function ReportsWorkspace() {
       }
       extra={<StudioNotice notice={notice} />}
     >
-      <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}>
+      <Flex
+        gap={12}
+        align="flex-start"
+        style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}
+      >
         <Card
           size="small"
           title="报表清单"
@@ -358,7 +362,11 @@ export function ReportsWorkspace() {
           )}
         </Card>
 
-        <Flex vertical gap={12} style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+        <Flex
+          vertical
+          gap={12}
+          style={{ flex: 1, minWidth: 0, minHeight: 0, alignSelf: "stretch", overflowY: "auto" }}
+        >
           {draft ? (
             <Card
               size="small"
@@ -513,59 +521,89 @@ export function ReportsWorkspace() {
                 scroll={{ x: "max-content" }}
                 locale={{ emptyText: <Empty description="还没有运行记录" /> }}
               />
-              {openRun ? (
-                <Flex vertical gap={10} style={{ marginTop: 12 }}>
-                  {openRun.error ? <Alert type="error" showIcon message={openRun.error} /> : null}
-                  {openRun.sql ? (
-                    <Typography.Paragraph
-                      code
-                      copyable
-                      ellipsis={{ rows: 4, expandable: true }}
-                      style={{ margin: 0 }}
-                    >
-                      {openRun.sql}
-                    </Typography.Paragraph>
-                  ) : null}
-                  {openRun.checks.length > 0 ? (
-                    <Flex vertical gap={4}>
-                      {openRun.checks.map((check) => (
-                        <Alert
-                          key={`${check.code}-${check.message}`}
-                          type={check.level === "warning" ? "warning" : "info"}
-                          showIcon
-                          message={check.message}
-                        />
-                      ))}
-                    </Flex>
-                  ) : null}
-                  {openRun.columns.length > 0 ? (
-                    <>
-                      <Table<Record<string, unknown>>
-                        size="small"
-                        rowKey={(_, index) => String(index)}
-                        columns={previewColumns}
-                        dataSource={openRun.preview.map((row) => ({
-                          ...row,
-                          key: JSON.stringify(row),
-                        }))}
-                        pagination={{ pageSize: 10, showSizeChanger: false }}
-                        scroll={{ x: "max-content" }}
-                      />
-                      {openRun.truncated ? (
-                        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-                          结果已截断,仅保留前 {openRun.preview.length} 行快照
-                        </Typography.Paragraph>
-                      ) : null}
-                    </>
-                  ) : (
-                    <Empty description="本次运行没有返回数据" />
-                  )}
-                </Flex>
-              ) : null}
             </Card>
           ) : null}
         </Flex>
       </Flex>
+      <Modal
+        centered
+        width={960}
+        title={
+          openRun ? (
+            <Flex gap={8} align="center" wrap>
+              <span>运行详情</span>
+              <Tag color={runTagColor(openRun.status)}>{REPORT_STATUS_LABELS[openRun.status]}</Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+                {formatDateTime(openRun.startedAt)} · {formatDuration(openRun.durationMs)} ·{" "}
+                {openRun.rowCount ?? 0} 行
+              </Typography.Text>
+            </Flex>
+          ) : (
+            "运行详情"
+          )
+        }
+        open={openRun !== null}
+        onCancel={() => setOpenRunId(null)}
+        footer={
+          <Button type="primary" onClick={() => setOpenRunId(null)}>
+            关闭
+          </Button>
+        }
+        destroyOnHidden
+        styles={{
+          body: {
+            maxHeight: "min(70vh, 720px)",
+            overflow: "auto",
+            overscrollBehavior: "contain",
+          },
+        }}
+      >
+        {openRun ? (
+          <Flex vertical gap={10}>
+            {openRun.error ? <Alert type="error" showIcon message={openRun.error} /> : null}
+            {openRun.sql ? (
+              <Typography.Paragraph code copyable style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+                {openRun.sql}
+              </Typography.Paragraph>
+            ) : null}
+            {openRun.checks.length > 0 ? (
+              <Flex vertical gap={4}>
+                {openRun.checks.map((check) => (
+                  <Alert
+                    key={`${check.code}-${check.message}`}
+                    type={check.level === "warning" ? "warning" : "info"}
+                    showIcon
+                    message={check.message}
+                  />
+                ))}
+              </Flex>
+            ) : null}
+            {openRun.columns.length > 0 ? (
+              <>
+                <Table<Record<string, unknown>>
+                  size="small"
+                  rowKey={(_, index) => String(index)}
+                  columns={previewColumns}
+                  dataSource={openRun.preview.map((row, index) => ({
+                    ...row,
+                    key: `${index}:${JSON.stringify(row)}`,
+                  }))}
+                  pagination={
+                    openRun.preview.length > 10 ? { pageSize: 10, showSizeChanger: false } : false
+                  }
+                />
+                {openRun.truncated ? (
+                  <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+                    结果已截断,仅保留前 {openRun.preview.length} 行快照
+                  </Typography.Paragraph>
+                ) : null}
+              </>
+            ) : (
+              <Empty description="本次运行没有返回数据" />
+            )}
+          </Flex>
+        ) : null}
+      </Modal>
     </StudioPage>
   );
 }

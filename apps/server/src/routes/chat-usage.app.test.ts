@@ -88,6 +88,8 @@ describe("chat usage metering", () => {
 
     const summary = summarizeUsage(Date.now() - 60_000, Date.now() + 60_000);
     assert.equal(summary.totals.chatTurns, 1);
+    assert.equal(summary.totals.requests, 1);
+    assert.equal(summary.bySource[0]?.source, "web_chat");
     assert.equal(summary.totals.inputTokens, 100);
     assert.equal(summary.totals.outputTokens, 20);
     assert.equal(summary.byModel[0]?.model, "gpt-4o-mini");

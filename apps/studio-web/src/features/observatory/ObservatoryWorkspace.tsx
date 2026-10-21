@@ -61,6 +61,7 @@ import {
 } from "./api.js";
 import { appendTurn, assistantSummary, carriedUserTurns } from "./followUp.js";
 import { QueryExecution, formatDuration } from "./QueryExecution.js";
+import { UsageTag } from "../../components/UsageTag.js";
 import { QueryAuditView } from "./QueryAuditView.js";
 import { RelationEdge } from "../graph/RelationEdge.js";
 import {
@@ -986,7 +987,7 @@ export function ObservatoryWorkspace() {
                       </Typography.Paragraph>
                     </Flex>
                   ) : null}
-                  <Card size="small" type="inner" title="Result">
+                  <Card size="small" type="inner" title="Result" extra={<UsageTag usage={result?.usage} />}>
                     {result?.error ? <Alert showIcon type="error" message={result.error} style={{ marginBottom: 8 }} /> : null}
                     {result?.clarifying ? <Typography.Paragraph>{result.clarifying}</Typography.Paragraph> : null}
                     {result?.truncated ? (

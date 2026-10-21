@@ -57,6 +57,9 @@ test -e apps/mcp-worker/.env || cp apps/mcp-worker/.env.example apps/mcp-worker/
 | `AWS_ACCESS_KEY_ID`     | 视环境而定 | S3 凭据                                        |
 | `AWS_SECRET_ACCESS_KEY` | 视环境而定 | S3 凭据                                        |
 | `PORT`                  | 否         | HTTP 端口，默认 `4200`                         |
+| `MCP_CORS_ORIGIN`       | 否         | 允许跨域访问管理 API 的浏览器 Origin，默认关闭 |
+
+Studio Web 使用独立静态站点时，将该站点 Origin（例如 `http://127.0.0.1:8088`）写入 `MCP_CORS_ORIGIN`。CORS 在 JSON 解析和鉴权之前处理，因此预检请求不会被 401 拦截；留空时保持默认关闭，不发送任何跨域响应头。
 
 ## 数据库迁移
 
@@ -194,6 +197,21 @@ POST /services/:serviceId/versions/:versionId/publish
 POST /services/:serviceId/versions/:versionId/rollback
 ```
 
+### 远端 MCP 服务（REMOTE_MCP）
+
+```text
+POST /services                                              # type=REMOTE_MCP，创建即发布
+PUT  /services/:serviceId/versions/:versionId/remote-config # 更新上游配置（DRAFT/FAILED/READY）
+POST /services/:serviceId/versions/:versionId/test-connection
+POST /remote/test-connection                               # 新建前测试：完整配置，不落库
+```
+
+创建时 `remote` 为完整上游配置（`transport`=`streamable-http`/`sse`、`url`、`headers`、`token`、`timeoutMs`）。
+版本返回的 `remoteConfig` 为脱敏视图（`token` 仅保留 `hasToken`）；更新时 `token` 传 `null`/省略=保留原文，
+空字符串=清除。版本维度的测试接口不传 `remote` 时用已保存配置（含已有 token）探测。
+探测失败返回 `502 UPSTREAM_ERROR`。远端版本的本地 Prompts 仍由 Gateway 直接渲染，
+即网关同时代理上游 Tools、保留本地 Prompts。
+
 ### Client 访问
 
 ```text
@@ -253,7 +271,7 @@ TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcp_test \
 ## 当前限制
 
 - 管理 API 当前没有身份认证或用户隔离，只适用于本机开发或受信网络。
-- 创建接口尚未支持 `REMOTE_MCP`。
+- 远端上游仅支持 http(s) 地址且不做内网/元数据地址拦截，生产部署应把 Worker/Gateway 放在受限网络。
 - 完整的“从已发布版本自动分叉新草稿”流程仍需补全。
 - 尚未提供 Execution 查询 API；Build 和 Audit 查询当前最多返回 200 条记录。
 - 审计导出、归档、保留策略和分布式 Gateway Cache Invalidation 仍需接入生产基础设施。

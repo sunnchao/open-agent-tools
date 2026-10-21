@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Input, Spin } from "antd";
+import { Button, Input, Spin, Typography } from "antd";
 import { PauseCircleOutlined, SendOutlined } from "../../lib/icons.js";
 import { MarkdownView } from "../../components/MarkdownView.js";
+import { UsageTag } from "../../components/UsageTag.js";
 import type { Message, ToolCall } from "../../types.js";
 import { newId } from "../../lib/ids.js";
 import { fetchAppProfile, streamAppChat, type AppChatProfile } from "./api.js";
@@ -110,6 +111,7 @@ export function EmployeeApp({ slug }: EmployeeAppProps) {
                   : message,
               ),
             ),
+          onUsage: (usage) => patch({ usage }),
           onDone: () => {
             patch({ status: "complete" });
             setStreaming(false);
@@ -199,6 +201,14 @@ export function EmployeeApp({ slug }: EmployeeAppProps) {
                       ) : null}
                       {message.status === "stopped" ? (
                         <p className="employee-app__stopped">已停止生成</p>
+                      ) : null}
+                      {message.usage ? (
+                        <Typography.Text
+                          type="secondary"
+                          style={{ display: "block", marginTop: 8, fontSize: 12 }}
+                        >
+                          <UsageTag usage={message.usage} />
+                        </Typography.Text>
                       ) : null}
                     </>
                   ) : (

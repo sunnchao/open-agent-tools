@@ -1,4 +1,5 @@
 import { studioFetch } from "../../lib/client.js";
+import type { MessageUsage } from "../../types.js";
 export interface GraphNode {
   id: string;
   name: string;
@@ -48,6 +49,7 @@ export interface HistoryTurn {
 }
 
 export interface ObservatoryQueryResult {
+  usage?: MessageUsage;
   auditId?: string;
   steps?: QueryStep[];
   sourceId: string;
@@ -149,6 +151,7 @@ export interface QueryAuditSummary {
 }
 
 export interface QueryAuditRecord extends QueryAuditSummary {
+  usage?: MessageUsage;
   history: HistoryTurn[];
   steps: QueryStep[];
   selectedTables: string[];

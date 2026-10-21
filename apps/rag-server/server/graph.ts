@@ -40,7 +40,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
   router.post("/extract", async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { source?: unknown };
     try {
-      const sources = body.source ? [decodeSource(body.source)] : rag.listSources();
+      const sources = body.source ? [decodeSource(body.source)] : await rag.listSources();
       if (sources.length === 0) {
         res
           .status(200)
@@ -61,8 +61,8 @@ export function graphRouter(opts: GraphRouterDeps): Router {
   });
 
   /** 知识库与图谱库一致性快照（缺失 / 过期 / 孤儿 / 构建中）。 */
-  router.get("/sync-status", (_req: Request, res: Response) => {
-    res.json(lifecycle.status());
+  router.get("/sync-status", async (_req: Request, res: Response) => {
+    res.json(await lifecycle.status());
   });
 
   /** 各来源的建图状态明细。 */
@@ -74,7 +74,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
   router.post("/reconcile", async (_req: Request, res: Response) => {
     try {
       const result = await lifecycle.reconcile();
-      res.json({ ...result, status: lifecycle.status() });
+      res.json({ ...result, status: await lifecycle.status() });
     } catch (e) {
       res.status(500).json({ error: String(e) });
     }
@@ -104,12 +104,34 @@ export function graphRouter(opts: GraphRouterDeps): Router {
     res.json({ entities, stats: graph.getStats() });
   });
 
+  router.get("/documents/:source", async (req: Request, res: Response) => {
+    const source = req.params.source;
+    if (typeof source !== "string" || !source.trim()) {
+      res.status(400).json({ error: "source is required" });
+      return;
+    }
+    const documents = await rag.listDocuments();
+    if (!documents.some((document) => document.source === source)) {
+      res.status(404).json({ error: "document not found" });
+      return;
+    }
+    const subgraph = graph.store.graphForSource(source);
+    res.json({ ...visualizer.exportSubgraph(subgraph), nodes: subgraph.entities });
+  });
+
   /** 单实体 1-2 跳邻居子图（面板展开）。 */
   router.get("/neighbors/:id", (req: Request, res: Response) => {
     const raw = req.params.id;
     const id = Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? "");
     const hops = clampInt(req.query.hops, 2, 1, 3);
-    const sub = graph.neighbors(id, hops);
+    const source = req.query.source;
+    if (source !== undefined && (typeof source !== "string" || !source.trim())) {
+      res.status(400).json({ error: "source must be a non-empty string" });
+      return;
+    }
+    const sub = graph.store.neighbors(id, hops, {
+      ...(typeof source === "string" ? { sources: [source] } : {}),
+    });
     res.json(visualizer.exportSubgraph(sub));
   });
 
@@ -143,7 +165,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
       return;
     }
     try {
-      const scopedSources = rag.resolveVisibleSources(sources, viewerGroups);
+      const scopedSources = await rag.resolveVisibleSources(sources, viewerGroups);
       const result = await graph.retrieve(query, {
         maxHops: clampInt(body.maxHops, 2, 1, 4),
         maxNodes: clampInt(body.maxNodes, 64, 4, 512),

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { beforeEach, describe, it } from "node:test";
 
 import {
@@ -961,7 +964,10 @@ describe("MCP management service", () => {
   it("rejects non-admin actors and invalid remote configuration", async () => {
     const validRemote = { transport: "streamable-http", url: "https://x.example.com/mcp" };
     await assert.rejects(
-      management.createRemoteService({ name: "Remote", slug: "remote", remote: validRemote }, operator),
+      management.createRemoteService(
+        { name: "Remote", slug: "remote", remote: validRemote },
+        operator,
+      ),
       (error: unknown) => error instanceof ManagementError && error.code === "FORBIDDEN",
     );
 
@@ -984,4 +990,211 @@ describe("MCP management service", () => {
       (error: unknown) => error instanceof ManagementError && error.code === "VALIDATION_ERROR",
     );
   });
+
+  it("updates a REMOTE_MCP draft version config with token keep/clear semantics", async () => {
+    const { service, draftVersion } = await management.createRemoteService(
+      {
+        name: "Upstream",
+        slug: "upstream",
+        remote: { transport: "streamable-http", url: "https://mcp.example.com/mcp", token: "old" },
+      },
+      admin,
+    );
+    const forked = await management.forkDraftVersion(service.id, draftVersion.id, admin);
+
+    // 空补丁保留原文。
+    const kept = await management.updateRemoteConfig(forked.id, {}, forked.revision, admin);
+    assert.equal(kept.remoteConfig?.url, "https://mcp.example.com/mcp");
+    assert.equal(kept.remoteConfig?.token, "old");
+
+    // token: null=保留，空字符串=清除，非空=覆盖。
+    const cleared = await management.updateRemoteConfig(
+      kept.id,
+      { token: "" },
+      kept.revision,
+      admin,
+    );
+    assert.equal(cleared.remoteConfig?.token, undefined);
+    const overwritten = await management.updateRemoteConfig(
+      cleared.id,
+      { token: "new", timeoutMs: 5_000 },
+      cleared.revision,
+      admin,
+    );
+    assert.equal(overwritten.remoteConfig?.token, "new");
+    assert.equal(overwritten.remoteConfig?.timeoutMs, 5_000);
+
+    // 已发布版本不可直接改；MANAGED 版本没有远端配置。
+    await assert.rejects(
+      management.updateRemoteConfig(draftVersion.id, { timeoutMs: 1_000 }, 999, admin),
+      (error: unknown) =>
+        error instanceof ManagementError &&
+        (error.code === "IMMUTABLE_VERSION" || error.code === "CONFLICT"),
+    );
+    const { draftVersion: managed } = await management.createManagedService(
+      { name: "Managed", slug: "managed" },
+      admin,
+    );
+    await assert.rejects(
+      management.updateRemoteConfig(managed.id, { timeoutMs: 1_000 }, managed.revision, admin),
+      (error: unknown) => error instanceof ManagementError && error.code === "INVALID_STATE",
+    );
+  });
+
+  it("validates a forked REMOTE_MCP draft without requiring a package build", async () => {
+    const { service, draftVersion } = await management.createRemoteService(
+      {
+        name: "Upstream",
+        slug: "upstream-validate",
+        remote: { transport: "sse", url: "https://mcp.example.com/sse" },
+      },
+      admin,
+    );
+    const forked = await management.forkDraftVersion(service.id, draftVersion.id, admin);
+    const ready = await management.validateVersion(forked.id, forked.revision, admin);
+    assert.equal(ready.status, "READY");
+  });
+
+  it("probes a streamable-http upstream with injected fetch", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const stubFetch = (async (url: unknown, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      const body = JSON.parse(String(init?.body)) as { method?: string; id?: unknown };
+      if (body.method === "notifications/initialized") {
+        return new Response(null, { status: 202, headers: { "content-type": "application/json" } });
+      }
+      const result =
+        body.method === "initialize"
+          ? { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: {} }
+          : {
+              tools: [
+                { name: "search", description: "Search the web", inputSchema: { type: "object" } },
+                { description: "missing name" },
+              ],
+            };
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }), {
+        status: 200,
+        headers: { "content-type": "application/json", "mcp-session-id": "probe-1" },
+      });
+    }) as unknown as typeof fetch;
+    const probing = new McpManagementService(repository, {
+      createId: sequentialIds(),
+      now: () => "2026-07-31T12:00:00.000Z",
+      fetchRemote: stubFetch,
+    });
+    const result = await probing.testRemoteConnection(
+      {
+        transport: "streamable-http",
+        url: "https://mcp.example.com/mcp",
+        token: "probe-token",
+        timeoutMs: 5_000,
+      },
+      operator,
+    );
+    assert.equal(result.toolCount, 1);
+    assert.deepEqual(result.tools, [{ name: "search", description: "Search the web" }]);
+    assert.ok(result.latencyMs >= 0);
+    const methods = calls.map(
+      (call) => (JSON.parse(String(call.init.body)) as { method: string }).method,
+    );
+    assert.deepEqual(methods, ["initialize", "notifications/initialized", "tools/list"]);
+    assert.equal(
+      (calls[0]?.init.headers as Record<string, string>).authorization,
+      "Bearer probe-token",
+    );
+
+    await assert.rejects(
+      probing.testRemoteConnection(
+        { transport: "streamable-http", url: "https://mcp.example.com/mcp" },
+        auditor,
+      ),
+      (error: unknown) => error instanceof ManagementError && error.code === "FORBIDDEN",
+    );
+  });
+
+  it("probes an SSE upstream over a real local stream", async () => {
+    const sse = await startProbeSseStub();
+    try {
+      const probing = new McpManagementService(repository, {
+        createId: sequentialIds(),
+        now: () => "2026-07-31T12:00:00.000Z",
+      });
+      const result = await probing.testRemoteConnection(
+        { transport: "sse", url: `${sse.url}/sse`, timeoutMs: 5_000 },
+        operator,
+      );
+      assert.equal(result.toolCount, 1);
+      assert.deepEqual(result.tools, [{ name: "probe_tool" }]);
+    } finally {
+      await sse.close();
+    }
+  });
+
+  it("maps unreachable upstreams to UPSTREAM_ERROR", async () => {
+    const failing = (async () => {
+      throw new Error("connection refused");
+    }) as unknown as typeof fetch;
+    const probing = new McpManagementService(repository, {
+      createId: sequentialIds(),
+      now: () => "2026-07-31T12:00:00.000Z",
+      fetchRemote: failing,
+    });
+    await assert.rejects(
+      probing.testRemoteConnection(
+        { transport: "streamable-http", url: "https://mcp.example.com/mcp" },
+        operator,
+      ),
+      (error: unknown) => error instanceof ManagementError && error.code === "UPSTREAM_ERROR",
+    );
+  });
 });
+
+/** 探测测试用的最小 SSE 上游：GET 建流 / POST 收发 JSON-RPC。 */
+function startProbeSseStub(): Promise<{ url: string; close: () => Promise<void> }> {
+  return new Promise((resolve) => {
+    let stream: ServerResponse | null = null;
+    const server = createServer((request, response) => {
+      if (request.method === "GET" && (request.url ?? "").startsWith("/sse")) {
+        response.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        response.write("event: endpoint\ndata: /message?sessionId=probe-sse\n\n");
+        stream = response;
+        return;
+      }
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+          method?: string;
+          id?: unknown;
+        };
+        const reply = (result: unknown): void => {
+          stream?.write(
+            `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: body.id, result })}\n\n`,
+          );
+        };
+        if (body.method === "initialize") {
+          reply({
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            serverInfo: { name: "probe", version: "1.0.0" },
+          });
+        } else if (body.method === "tools/list") {
+          reply({ tools: [{ name: "probe_tool", inputSchema: { type: "object" } }] });
+        }
+        response.writeHead(202);
+        response.end();
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({
+        url: `http://127.0.0.1:${port}`,
+        close: () => new Promise((done) => server.close(() => done())),
+      });
+    });
+  });
+}

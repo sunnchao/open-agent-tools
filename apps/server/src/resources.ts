@@ -150,6 +150,7 @@ async function gatewayServices(): Promise<GatewayServiceSummary[]> {
   if (!gatewayApiKey) return [];
   const response = await fetch(`${gatewayUrl}/mcp/services`, {
     headers: { authorization: `Bearer ${gatewayApiKey}` },
+    signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error(`Gateway resource request failed (${response.status})`);
   return ((await response.json()) as { services: GatewayServiceSummary[] }).services;
@@ -212,6 +213,7 @@ async function listRagSources(): Promise<RagSourceResource[]> {
   const config = resourceConfig();
   const response = await fetch(`${config.ragApiUrl}/documents`, {
     headers: ragHeaders(config, "admin"),
+    signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error(`RAG resource request failed (${response.status})`);
   return ((await response.json()) as { sources: RagSourceResource[] }).sources;
@@ -313,7 +315,12 @@ export async function retrieveRag(input: {
   topK: number;
   viewerGroups?: string[];
   signal?: AbortSignal;
-}): Promise<{ chunks: Array<Record<string, unknown>>; formatted: string }> {
+}): Promise<{
+  queryId?: string;
+  chunks: Array<Record<string, unknown>>;
+  formatted: string;
+  retrieval?: unknown;
+}> {
   if (input.sources.length === 0) return { chunks: [], formatted: "" };
   const config = resourceConfig();
   const { signal, ...payload } = input;
@@ -325,15 +332,19 @@ export async function retrieveRag(input: {
   });
   if (!response.ok) throw new Error(`RAG retrieval failed (${response.status})`);
   const body = (await response.json()) as {
+    queryId?: string;
+    retrieval?: unknown;
     chunks: Array<
       { source: string; chunkIndex: number; content: string } & Record<string, unknown>
     >;
   };
   return {
+    ...(body.queryId ? { queryId: body.queryId } : {}),
     chunks: body.chunks,
     formatted: body.chunks
       .map((chunk) => `【来源: ${chunk.source} · 第${chunk.chunkIndex + 1}段】\n${chunk.content}`)
       .join("\n\n"),
+    ...(body.retrieval !== undefined ? { retrieval: body.retrieval } : {}),
   };
 }
 

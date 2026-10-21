@@ -4,16 +4,22 @@ import {
   ManagedMcpManifestSchema,
   ManagedToolSchema,
   PromptDefinitionSchema,
+  RemoteServiceConfigPatchSchema,
   RemoteServiceConfigSchema,
   ToolEnvironmentSchema,
   ToolEnvironmentUpdateSchema,
+  maskRemoteConfig,
+  mergeRemoteConfig,
   renderPrompt,
   type ManagedMcpManifest,
   type ManagedTool,
   type PromptDefinition,
   type RemoteServiceConfig,
+  type RemoteServiceConfigPublic,
   type RenderedPrompt,
 } from "@open-agent-tools/mcp-contracts";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { z } from "zod";
 import {
   RepositoryConflictError,
@@ -41,6 +47,7 @@ export type ManagementErrorCode =
   | "IMMUTABLE_VERSION"
   | "INVALID_STATE"
   | "NOT_FOUND"
+  | "UPSTREAM_ERROR"
   | "VALIDATION_ERROR";
 
 export class ManagementError extends Error {
@@ -95,6 +102,8 @@ const DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 export interface McpManagementServiceOptions {
   createId?: IdGenerator;
   now?: () => string;
+  /** 远端连通性探测的 fetch 实现；缺省用全局 fetch，便于测试注入。 */
+  fetchRemote?: typeof fetch;
 }
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -168,11 +177,13 @@ export class McpManagementService {
   readonly #repository: McpManagementRepository;
   readonly #createId: IdGenerator;
   readonly #now: () => string;
+  readonly #fetchRemote: typeof fetch;
 
   constructor(repository: McpManagementRepository, options: McpManagementServiceOptions = {}) {
     this.#repository = repository;
     this.#createId = options.createId ?? randomUUID;
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#fetchRemote = options.fetchRemote ?? fetch;
   }
 
   async createManagedService(
@@ -469,11 +480,47 @@ export class McpManagementService {
     if (!["DRAFT", "FAILED", "READY"].includes(version.status)) {
       throw new ManagementError("INVALID_STATE", "Wait for package inspection or build to finish");
     }
-    if (version.tools.length === 0) {
+    if (version.remoteConfig === null && version.tools.length === 0) {
       throw new ManagementError("INVALID_STATE", "Execution limits require a Tool version");
     }
     const limits = parse(ExecutionLimitsSchema, input);
     return this.#saveVersion({ ...version, limits }, expectedRevision);
+  }
+
+  /**
+   * 更新 REMOTE_MCP 版本的上游接入配置（token 传 null/省略=保留，空字符串=清除）。
+   * 仅 DRAFT/FAILED/READY 可改；PUBLISHED/SUPERSEDED 需 fork 新草稿。
+   */
+  async updateRemoteConfig(
+    versionId: string,
+    input: unknown,
+    expectedRevision: number,
+    actor: Actor,
+  ): Promise<McpServiceVersionRecord> {
+    requireEditor(actor);
+    const version = await this.getVersion(versionId, actor);
+    const service = await this.getService(version.serviceId, actor);
+    if (service.type !== "REMOTE_MCP") {
+      throw new ManagementError(
+        "INVALID_STATE",
+        "Only REMOTE_MCP versions have a remote configuration",
+      );
+    }
+    if (version.status === "PUBLISHED" || version.status === "SUPERSEDED") {
+      throw new ManagementError(
+        "IMMUTABLE_VERSION",
+        `Version ${version.id} is immutable in status ${version.status}`,
+      );
+    }
+    if (!["DRAFT", "FAILED", "READY"].includes(version.status)) {
+      throw new ManagementError("INVALID_STATE", "Wait for the version to become editable");
+    }
+    if (!version.remoteConfig) {
+      throw new ManagementError("INVALID_STATE", "Remote version has no upstream configuration");
+    }
+    const patch = parse(RemoteServiceConfigPatchSchema, input);
+    const remoteConfig = mergeRemoteConfig(version.remoteConfig, patch);
+    return this.#saveVersion({ ...version, remoteConfig }, expectedRevision);
   }
 
   async addTool(
@@ -892,6 +939,16 @@ export class McpManagementService {
     const version = await this.getVersion(versionId, actor);
     requireDraft(version);
 
+    const service = await this.getService(version.serviceId, actor);
+    if (service.type === "REMOTE_MCP") {
+      // 远端版本无需构建：校验上游配置合法即就绪；上游 Tool 在网关运行时发现。
+      if (!version.remoteConfig) {
+        throw new ManagementError("INVALID_STATE", "Remote version has no upstream configuration");
+      }
+      parse(RemoteServiceConfigSchema, version.remoteConfig);
+      return this.#saveVersion({ ...version, status: "READY" }, expectedRevision);
+    }
+
     if (version.tools.length > 0 && version.imageDigest === null) {
       throw new ManagementError(
         "INVALID_STATE",
@@ -902,6 +959,38 @@ export class McpManagementService {
     parse(ManagedMcpManifestSchema, manifestFromVersion(version));
 
     return this.#saveVersion({ ...version, status: "READY" }, expectedRevision);
+  }
+
+  /**
+   * 探测远端 MCP 上游连通性：完成 initialize 握手后拉取 tools/list。
+   * 入参为完整远端配置（新建时用表单值，已有版本用保存值），只读不落库。
+   */
+  async testRemoteConnection(input: unknown, actor: Actor): Promise<RemoteProbeResult> {
+    requireEditor(actor);
+    const config = parse(RemoteServiceConfigSchema, input);
+    const startedAt = Date.now();
+    try {
+      const tools =
+        config.transport === "sse"
+          ? await probeRemoteToolsOverSse(config, this.#fetchRemote)
+          : await probeRemoteToolsOverStreamableHttp(config, this.#fetchRemote);
+      return {
+        transport: config.transport,
+        url: config.url,
+        timeoutMs: config.timeoutMs,
+        latencyMs: Date.now() - startedAt,
+        toolCount: tools.length,
+        tools: tools.slice(0, 200),
+      };
+    } catch (error) {
+      if (error instanceof ManagementError) throw error;
+      throw new ManagementError(
+        "UPSTREAM_ERROR",
+        error instanceof Error
+          ? `Remote MCP unreachable: ${error.message}`
+          : "Remote MCP unreachable",
+      );
+    }
   }
 
   async publishVersion(
@@ -982,4 +1071,182 @@ function manifestFromVersion(version: McpServiceVersionRecord): ManagedMcpManife
     tools: version.tools.map(withoutId),
     prompts: version.prompts.map(withoutId),
   } as ManagedMcpManifest;
+}
+
+/** 版本对外视图：远端 token 脱敏，仅保留 hasToken（网关经独立 Repository 读原文，不受影响）。 */
+export function maskVersionRemoteConfig(version: McpServiceVersionRecord): Omit<
+  McpServiceVersionRecord,
+  "remoteConfig"
+> & {
+  remoteConfig: RemoteServiceConfigPublic | null;
+} {
+  return {
+    ...version,
+    remoteConfig: version.remoteConfig === null ? null : maskRemoteConfig(version.remoteConfig),
+  };
+}
+
+export interface RemoteProbeTool {
+  name: string;
+  description?: string;
+}
+
+export interface RemoteProbeResult {
+  transport: RemoteServiceConfig["transport"];
+  url: string;
+  timeoutMs: number;
+  latencyMs: number;
+  toolCount: number;
+  tools: RemoteProbeTool[];
+}
+
+function remoteHeaders(config: RemoteServiceConfig): Record<string, string> {
+  return {
+    ...(config.token === undefined ? {} : { authorization: `Bearer ${config.token}` }),
+    ...(config.headers ?? {}),
+  };
+}
+
+/** streamable-http 探测：与网关 RemoteMcpProxy 同协议（initialize → tools/list，兼容 SSE 包裝）。 */
+async function probeRemoteToolsOverStreamableHttp(
+  config: RemoteServiceConfig,
+  fetchImpl: typeof fetch,
+): Promise<RemoteProbeTool[]> {
+  let nextId = 1;
+  let sessionId: string | null = null;
+  const post = async (payload: Record<string, unknown>): Promise<unknown> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+    try {
+      const response = await fetchImpl(config.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          ...remoteHeaders(config),
+          ...(sessionId === null ? {} : { "mcp-session-id": sessionId }),
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      const sid = response.headers.get("mcp-session-id");
+      if (sid) sessionId = sid;
+      const text = await response.text();
+      if (!response.ok) throw new Error(`upstream responded with status ${response.status}`);
+      const body = parseJsonRpcBody(text, response.headers.get("content-type"));
+      const envelope = body as { error?: { message?: string }; result?: unknown };
+      if (envelope !== null && typeof envelope === "object" && envelope.error) {
+        throw new Error(envelope.error.message ?? "upstream returned an error");
+      }
+      return envelope && typeof envelope === "object" ? (envelope.result ?? null) : null;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error("request timed out");
+      }
+      throw error instanceof Error ? error : new Error("request failed");
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const initialized = (await post({
+    jsonrpc: "2.0",
+    id: nextId++,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "open-agent-tools-control-plane", version: "1.0.0" },
+    },
+  })) as Record<string, unknown> | null;
+  if (initialized === null || typeof initialized !== "object") {
+    throw new Error("initialize returned no result");
+  }
+  await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }).catch(
+    () => undefined,
+  );
+  const result = (await post({
+    jsonrpc: "2.0",
+    id: nextId++,
+    method: "tools/list",
+    params: {},
+  })) as {
+    tools?: Array<{ name?: unknown; description?: unknown }>;
+  };
+  const tools = Array.isArray(result.tools) ? result.tools : [];
+  return tools
+    .filter(
+      (tool): tool is { name: string; description?: unknown } =>
+        typeof tool?.name === "string" && tool.name.length > 0,
+    )
+    .map((tool) => ({
+      name: tool.name,
+      ...(typeof tool.description === "string" ? { description: tool.description } : {}),
+    }));
+}
+
+function parseJsonRpcBody(text: string, contentType: string | null): unknown {
+  if (text.length === 0) return null;
+  if (
+    contentType?.includes("text/event-stream") ||
+    text.startsWith("event:") ||
+    text.startsWith("data:")
+  ) {
+    const payloads = text
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice("data:".length).trim())
+      .filter((line) => line.length > 0);
+    if (payloads.length === 0) return null;
+    return JSON.parse(payloads[payloads.length - 1]!);
+  }
+  return JSON.parse(text);
+}
+
+/** SSE 探测：经 SDK Client 建连并拉取 tools/list，与网关 SSE 路径同一协议。 */
+async function probeRemoteToolsOverSse(
+  config: RemoteServiceConfig,
+  fetchImpl: typeof fetch,
+): Promise<RemoteProbeTool[]> {
+  const headers = remoteHeaders(config);
+  const client = new Client({ name: "open-agent-tools-control-plane", version: "1.0.0" });
+  // SSE 首个 GET 由 EventSource 发起（不支持自定义 header），用包装 fetch 为所有请求注入鉴权头。
+  const authedFetch = (async (url: unknown, init?: Record<string, unknown>) => {
+    const merged = {
+      ...(init ?? {}),
+      headers: {
+        ...headers,
+        ...((init?.["headers"] as Record<string, string> | undefined) ?? {}),
+      },
+    };
+    return fetchImpl(url as string, merged as RequestInit);
+  }) as unknown as typeof globalThis.fetch;
+  const transport = new SSEClientTransport(new URL(config.url), {
+    fetch: authedFetch,
+    requestInit: { headers },
+  });
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      client.connect(transport),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("request timed out")), config.timeoutMs);
+      }),
+    ]);
+    const result = await client.listTools(undefined, { timeout: config.timeoutMs });
+    return (result.tools ?? [])
+      .filter((tool) => typeof tool?.name === "string" && tool.name.length > 0)
+      .map((tool) => ({
+        name: tool.name,
+        ...(typeof tool.description === "string" ? { description: tool.description } : {}),
+      }));
+  } catch (error) {
+    if (error instanceof Error && /timed out|timeout/i.test(error.message)) {
+      throw new Error("request timed out");
+    }
+    throw error instanceof Error ? error : new Error("request failed");
+  } finally {
+    if (timeout !== null) clearTimeout(timeout);
+    await client.close().catch(() => undefined);
+  }
 }

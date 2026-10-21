@@ -95,7 +95,7 @@ before(async () => {
   mock.method(OpenAIChatClient.prototype, "complete", async () => {
     await generationGate;
     if (generationError) throw new Error(generationError);
-    return { content: JSON.stringify(generated) };
+    return { content: JSON.stringify(generated), tokenUsage: { inputTokens: 45, outputTokens: 10 } };
   });
   server = createApp().listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -193,6 +193,9 @@ describe("observatory execution and audit API", () => {
     const final = events.at(-1);
     assert.equal(final?.type, "result");
     const result = final!.result as ObservatoryQueryResult;
+    assert.deepEqual(result.usage, {
+      requests: 1, inputTokens: 45, outputTokens: 10, totalTokens: 55, toolCalls: 0, toolErrors: 0,
+    });
     assert.equal(result.rows?.length, 1);
     assert.equal(result.rows?.[0]?.api_key, "private-result-key");
     assert.deepEqual(
@@ -209,6 +212,7 @@ describe("observatory execution and audit API", () => {
       result.steps.flatMap((step) => [`${step.id}:running`, `${step.id}:succeeded`]),
     );
     const record = getQueryAudit(result.auditId)!;
+    assert.deepEqual(record.usage, result.usage);
     assert.equal(record.status, "succeeded");
     assert.equal(record.rowCount, 1);
     assert.equal(record.sourceName, "审计测试库");
@@ -283,6 +287,9 @@ describe("observatory execution and audit API", () => {
     assert.equal(result.steps.find((step) => step.id === "generation")?.status, "failed");
     assert.match(result.error ?? "", /\[REDACTED\]/);
     const record = getQueryAudit(result.auditId)!;
+    assert.equal(result.usage.requests, 1);
+    assert.equal(result.usage.totalTokens, 0);
+    assert.deepEqual(record.usage, result.usage);
     assert.equal(JSON.stringify(record).includes("provider-secret"), false);
     assert.equal(JSON.stringify(record).includes("database-secret"), false);
     assert.equal(executionCount, 0);
@@ -329,6 +336,9 @@ describe("observatory execution and audit API", () => {
       })
     ).json()) as ObservatoryQueryResult;
     const originalRecord = getQueryAudit(original.auditId)!;
+    assert.equal(original.usage.requests, 0);
+    assert.equal(original.usage.totalTokens, 0);
+    assert.deepEqual(originalRecord.usage, original.usage);
     assert.notEqual(original.auditId, parent.auditId);
     assert.equal(originalRecord.parentAuditId, parent.auditId);
     assert.equal(originalRecord.entrypoint, "rerun");

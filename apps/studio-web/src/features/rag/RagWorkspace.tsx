@@ -5,7 +5,9 @@ import {
   Badge,
   Button,
   Card,
+  Collapse,
   Descriptions,
+  Drawer,
   Empty,
   Flex,
   Form,
@@ -18,6 +20,7 @@ import {
   Slider,
   Spin,
   Statistic,
+  Steps,
   Switch,
   Table,
   Tag,
@@ -46,6 +49,7 @@ import {
   deleteDocument,
   getAnalyticsOverview,
   getQualityReport,
+  getQueryDetail,
   listChunks,
   listDocuments,
   queryKnowledge,
@@ -57,11 +61,13 @@ import {
   type ChunkStrategy,
   type DocumentSource,
   type DocumentStats,
+  type QueryDetail,
   type QueryFeedbackRating,
   type QueryResult,
   type QualityReport,
 } from "./api.js";
 import { subscribeChunkTarget } from "./chunkTarget.js";
+import { UsageTag } from "../../components/UsageTag.js";
 
 interface RagSettings {
   chunkSize: number;
@@ -296,10 +302,40 @@ export function RagWorkspace() {
         <Flex gap={8} align="center">
           <FileTextOutlined />
           <Flex vertical gap={0} style={{ minWidth: 0 }}>
-            <Typography.Text strong ellipsis title={record.title} style={{ maxWidth: 150 }}>
-              {record.title}
-            </Typography.Text>
-            <Typography.Text type="secondary" ellipsis title={record.source} style={{ fontSize: 12, maxWidth: 150 }}>
+            <Flex gap={4} align="center">
+              <Typography.Text strong ellipsis title={record.title} style={{ maxWidth: 120 }}>
+                {record.title}
+              </Typography.Text>
+              {record.ocrApplied ? (
+                <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>
+                  OCR
+                </Tag>
+              ) : null}
+              {record.ocrStatus === "ocr_needed" ? (
+                <Tag
+                  color="red"
+                  style={{ margin: 0, fontSize: 11 }}
+                  title="疑似扫描件，开OCR后重传"
+                >
+                  待OCR
+                </Tag>
+              ) : null}
+              {record.ocrStatus === "ocr_failed" ? (
+                <Tag
+                  color="volcano"
+                  style={{ margin: 0, fontSize: 11 }}
+                  title="OCR失败，检查模型与日志"
+                >
+                  OCR失败
+                </Tag>
+              ) : null}
+            </Flex>
+            <Typography.Text
+              type="secondary"
+              ellipsis
+              title={record.source}
+              style={{ fontSize: 12, maxWidth: 150 }}
+            >
               v{record.version} · {record.chunks} 个分块
             </Typography.Text>
           </Flex>
@@ -352,6 +388,7 @@ export function RagWorkspace() {
           />
           <Badge status={stats?.embeddingsEnabled ? "success" : "default"} text="向量检索" />
           <Badge status={stats?.llmAvailable ? "success" : "default"} text="LLM" />
+          <Badge status={stats?.ocrEnabled ? "success" : "default"} text="OCR" />
           <Button
             icon={<ReloadOutlined spin={busy === "loading" || analyticsLoading} />}
             disabled={busy !== null && busy !== "query"}
@@ -378,13 +415,32 @@ export function RagWorkspace() {
           />
         </div>
       ) : (
-        <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}>
+        <Flex
+          gap={12}
+          align="flex-start"
+          style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}
+        >
           <Card
             size="small"
             title="知识来源"
             extra={<Tag>{stats?.sources.length ?? 0}</Tag>}
-            style={{ width: 320, flex: "0 0 auto", maxHeight: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}
-            styles={{ body: { padding: 8, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 } }}
+            style={{
+              width: 320,
+              flex: "0 0 auto",
+              maxHeight: "100%",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+            }}
+            styles={{
+              body: {
+                padding: 8,
+                overflowY: "auto",
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              },
+            }}
           >
             <Upload.Dragger
               multiple
@@ -439,8 +495,18 @@ export function RagWorkspace() {
             )}
           </Card>
 
-          <Flex vertical gap={12} style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
-            <Card size="small" title="检索预览">
+          <Flex
+            vertical
+            gap={12}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              alignSelf: "stretch",
+              overflow: "hidden",
+            }}
+          >
+            <Card size="small" title="检索预览" style={{ flex: "0 0 auto" }}>
               <Flex gap={8} align="flex-start">
                 <Input.TextArea
                   aria-label="检索问题"
@@ -465,17 +531,21 @@ export function RagWorkspace() {
               </Flex>
             </Card>
             {result ? (
-              <QueryPreview
-                result={result}
-                feedback={feedback[result.queryId]}
-                onFeedback={(rating) => void sendFeedback(result.queryId, rating)}
-              />
+              <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                <QueryPreview
+                  result={result}
+                  feedback={feedback[result.queryId]}
+                  onFeedback={(rating) => void sendFeedback(result.queryId, rating)}
+                />
+              </div>
             ) : (
-              <ChunkPreview
-                source={selectedSource}
-                chunks={chunks}
-                highlightChunkIndex={highlightChunkIndex}
-              />
+              <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+                <ChunkPreview
+                  source={selectedSource}
+                  chunks={chunks}
+                  highlightChunkIndex={highlightChunkIndex}
+                />
+              </div>
             )}
           </Flex>
 
@@ -516,7 +586,9 @@ export function RagWorkspace() {
                   style={{ marginBottom: 12 }}
                 />
               ) : null}
-              <Form.Item label={settings.chunkStrategy === "semantic" ? "最大分块长度" : "分块长度"}>
+              <Form.Item
+                label={settings.chunkStrategy === "semantic" ? "最大分块长度" : "分块长度"}
+              >
                 <InputNumber
                   aria-label="分块长度"
                   min={1}
@@ -534,7 +606,9 @@ export function RagWorkspace() {
                   max={Math.max(0, settings.chunkSize - 1)}
                   step={10}
                   value={settings.chunkOverlap}
-                  onChange={(value) => setSettings({ ...settings, chunkOverlap: Number(value) || 0 })}
+                  onChange={(value) =>
+                    setSettings({ ...settings, chunkOverlap: Number(value) || 0 })
+                  }
                   style={{ width: "100%" }}
                 />
               </Form.Item>
@@ -571,7 +645,10 @@ export function RagWorkspace() {
                   />
                 </Form.Item>
               )}
-              <Form.Item label={`Top-K ${settings.topK}`} extra="混合检索使用向量 kNN 与 BM25，经 RRF 融合排序。">
+              <Form.Item
+                label={`Top-K ${settings.topK}`}
+                extra="混合检索使用向量 kNN 与 BM25，经 RRF 融合排序。"
+              >
                 <Slider
                   aria-label="Top-K"
                   min={1}
@@ -580,7 +657,10 @@ export function RagWorkspace() {
                   onChange={(value) => setSettings({ ...settings, topK: value })}
                 />
               </Form.Item>
-              <Form.Item label="仅当前文档" extra={selectedSource ? `限定 ${selectedSource}` : "请先选择文档"}>
+              <Form.Item
+                label="仅当前文档"
+                extra={selectedSource ? `限定 ${selectedSource}` : "请先选择文档"}
+              >
                 <Switch
                   aria-label="仅当前文档"
                   disabled={!selectedSource}
@@ -687,17 +767,35 @@ function DocumentMetadataEditor({
         {document.source}
       </Typography.Paragraph>
       <Form layout="vertical" preserve={false}>
-        <Form.Item label="显示标题" required validateStatus={!title.trim() ? "error" : undefined} help={!title.trim() ? "标题不能为空" : undefined}>
-          <Input aria-label="显示标题" value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} />
+        <Form.Item
+          label="显示标题"
+          required
+          validateStatus={!title.trim() ? "error" : undefined}
+          help={!title.trim() ? "标题不能为空" : undefined}
+        >
+          <Input
+            aria-label="显示标题"
+            value={title}
+            maxLength={160}
+            onChange={(event) => setTitle(event.target.value)}
+          />
         </Form.Item>
-        <Form.Item label={`可见分组 ${groups.length}/50 · 留空公开`} validateStatus={groupsInvalid ? "error" : undefined} help="发布应用只会检索公开文档与调用方命中的分组；管理台检索不受此限制。">
+        <Form.Item
+          label={`可见分组 ${groups.length}/50 · 留空公开`}
+          validateStatus={groupsInvalid ? "error" : undefined}
+          help="发布应用只会检索公开文档与调用方命中的分组；管理台检索不受此限制。"
+        >
           <Input
             aria-label="可见分组"
             value={groupText}
             placeholder="hr, finance, leadership"
             onChange={(event) => setGroupText(event.target.value)}
           />
-          {groupsInvalid ? <Typography.Text type="danger" style={{ fontSize: 12 }}>分组需为 1-60 字符，最多 50 个</Typography.Text> : null}
+          {groupsInvalid ? (
+            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+              分组需为 1-60 字符，最多 50 个
+            </Typography.Text>
+          ) : null}
         </Form.Item>
         <Form.Item label={`标签 ${tags.length}/20`}>
           <Input
@@ -710,7 +808,9 @@ function DocumentMetadataEditor({
         {tags.length > 0 ? (
           <Flex gap={4} wrap style={{ marginBottom: 12 }}>
             {tags.map((tag) => (
-              <Tag key={tag} icon={<TagOutlined />}>{tag}</Tag>
+              <Tag key={tag} icon={<TagOutlined />}>
+                {tag}
+              </Tag>
             ))}
           </Flex>
         ) : null}
@@ -772,32 +872,99 @@ function RagAnalyticsDashboard({
   const quality = report?.totals;
   const attribution = report?.attribution;
   const hasNoAnswerHistory = Boolean(attribution?.unknown);
+  const [auditQueryId, setAuditQueryId] = useState<string | null>(null);
+  const [auditDetail, setAuditDetail] = useState<QueryDetail | null>(null);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const openAudit = async (queryId: string) => {
+    setAuditQueryId(queryId);
+    setAuditDetail(null);
+    setAuditError(null);
+    setAuditLoading(true);
+    try {
+      const res = await getQueryDetail(queryId);
+      setAuditDetail(res.detail);
+    } catch (reason) {
+      setAuditError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setAuditLoading(false);
+    }
+  };
   const recentColumns: ColumnsType<AnalyticsOverview["recent"][number]> = [
-    { title: "问题", dataIndex: "query", key: "query", ellipsis: true, render: (value: string, record) => <Typography.Text ellipsis title={record.error ?? value} style={{ maxWidth: 240 }}>{value}</Typography.Text> },
-    { title: "命中", dataIndex: "hitCount", key: "hitCount", width: 70, render: (_: unknown, record) => (record.error ? "失败" : record.hitCount) },
-    { title: "延迟", dataIndex: "latencyMs", key: "latencyMs", width: 90, render: (value: number) => `${value} ms` },
+    {
+      title: "问题",
+      dataIndex: "query",
+      key: "query",
+      ellipsis: true,
+      render: (value: string, record) => (
+        <Typography.Text ellipsis title={record.error ?? value} style={{ maxWidth: 240 }}>
+          {value}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: "命中",
+      dataIndex: "hitCount",
+      key: "hitCount",
+      width: 70,
+      render: (_: unknown, record) => (record.error ? "失败" : record.hitCount),
+    },
+    {
+      title: "延迟",
+      dataIndex: "latencyMs",
+      key: "latencyMs",
+      width: 90,
+      render: (value: number) => `${value} ms`,
+    },
     {
       title: "反馈",
       dataIndex: "feedback",
       key: "feedback",
       width: 70,
-      render: (value: string | null) => (value === "positive" ? "有用" : value === "negative" ? "无用" : "--"),
+      render: (value: string | null) =>
+        value === "positive" ? "有用" : value === "negative" ? "无用" : "--",
     },
     {
       title: "归因",
       dataIndex: "attribution",
       key: "attribution",
       width: 100,
-      render: (value: AnalyticsOverview["recent"][number]["attribution"]) => <Tag>{attributionLabel(value)}</Tag>,
+      render: (value: AnalyticsOverview["recent"][number]["attribution"]) => (
+        <Tag>{attributionLabel(value)}</Tag>
+      ),
     },
-    { title: "时间", dataIndex: "createdAt", key: "createdAt", width: 110, render: (value: string) => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{formatDateTime(value)}</Typography.Text> },
+    {
+      title: "时间",
+      dataIndex: "createdAt",
+      key: "createdAt",
+      width: 110,
+      render: (value: string) => (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {formatDateTime(value)}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: "链路",
+      key: "trace",
+      width: 90,
+      render: (_: unknown, record) => (
+        <Button type="link" size="small" onClick={() => void openAudit(record.id)}>
+          查看链路
+        </Button>
+      ),
+    },
   ];
   return (
     <Flex vertical gap={12}>
       <Flex align="flex-start" justify="space-between" gap={12} wrap>
         <Flex vertical gap={2}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>最近 {days} 天</Typography.Text>
-          <Typography.Title level={5} style={{ margin: 0 }}>知识库服务质量</Typography.Title>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            最近 {days} 天
+          </Typography.Text>
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            知识库服务质量
+          </Typography.Title>
         </Flex>
         <Flex gap={8} align="center">
           <Segmented<7 | 30>
@@ -809,37 +976,69 @@ function RagAnalyticsDashboard({
               { value: 30, label: "30 天" },
             ]}
           />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{loading ? "更新中" : "实时汇总"}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {loading ? "更新中" : "实时汇总"}
+          </Typography.Text>
         </Flex>
       </Flex>
 
       <Flex gap={12} wrap>
         <Card size="small" style={{ flex: "1 1 160px" }}>
-          <Statistic title="查询总量" value={overview.totals.queries} suffix={`失败 ${overview.totals.failed}`} />
+          <Statistic
+            title="查询总量"
+            value={overview.totals.queries}
+            suffix={`失败 ${overview.totals.failed}`}
+          />
         </Card>
-        <Card size="small" style={{ flex: "1 1 160px", borderColor: quality && quality.hitRate < 0.75 ? "#d98a2b" : undefined }}>
+        <Card
+          size="small"
+          style={{
+            flex: "1 1 160px",
+            borderColor: quality && quality.hitRate < 0.75 ? "#d98a2b" : undefined,
+          }}
+        >
           <Statistic
             title="检索命中率"
             value={quality ? Math.round(quality.hitRate * 100) : "--"}
             suffix={quality ? "%" : ""}
           />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{quality ? `${quality.hits} 次命中文档` : "正在汇总归因"}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {quality ? `${quality.hits} 次命中文档` : "正在汇总归因"}
+          </Typography.Text>
         </Card>
-        <Card size="small" style={{ flex: "1 1 160px", borderColor: quality && quality.noAnswerRate > 0.25 ? "#d98a2b" : undefined }}>
+        <Card
+          size="small"
+          style={{
+            flex: "1 1 160px",
+            borderColor: quality && quality.noAnswerRate > 0.25 ? "#d98a2b" : undefined,
+          }}
+        >
           <Statistic
             title="无答案率"
             value={quality ? Math.round(quality.noAnswerRate * 100) : "--"}
             suffix={quality ? "%" : ""}
           />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{quality ? `${quality.noAnswer} 次无答案` : "正在汇总归因"}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {quality ? `${quality.noAnswer} 次无答案` : "正在汇总归因"}
+          </Typography.Text>
         </Card>
         <Card size="small" style={{ flex: "1 1 160px" }}>
           <Statistic title="平均延迟" value={overview.totals.averageLatencyMs} suffix="ms" />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>含检索与生成</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            含检索与生成
+          </Typography.Text>
         </Card>
-        <Card size="small" style={{ flex: "1 1 160px", borderColor: overview.totals.noHitRate > 0.25 ? "#d98a2b" : undefined }}>
+        <Card
+          size="small"
+          style={{
+            flex: "1 1 160px",
+            borderColor: overview.totals.noHitRate > 0.25 ? "#d98a2b" : undefined,
+          }}
+        >
           <Statistic title="空召回" value={overview.totals.noHits} />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{Math.round(overview.totals.noHitRate * 100)}% 的成功请求</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {Math.round(overview.totals.noHitRate * 100)}% 的成功请求
+          </Typography.Text>
         </Card>
         <Card size="small" style={{ flex: "1 1 160px" }}>
           <Statistic
@@ -847,12 +1046,23 @@ function RagAnalyticsDashboard({
             value={helpful === null ? "--" : Math.round(helpful * 100)}
             suffix={helpful === null ? "" : "%"}
           />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{overview.totals.positiveFeedback + overview.totals.negativeFeedback} 条反馈</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {overview.totals.positiveFeedback + overview.totals.negativeFeedback} 条反馈
+          </Typography.Text>
         </Card>
       </Flex>
 
       <Flex gap={12} align="flex-start" wrap>
-        <Card size="small" title="无答案归因" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>按实际检索与生成结果</Typography.Text>} style={{ flex: "1 1 320px" }}>
+        <Card
+          size="small"
+          title="无答案归因"
+          extra={
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              按实际检索与生成结果
+            </Typography.Text>
+          }
+          style={{ flex: "1 1 320px" }}
+        >
           {attribution ? (
             <List
               size="small"
@@ -876,11 +1086,17 @@ function RagAnalyticsDashboard({
                       <Flex justify="space-between" align="center">
                         <Flex vertical gap={0}>
                           <Typography.Text strong>{label}</Typography.Text>
-                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{hint}</Typography.Text>
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            {hint}
+                          </Typography.Text>
                         </Flex>
                         <Typography.Text strong>{count}</Typography.Text>
                       </Flex>
-                      <Progress percent={Math.round((count / total) * 100)} showInfo={false} size="small" />
+                      <Progress
+                        percent={Math.round((count / total) * 100)}
+                        showInfo={false}
+                        size="small"
+                      />
                     </Flex>
                   </List.Item>
                 );
@@ -896,7 +1112,16 @@ function RagAnalyticsDashboard({
           ) : null}
         </Card>
 
-        <Card size="small" title="Top 未覆盖问题" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>按出现次数</Typography.Text>} style={{ flex: "1 1 280px" }}>
+        <Card
+          size="small"
+          title="Top 未覆盖问题"
+          extra={
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              按出现次数
+            </Typography.Text>
+          }
+          style={{ flex: "1 1 280px" }}
+        >
           {!report || report.topUnanswered.length === 0 ? (
             <Empty description="暂无未覆盖问题" />
           ) : (
@@ -907,7 +1132,11 @@ function RagAnalyticsDashboard({
               renderItem={(item) => (
                 <List.Item>
                   <List.Item.Meta
-                    title={<Typography.Text ellipsis title={item.query}>{item.query}</Typography.Text>}
+                    title={
+                      <Typography.Text ellipsis title={item.query}>
+                        {item.query}
+                      </Typography.Text>
+                    }
                     description={attributionLabel(item.attribution)}
                   />
                   <Tag>{String(item.count).padStart(2, "0")}</Tag>
@@ -919,10 +1148,22 @@ function RagAnalyticsDashboard({
       </Flex>
 
       <Flex gap={12} align="flex-start" wrap>
-        <Card size="small" title="质量趋势" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>柱高为每日查询量，橙色为无答案</Typography.Text>} style={{ flex: "2 1 420px" }}>
+        <Card
+          size="small"
+          title="质量趋势"
+          extra={
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              柱高为每日查询量，橙色为无答案
+            </Typography.Text>
+          }
+          style={{ flex: "2 1 420px" }}
+        >
           <Flex gap={4} align="flex-end" style={{ minHeight: 120 }}>
             {(report?.trend ?? []).map((day) => (
-              <Tooltip key={day.date} title={`${day.date}: ${day.queries} 次查询，${day.noAnswer} 次无答案`}>
+              <Tooltip
+                key={day.date}
+                title={`${day.date}: ${day.queries} 次查询，${day.noAnswer} 次无答案`}
+              >
                 <Flex vertical align="center" gap={4} style={{ flex: 1, minWidth: 0 }}>
                   <Typography.Text style={{ fontSize: 11 }}>{day.queries || ""}</Typography.Text>
                   <div
@@ -954,7 +1195,16 @@ function RagAnalyticsDashboard({
           </Flex>
         </Card>
 
-        <Card size="small" title="热门知识来源" extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>按召回片段数</Typography.Text>} style={{ flex: "1 1 240px" }}>
+        <Card
+          size="small"
+          title="热门知识来源"
+          extra={
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              按召回片段数
+            </Typography.Text>
+          }
+          style={{ flex: "1 1 240px" }}
+        >
           {overview.topSources.length === 0 ? (
             <Empty description="暂无命中来源" />
           ) : (
@@ -965,8 +1215,12 @@ function RagAnalyticsDashboard({
               renderItem={(source, index) => (
                 <List.Item>
                   <Tag>{String(index + 1).padStart(2, "0")}</Tag>
-                  <Typography.Text ellipsis title={source.source} style={{ flex: 1 }}>{source.source}</Typography.Text>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>{source.hits} hits</Typography.Text>
+                  <Typography.Text ellipsis title={source.source} style={{ flex: 1 }}>
+                    {source.source}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {source.hits} hits
+                  </Typography.Text>
                 </List.Item>
               )}
             />
@@ -977,7 +1231,11 @@ function RagAnalyticsDashboard({
       <Card
         size="small"
         title="最近查询"
-        extra={<Typography.Text type="secondary" style={{ fontSize: 12 }}>最多展示 20 条</Typography.Text>}
+        extra={
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            最多展示 20 条
+          </Typography.Text>
+        }
         styles={{ body: { padding: 0 } }}
       >
         <Table
@@ -990,6 +1248,305 @@ function RagAnalyticsDashboard({
           locale={{ emptyText: <Empty description="运行检索后会在这里显示质量数据" /> }}
         />
       </Card>
+      <Drawer
+        title="检索链路审计"
+        open={auditQueryId !== null}
+        onClose={() => {
+          setAuditQueryId(null);
+          setAuditDetail(null);
+          setAuditError(null);
+        }}
+        width={720}
+      >
+        {auditLoading ? (
+          <Flex justify="center" style={{ padding: 48 }}>
+            <Spin aria-label="正在加载链路详情" />
+          </Flex>
+        ) : auditError ? (
+          <Alert type="error" showIcon message={auditError} />
+        ) : !auditDetail ? (
+          <Empty description="选择一条查询查看完整链路" />
+        ) : (
+          <AuditTraceView detail={auditDetail} />
+        )}
+      </Drawer>
+    </Flex>
+  );
+}
+
+function AuditTraceView({ detail }: { detail: QueryDetail }) {
+  const trace = detail.trace;
+  const fusedColumns: ColumnsType<NonNullable<QueryDetail["trace"]>["fused"][number]> = [
+    {
+      title: "#",
+      key: "rank",
+      width: 50,
+      render: (_: unknown, _record, index: number) => `#${String(index + 1).padStart(2, "0")}`,
+    },
+    {
+      title: "来源",
+      dataIndex: "source",
+      key: "source",
+      width: 140,
+      ellipsis: true,
+      render: (value: string, record) => (
+        <Typography.Text
+          ellipsis
+          title={`${value} · 第${record.chunkIndex + 1}段`}
+          style={{ fontSize: 12 }}
+        >
+          {value} · {record.chunkIndex + 1}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: "通道",
+      key: "channels",
+      width: 90,
+      render: (_: unknown, record) =>
+        record.channels.length === 2 ? (
+          <Tag color="purple">双路</Tag>
+        ) : record.channels.includes("vector") ? (
+          <Tag color="blue">向量</Tag>
+        ) : record.channels.includes("keyword") ? (
+          <Tag color="green">关键词</Tag>
+        ) : (
+          <Tag>—</Tag>
+        ),
+    },
+    {
+      title: "RRF",
+      dataIndex: "rrfScore",
+      key: "rrfScore",
+      width: 90,
+      render: (value: number) => (
+        <Typography.Text style={{ fontSize: 12 }}>{value.toFixed(4)}</Typography.Text>
+      ),
+    },
+    {
+      title: "向量分",
+      dataIndex: "vectorScore",
+      key: "vectorScore",
+      width: 110,
+      render: (value: number | null, record) =>
+        value === null ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            —
+          </Typography.Text>
+        ) : (
+          <Typography.Text style={{ fontSize: 12 }}>
+            {value.toFixed(4)} #{(record.vectorRank ?? 0) + 1}
+          </Typography.Text>
+        ),
+    },
+    {
+      title: "关键词分",
+      dataIndex: "keywordScore",
+      key: "keywordScore",
+      width: 110,
+      render: (value: number | null, record) =>
+        value === null ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            —
+          </Typography.Text>
+        ) : (
+          <Typography.Text style={{ fontSize: 12 }}>
+            {value.toFixed(4)} #{(record.keywordRank ?? 0) + 1}
+          </Typography.Text>
+        ),
+    },
+  ];
+  const channelColumns: ColumnsType<{
+    id: string;
+    source: string;
+    chunkIndex: number;
+    score: number;
+    rank: number;
+  }> = [
+    {
+      title: "排名",
+      dataIndex: "rank",
+      key: "rank",
+      width: 70,
+      render: (value: number) => `#${value + 1}`,
+    },
+    {
+      title: "来源",
+      dataIndex: "source",
+      key: "source",
+      ellipsis: true,
+      render: (value: string, record) => (
+        <Typography.Text ellipsis title={value} style={{ fontSize: 12 }}>
+          {value} · {record.chunkIndex + 1}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: "原始分",
+      dataIndex: "score",
+      key: "score",
+      width: 100,
+      render: (value: number) => (
+        <Typography.Text style={{ fontSize: 12 }}>{value.toFixed(4)}</Typography.Text>
+      ),
+    },
+  ];
+  return (
+    <Flex vertical gap={12}>
+      <Flex gap={8} align="center" wrap>
+        <Typography.Title level={5} style={{ margin: 0, flex: 1 }}>
+          {detail.query}
+        </Typography.Title>
+        <Typography.Text
+          copyable={{ text: detail.id }}
+          type="secondary"
+          style={{ fontSize: 12 }}
+          title={detail.id}
+        >
+          {detail.id.slice(0, 8)}
+        </Typography.Text>
+      </Flex>
+      <Descriptions size="small" column={2} bordered>
+        <Descriptions.Item label="归因">{attributionLabel(detail.attribution)}</Descriptions.Item>
+        <Descriptions.Item label="延迟">{`${detail.latencyMs} ms`}</Descriptions.Item>
+        <Descriptions.Item label="Top-K">{detail.topK}</Descriptions.Item>
+        <Descriptions.Item label="命中">{detail.hitCount}</Descriptions.Item>
+        <Descriptions.Item label="时间">{formatDateTime(detail.createdAt)}</Descriptions.Item>
+        <Descriptions.Item label="反馈">
+          {detail.feedback === "positive" ? "有用" : detail.feedback === "negative" ? "无用" : "--"}
+        </Descriptions.Item>
+      </Descriptions>
+      {detail.error ? <Alert type="error" showIcon message={detail.error} /> : null}
+      {!trace ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="历史事件无链路明细（升级前写入），仅可看聚合指标。新的检索会自动写入完整链路。"
+        />
+      ) : (
+        <>
+          <Steps
+            direction="vertical"
+            size="small"
+            items={[
+              {
+                key: "acl",
+                status: "finish",
+                title: `ACL 解析 · 可见 ${trace.visibleSources?.length ?? detail.sourceCount} 个来源`,
+                description: (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    请求 sources: {(detail.sources ?? []).join("、") || "全库"} · 可见:{" "}
+                    {(trace.visibleSources ?? []).join("、") || "全库"} · 分组:{" "}
+                    {(trace.viewerGroups ?? []).join("、") || "管理侧全量"}
+                  </Typography.Text>
+                ),
+              },
+              {
+                key: "vector",
+                status: trace.embeddingsEnabled ? "finish" : "wait",
+                title: `向量检索 · ${trace.vectorHits.length} 候选${trace.timingsMs.vectorMs === null ? "（未启用）" : ""}`,
+                description: trace.embeddingsEnabled ? (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    余弦相似度排序，耗时 {trace.timingsMs.vectorMs ?? 0} ms，候选窗口{" "}
+                    {trace.candidates}
+                  </Typography.Text>
+                ) : (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    未配置 Embeddings，本次退化为纯关键词检索
+                  </Typography.Text>
+                ),
+              },
+              {
+                key: "keyword",
+                status: "finish",
+                title: `关键词检索 · ${trace.keywordHits.length} 候选`,
+                description: (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    BM25 先 AND 后 OR 降级，耗时 {trace.timingsMs.keywordMs} ms
+                  </Typography.Text>
+                ),
+              },
+              {
+                key: "rrf",
+                status: "finish",
+                title: `RRF 融合 · k=${trace.rrfK} · 取 Top-${detail.topK}`,
+                description: (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    只看排名不看原始分，融合耗时 {trace.timingsMs.fusionMs} ms，存储 {trace.store}
+                    {trace.truncated ? "（候选原文已截断，融合块为全量）" : ""}
+                  </Typography.Text>
+                ),
+              },
+              {
+                key: "llm",
+                status: detail.answerGenerated ? "finish" : "wait",
+                title: detail.answerGenerated ? "LLM 生成已回答" : "LLM 未生成",
+                description: (
+                  <Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>
+                    {trace.answer ?? detail.answer ?? "无回答（资料不足或 LLM 未启用）"}
+                  </Typography.Paragraph>
+                ),
+              },
+            ]}
+          />
+          <Card size="small" title={`融合结果 Top-${detail.topK}（最终排序依据 RRF）`}>
+            <Table
+              size="small"
+              rowKey="id"
+              columns={fusedColumns}
+              dataSource={trace.fused}
+              pagination={false}
+              scroll={{ x: "max-content" }}
+            />
+          </Card>
+          <Collapse
+            size="small"
+            items={[
+              {
+                key: "vector",
+                label: `向量候选（${trace.vectorHits.length}）· 余弦分同路可比`,
+                children: (
+                  <Table
+                    size="small"
+                    rowKey="id"
+                    columns={channelColumns}
+                    dataSource={trace.vectorHits.slice(0, 30)}
+                    pagination={false}
+                    scroll={{ x: "max-content" }}
+                  />
+                ),
+              },
+              {
+                key: "keyword",
+                label: `关键词候选（${trace.keywordHits.length}）· BM25 分同路可比`,
+                children: (
+                  <Table
+                    size="small"
+                    rowKey="id"
+                    columns={channelColumns}
+                    dataSource={trace.keywordHits.slice(0, 30)}
+                    pagination={false}
+                    scroll={{ x: "max-content" }}
+                  />
+                ),
+              },
+              ...(trace.formatted
+                ? [
+                    {
+                      key: "context",
+                      label: "拼入 LLM 的上下文（formatted）",
+                      children: (
+                        <Typography.Paragraph code style={{ fontSize: 12 }}>
+                          {trace.formatted}
+                        </Typography.Paragraph>
+                      ),
+                    } as const,
+                  ]
+                : []),
+            ]}
+          />
+        </>
+      )}
     </Flex>
   );
 }
@@ -1031,6 +1588,23 @@ function formatDateTime(value: string): string {
   }).format(date);
 }
 
+const previewCardStyle = {
+  height: "100%",
+  display: "flex",
+  flexDirection: "column" as const,
+  minHeight: 0,
+  overflow: "hidden",
+};
+
+const previewCardStyles = {
+  body: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: "auto" as const,
+    overscrollBehavior: "contain" as const,
+  },
+};
+
 function ChunkPreview({
   source,
   chunks,
@@ -1051,6 +1625,8 @@ function ChunkPreview({
       size="small"
       title="分块预览"
       extra={<Tag>{source ? `${chunks.length} chunks` : "未选择"}</Tag>}
+      style={previewCardStyle}
+      styles={previewCardStyles}
     >
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         {source ?? "未选择知识来源"}
@@ -1067,16 +1643,26 @@ function ChunkPreview({
             const isHighlighted =
               highlightChunkIndex != null && chunk.chunkIndex === highlightChunkIndex;
             return (
-              <List.Item style={isHighlighted ? { background: "#fff7e6", borderRadius: 8 } : undefined}>
+              <List.Item
+                style={isHighlighted ? { background: "#fff7e6", borderRadius: 8 } : undefined}
+              >
                 <List.Item.Meta
                   title={
                     <Flex gap={8} align="center" wrap>
                       <Tag>#{String(chunk.chunkIndex + 1).padStart(2, "0")}</Tag>
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>{chunk.length} 字符</Typography.Text>
-                      <Tag color={chunk.hasEmbedding ? "success" : "default"}>{chunk.hasEmbedding ? "VECTOR" : "BM25"}</Tag>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {chunk.length} 字符
+                      </Typography.Text>
+                      <Tag color={chunk.hasEmbedding ? "success" : "default"}>
+                        {chunk.hasEmbedding ? "VECTOR" : "BM25"}
+                      </Tag>
                     </Flex>
                   }
-                  description={<Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>{chunk.content}</Typography.Paragraph>}
+                  description={
+                    <Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>
+                      {chunk.content}
+                    </Typography.Paragraph>
+                  }
                 />
                 {isHighlighted ? <span ref={highlightRef as unknown as undefined} /> : null}
               </List.Item>
@@ -1097,13 +1683,26 @@ function QueryPreview({
   feedback?: QueryFeedbackRating;
   onFeedback: (rating: QueryFeedbackRating) => void;
 }) {
+  const retrieval = result.retrieval;
   return (
     <Card
       size="small"
       title="检索预览"
+      style={previewCardStyle}
+      styles={previewCardStyles}
       extra={
         <Flex gap={4} align="center">
           <Tag>{result.chunks.length} hits</Tag>
+          <Tooltip title="复制 queryId 用于审计回溯">
+            <Typography.Text
+              copyable={{ text: result.queryId }}
+              type="secondary"
+              style={{ fontSize: 12 }}
+              title={result.queryId}
+            >
+              {result.queryId.slice(0, 8)}
+            </Typography.Text>
+          </Tooltip>
           <Tooltip title="有用">
             <Button
               type={feedback === "positive" ? "primary" : "text"}
@@ -1126,7 +1725,58 @@ function QueryPreview({
         </Flex>
       }
     >
-      <Typography.Title level={5} style={{ marginTop: 0 }}>{result.query}</Typography.Title>
+      <Typography.Title level={5} style={{ marginTop: 0 }}>
+        {result.query}
+      </Typography.Title>
+      {result.usage ? (
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          <UsageTag usage={result.usage} />
+        </Typography.Paragraph>
+      ) : null}
+      {retrieval ? (
+        <Collapse
+          size="small"
+          style={{ marginBottom: 12 }}
+          items={[
+            {
+              key: "retrieval",
+              label: `检索链路 · ${retrieval.store} · 向量${retrieval.embeddingsEnabled ? "开" : "关"} · RRF k=${retrieval.rrfK}`,
+              children: (
+                <Flex vertical gap={8}>
+                  <Descriptions size="small" column={2} bordered>
+                    <Descriptions.Item label="向量耗时">
+                      {retrieval.timingsMs.vectorMs === null
+                        ? "未启用"
+                        : `${retrieval.timingsMs.vectorMs} ms`}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="关键词耗时">
+                      {`${retrieval.timingsMs.keywordMs} ms`}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="向量候选">
+                      {retrieval.vectorHits.length}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="关键词候选">
+                      {retrieval.keywordHits.length}
+                    </Descriptions.Item>
+                  </Descriptions>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    RRF 只看排名不看原始分：同 chunk
+                    在双路排名越靠前融合分越高。向量分为余弦相似度，关键词分为 BM25（ES/SQLite
+                    实现一致，绝对值不可跨路比较）。
+                  </Typography.Text>
+                </Flex>
+              ),
+            },
+          ]}
+        />
+      ) : (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="老服务端未返回双路明细，仅展示 RRF 融合分。升级 rag-server 后可区分向量/关键词分数。"
+        />
+      )}
       {result.generate ? (
         <Card size="small" type="inner" title="ANSWER" style={{ marginBottom: 12 }}>
           {result.answer ? (
@@ -1142,22 +1792,81 @@ function QueryPreview({
         size="small"
         dataSource={result.chunks}
         rowKey="id"
-        renderItem={(chunk, index) => (
-          <List.Item>
-            <List.Item.Meta
-              title={
-                <Flex gap={8} align="center" wrap>
-                  <Tag>#{String(index + 1).padStart(2, "0")}</Tag>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {chunk.source} · 第 {chunk.chunkIndex + 1} 段
-                  </Typography.Text>
-                  <Tag>{chunk.score.toFixed(4)}</Tag>
-                </Flex>
-              }
-              description={<Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>{chunk.content}</Typography.Paragraph>}
-            />
-          </List.Item>
-        )}
+        renderItem={(chunk, index) => {
+          const debug = chunk.debug;
+          const channels = debug?.channels ?? [];
+          const channelTag =
+            channels.length === 2 ? (
+              <Tag color="purple">双路命中</Tag>
+            ) : channels.includes("vector") ? (
+              <Tag color="blue">仅向量</Tag>
+            ) : channels.includes("keyword") ? (
+              <Tag color="green">仅关键词</Tag>
+            ) : (
+              <Tag>RRF</Tag>
+            );
+          return (
+            <List.Item>
+              <List.Item.Meta
+                title={
+                  <Flex gap={8} align="center" wrap>
+                    <Tag>#{String(index + 1).padStart(2, "0")}</Tag>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {chunk.source} · 第 {chunk.chunkIndex + 1} 段
+                    </Typography.Text>
+                    {channelTag}
+                  </Flex>
+                }
+                description={
+                  <Flex vertical gap={4}>
+                    <Flex gap={4} wrap>
+                      <Tooltip title="RRF 融合分（最终排序依据，越大越相关）">
+                        <Tag color="gold">RRF {chunk.score.toFixed(4)}</Tag>
+                      </Tooltip>
+                      <Tooltip
+                        title={
+                          debug
+                            ? `向量余弦分（候选排名 #${debug.vectorRank !== null ? debug.vectorRank + 1 : "-"}）`
+                            : "向量原始分（老服务端无此字段）"
+                        }
+                      >
+                        <Tag color="blue">
+                          向量{" "}
+                          {debug?.vectorScore !== null && debug?.vectorScore !== undefined
+                            ? debug.vectorScore.toFixed(4)
+                            : "—"}
+                          {debug?.vectorRank !== null && debug?.vectorRank !== undefined
+                            ? ` #${debug.vectorRank + 1}`
+                            : ""}
+                        </Tag>
+                      </Tooltip>
+                      <Tooltip
+                        title={
+                          debug
+                            ? `BM25 分（候选排名 #${debug.keywordRank !== null ? debug.keywordRank + 1 : "-"}，绝对值只可同路比较）`
+                            : "BM25 原始分（老服务端无此字段）"
+                        }
+                      >
+                        <Tag color="green">
+                          关键词{" "}
+                          {debug?.keywordScore !== null && debug?.keywordScore !== undefined
+                            ? debug.keywordScore.toFixed(4)
+                            : "—"}
+                          {debug?.keywordRank !== null && debug?.keywordRank !== undefined
+                            ? ` #${debug.keywordRank + 1}`
+                            : ""}
+                        </Tag>
+                      </Tooltip>
+                    </Flex>
+                    <Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>
+                      {chunk.content}
+                    </Typography.Paragraph>
+                  </Flex>
+                }
+              />
+            </List.Item>
+          );
+        }}
       />
     </Card>
   );

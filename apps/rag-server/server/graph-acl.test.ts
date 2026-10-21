@@ -36,8 +36,8 @@ before(async () => {
       data: new TextEncoder().encode("腾讯云，薪酬带宽，HR 制度。"),
     },
   ]);
-  rag.updateDocument("hr.md", { allowedGroups: ["hr"] });
-  lifecycle.onDocumentsIngested(["public.md", "hr.md"]);
+  await rag.updateDocument("hr.md", { allowedGroups: ["hr"] });
+  await lifecycle.onDocumentsIngested(["public.md", "hr.md"]);
   await lifecycle.waitIdle();
 
   const app = express();
@@ -55,7 +55,7 @@ after(async () => {
   server.close();
   await once(server, "close");
   graph.close();
-  rag.close();
+  await rag.close();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -110,6 +110,56 @@ describe("graph retrieve document ACL", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ query: "腾讯云" }),
+    });
+    assert.equal(response.status, 401);
+  });
+});
+
+describe("document-scoped graph browsing", () => {
+  const adminHeaders = { authorization: "Bearer admin-token" };
+
+  it("exports only the selected document's entities and relationships", async () => {
+    const response = await fetch(`${origin}/api/graph/documents/public.md`, { headers: adminHeaders });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      nodes: Array<{ id: string; name: string; props: Record<string, string> }>;
+      edges: Array<{ source: string; target: string }>;
+      stats: { entities: number; relations: number };
+    };
+    assert.ok(body.nodes.some((node) => node.name === "微信支付"));
+    assert.ok(!body.nodes.some((node) => node.name === "薪酬带宽"));
+    assert.equal(body.stats.entities, body.nodes.length);
+    assert.equal(body.stats.relations, body.edges.length);
+    const ids = new Set(body.nodes.map((node) => node.id));
+    assert.ok(body.edges.every((edge) => ids.has(edge.source) && ids.has(edge.target)));
+    assert.ok(body.nodes.every((node) => node.props !== undefined));
+  });
+
+  it("does not let a shared entity expand into another document", async () => {
+    const seed = graph.listEntities({ search: "腾讯云" })[0];
+    assert.ok(seed);
+    const response = await fetch(`${origin}/api/graph/neighbors/${seed.id}?hops=2&source=public.md`, {
+      headers: adminHeaders,
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as { nodes: Array<{ name: string }> };
+    assert.ok(body.nodes.some((node) => node.name === "微信支付"));
+    assert.ok(!body.nodes.some((node) => node.name === "薪酬带宽"));
+  });
+
+  it("rejects a missing document or an empty neighbor scope", async () => {
+    const missing = await fetch(`${origin}/api/graph/documents/missing.md`, { headers: adminHeaders });
+    assert.equal(missing.status, 404);
+    const empty = await fetch(`${origin}/api/graph/neighbors/unknown?source=`, { headers: adminHeaders });
+    assert.equal(empty.status, 400);
+    const array = await fetch(`${origin}/api/graph/neighbors/unknown?source=public.md&source=hr.md`, { headers: adminHeaders });
+    // An invalid selected source must never turn into a full-library lookup.
+    assert.equal(array.status, 400);
+  });
+
+  it("keeps document graph exports admin-only", async () => {
+    const response = await fetch(`${origin}/api/graph/documents/hr.md`, {
+      headers: { authorization: "Bearer runtime-token" },
     });
     assert.equal(response.status, 401);
   });

@@ -15,6 +15,8 @@ import type { LlmClient } from "../providers/clients/types.js";
 import { createProvider, setDefaultProvider } from "../providers/store.js";
 import { invalidateSchemaSource } from "../schemaSources/runtime.js";
 import { createSchemaSource, updateSchemaSource } from "../schemaSources/store.js";
+import { summarizeUsage } from "../usage.js";
+import { createWorkspace } from "../workspace.js";
 
 const requireDatabase = createRequire(
   new URL("../../../../packages/database/package.json", import.meta.url),
@@ -174,6 +176,7 @@ before(async () => {
       const prompt = request.messages.map((message) => message.content).join("\n");
       sqlPrompts.push(prompt);
       return {
+        tokenUsage: { inputTokens: 50, outputTokens: 10 },
         content: JSON.stringify({
           sql: prompt.includes("你是“分析库”")
             ? 'SELECT id FROM "reporting"."events" LIMIT 10'
@@ -188,9 +191,13 @@ before(async () => {
       if (streamError.afterDelta) request.callbacks.onDelta(streamError.afterDelta);
       throw new Error(streamError.message);
     }
-    if (streamRequests.length === 1 && calls.length) return { content: "", toolCalls: calls };
+    if (streamRequests.length === 1 && calls.length) return {
+      content: "", toolCalls: calls, tokenUsage: { inputTokens: 100, outputTokens: 20 },
+    };
     request.callbacks.onDelta("已完成问数");
-    return { content: "已完成问数", toolCalls: [] };
+    return {
+      content: "已完成问数", toolCalls: [], tokenUsage: { inputTokens: 100, outputTokens: 20 },
+    };
   });
   server = createApp().listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -229,10 +236,10 @@ after(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function request(body: Record<string, unknown> = {}) {
+async function request(body: Record<string, unknown> = {}, workspaceId?: string) {
   return fetch(`${origin}/api/chat`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...(workspaceId ? { "x-workspace-id": workspaceId } : {}) },
     body: JSON.stringify({
       messages: [{ role: "user", content: "查询前 10 条 users" }],
       resources: { sqlSources: [sourceId] },
@@ -240,8 +247,8 @@ async function request(body: Record<string, unknown> = {}) {
     }),
   });
 }
-async function chat(body: Record<string, unknown> = {}) {
-  const response = await request(body);
+async function chat(body: Record<string, unknown> = {}, workspaceId?: string) {
+  const response = await request(body, workspaceId);
   assert.equal(response.status, 200);
   const wire = await response.text();
   const events = wire
@@ -253,6 +260,24 @@ async function chat(body: Record<string, unknown> = {}) {
 }
 
 describe("Web chat SQL question integration", () => {
+  it("displays nested SQL usage and counts each model request once in its workspace", async () => {
+    const workspace = createWorkspace({ name: "SQL usage" });
+    const { wire, tool } = await chat({ sessionId: "usage-chat" }, workspace.id);
+    const done = wire.split("\n\n").filter((line) => line.includes('"done":true')).at(-1)!;
+    const final = JSON.parse(done.slice(6)) as { usage: { requests: number; totalTokens: number } };
+    assert.equal(final.usage.requests, 3);
+    assert.equal(final.usage.totalTokens, 300);
+    const summary = summarizeUsage(undefined, undefined, workspace.id);
+    assert.equal(summary.totals.requests, 3);
+    assert.equal(summary.totals.totalTokens, 300);
+    assert.equal(summary.totals.toolCalls, 1);
+    assert.equal(summary.bySource.find((entry) => entry.source === "sql_query")?.requests, 1);
+    assert.equal(summary.bySource.find((entry) => entry.source === "web_chat")?.requests, 2);
+    const audit = getQueryAudit(tool!.ui!.props.auditId);
+    assert.equal(audit?.workspace, workspace.id);
+    assert.equal(audit?.usage?.totalTokens, 60);
+  });
+
   it("removes SQL tools and schema injection when no SQL source is bound, including legacy env configuration", async () => {
     process.env.REPORT_DATABASE_URL = "mysql://readonly:legacy-secret@localhost/legacy";
     try {

@@ -12,7 +12,7 @@ import { createWorkspace } from "../workspace.js";
 
 const TOKEN = "usage-export-token";
 const USAGE_HEADER =
-  "id,created_at,kind,workspace_id,model,tool_name,status,input_tokens,output_tokens,total_tokens,duration_ms,ref_id";
+  "id,created_at,kind,workspace_id,model,tool_name,status,input_tokens,output_tokens,total_tokens,duration_ms,ref_id,source,requests";
 
 let server: Server;
 let guarded: Server;
@@ -120,6 +120,8 @@ describe("usage export API", () => {
       "model",
       "output_tokens",
       "ref_id",
+      "requests",
+      "source",
       "status",
       "tool_name",
       "total_tokens",

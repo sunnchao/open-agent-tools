@@ -16,6 +16,8 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   CirclePause,
   CirclePlay,
   CloudUpload,
@@ -117,6 +119,8 @@ export const EyeOutlined = adapt(Eye);
 export const SettingOutlined = adapt(Settings);
 export const StarOutlined = adapt(Star);
 export const ArrowDownOutlined = adapt(ArrowDown);
+export const DownOutlined = adapt(ChevronDown);
+export const UpOutlined = adapt(ChevronUp);
 export const PanelLeftCloseOutlined = adapt(PanelLeftClose);
 export const PanelLeftOpenOutlined = adapt(PanelLeftOpen);
 export const LikeOutlined = adapt(ThumbsUp);

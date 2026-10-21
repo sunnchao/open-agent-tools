@@ -546,16 +546,29 @@ export function SettingsWorkspace() {
     },
   ];
 
-  const usageColumns: ColumnsType<{ model: string; chatTurns: number; inputTokens: number; outputTokens: number }> = [
+  const usageColumns: ColumnsType<UsageSummary["byModel"][number]> = [
     {
       title: "模型",
       dataIndex: "model",
       key: "model",
       render: (value: string) => <Typography.Text code style={{ fontSize: 12 }}>{value}</Typography.Text>,
     },
-    { title: "对话轮数", dataIndex: "chatTurns", key: "chatTurns" },
+    { title: "模型请求", dataIndex: "requests", key: "requests" },
     { title: "输入 tokens", dataIndex: "inputTokens", key: "inputTokens", render: (value: number) => value.toLocaleString() },
     { title: "输出 tokens", dataIndex: "outputTokens", key: "outputTokens", render: (value: number) => value.toLocaleString() },
+  ];
+  const sourceLabels: Record<UsageSummary["bySource"][number]["source"], string> = {
+    web_chat: "Web Chat",
+    app_chat: "Web 发布应用",
+    sql_query: "SQL 问数",
+    rag_query: "RAG 检索问答",
+    rag_graph: "RAG 知识图谱 / 制图",
+  };
+  const sourceUsageColumns: ColumnsType<UsageSummary["bySource"][number]> = [
+    { title: "来源", dataIndex: "source", render: (value: keyof typeof sourceLabels) => sourceLabels[value] ?? value },
+    { title: "模型请求", dataIndex: "requests" },
+    { title: "输入 tokens", dataIndex: "inputTokens", render: (value: number) => value.toLocaleString() },
+    { title: "输出 tokens", dataIndex: "outputTokens", render: (value: number) => value.toLocaleString() },
   ];
 
   return (
@@ -725,13 +738,22 @@ export function SettingsWorkspace() {
                   <Flex vertical gap={12}>
                     <Flex gap={16} wrap>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        对话 {usage.totals.chatTurns} 轮 · 工具 {usage.totals.toolCalls} 次 · 合计{" "}
+                        模型请求 {usage.totals.requests} 次 · 工具 {usage.totals.toolCalls} 次 · 合计{" "}
                         {usage.totals.totalTokens.toLocaleString()} tokens
                       </Typography.Text>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                         范围：{usage.workspaceId === "*" ? "全部工作空间" : usage.workspaceId}
                       </Typography.Text>
                     </Flex>
+                    <Table
+                      size="small"
+                      rowKey="source"
+                      columns={sourceUsageColumns}
+                      dataSource={usage.bySource ?? []}
+                      pagination={false}
+                      scroll={{ x: "max-content" }}
+                      locale={{ emptyText: <Empty description="该时间窗内还没有用量记录" /> }}
+                    />
                     <Table
                       size="small"
                       rowKey="model"

@@ -39,6 +39,7 @@ export interface UsageSummary {
   totals: {
     events: number;
     chatTurns: number;
+    requests: number;
     toolCalls: number;
     inputTokens: number;
     outputTokens: number;
@@ -46,13 +47,35 @@ export interface UsageSummary {
     chatDurationMs: number;
     toolDurationMs: number;
   };
-  byModel: Array<{ model: string; chatTurns: number; inputTokens: number; outputTokens: number }>;
+  byModel: Array<{
+    model: string;
+    chatTurns: number;
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+  }>;
+  bySource: Array<{
+    source: "web_chat" | "app_chat" | "sql_query" | "rag_query" | "rag_graph";
+    chatTurns: number;
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+  }>;
   byTool: Array<{ toolKind: string; toolName: string; calls: number; errors: number }>;
-  daily: Array<{ date: string; chatTurns: number; toolCalls: number; totalTokens: number }>;
+  daily: Array<{
+    date: string;
+    chatTurns: number;
+    requests: number;
+    toolCalls: number;
+    totalTokens: number;
+  }>;
 }
 
 /** 当前 workspace 的用量汇总（计费与扩容决策的证据）。`all=true` 查看全局合计。 */
-export async function fetchUsage(options?: { days?: number; all?: boolean }): Promise<UsageSummary> {
+export async function fetchUsage(options?: {
+  days?: number;
+  all?: boolean;
+}): Promise<UsageSummary> {
   const params = new URLSearchParams({ days: String(options?.days ?? 30) });
   if (options?.all) params.set("workspaceId", "*");
   const response = await studioFetch(`/api/admin/usage?${params}`);

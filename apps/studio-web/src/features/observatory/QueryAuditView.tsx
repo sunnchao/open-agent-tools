@@ -41,6 +41,7 @@ import {
 } from "./api.js";
 import { auditExportPath, downloadExport, type ExportFormat } from "./export.js";
 import { AUDIT_STATUS_LABELS, auditStatusTag, formatDuration, QueryExecution } from "./QueryExecution.js";
+import { UsageTag } from "../../components/UsageTag.js";
 
 const PAGE_SIZE = 20;
 
@@ -505,6 +506,9 @@ export function QueryAuditView({ sourceId }: { sourceId: string }) {
               <Descriptions.Item label="原始问题">{record.originalQuestion || record.question}</Descriptions.Item>
               <Descriptions.Item label="总耗时">{formatDuration(record.durationMs)}</Descriptions.Item>
               <Descriptions.Item label="模型">{record.model ?? "—"}</Descriptions.Item>
+              {record.usage ? (
+                <Descriptions.Item label="用量"><UsageTag usage={record.usage} /></Descriptions.Item>
+              ) : null}
               <Descriptions.Item label="Provider">{record.providerId ?? "—"}</Descriptions.Item>
               <Descriptions.Item label="相关表">{record.selectedTables.join("、") || "—"}</Descriptions.Item>
               <Descriptions.Item label="开始时间">{new Date(record.startedAt).toLocaleString()}</Descriptions.Item>

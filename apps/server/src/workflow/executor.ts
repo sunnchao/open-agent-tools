@@ -291,6 +291,12 @@ export function validateWorkflow(
       throw new WorkflowValidationError(
         `node ${node.id}: ${config.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
       );
+    if (node.kind === "graph") {
+      const sources = (config.data as { sources?: string[] }).sources;
+      if (!sources?.length) {
+        throw new WorkflowValidationError(`node ${node.id}: 图谱检索至少选择一个文档`);
+      }
+    }
     byId.set(node.id, node);
   }
   const edges: Array<WorkflowEdgeInput & { id: string }> = [];
@@ -493,10 +499,11 @@ async function runNode(
       return { result };
     }
     case "graph": {
+      const sources = config.sources as string[];
       const query = interpolate(config.query ?? inputs.query ?? "", inputs, "text");
       if (!query) throw new Error("graph node requires a query");
       const result = await withTimeout(
-        deps.retrieveRagGraph({ query, signal: deps.signal }),
+        deps.retrieveRagGraph({ query, sources, signal: deps.signal }),
         configuredTimeout ?? deps.timeoutMs?.graph ?? 15_000,
         deps.signal,
       );

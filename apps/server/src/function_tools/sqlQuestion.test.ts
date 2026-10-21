@@ -6,6 +6,7 @@ import { buildSqlQuestionTools, runChatSqlQuestion, sqlQuestionToolName } from "
 
 const source = { id: "ops", name: "运营库", connector: "mysql" as const };
 const queryResult = (values: Partial<ObservatoryQueryResult> = {}): ObservatoryQueryResult => ({
+  usage: { requests: 1, inputTokens: 20, outputTokens: 5, totalTokens: 25, toolCalls: 0, toolErrors: 0 },
   auditId: "audit-1",
   sourceId: source.id,
   question: "前 10 条用户",

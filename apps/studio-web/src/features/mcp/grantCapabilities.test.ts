@@ -37,6 +37,7 @@ function version(input: {
     artifactObjectKey: null,
     artifactSize: null,
     imageDigest: null,
+    remoteConfig: null,
     tools: input.tools ?? [],
     prompts: input.prompts ?? [],
     revision: 1,

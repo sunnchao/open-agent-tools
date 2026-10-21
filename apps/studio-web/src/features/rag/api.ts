@@ -1,4 +1,5 @@
 import { studioFetch } from "../../lib/client.js";
+import type { MessageUsage } from "../../types.js";
 
 export interface DocumentSource {
   source: string;
@@ -16,15 +17,24 @@ export interface DocumentSource {
   chunkOverlap: number;
   separators: string[];
   semanticThreshold: number | null;
+  /** 是否经 OCR 兜底生成；旧服务端缺字段时前端按 false 处理。 */
+  ocrApplied: boolean;
+  /** none | text_layer | ocr | ocr_needed | ocr_failed */
+  ocrStatus: OcrStatus;
   createdAt: string;
   updatedAt: string;
 }
+
+export type OcrStatus = "none" | "text_layer" | "ocr" | "ocr_needed" | "ocr_failed";
 
 export interface DocumentStats {
   sources: DocumentSource[];
   chunks: number;
   embeddingsEnabled: boolean;
   llmAvailable: boolean;
+  ocrEnabled: boolean;
+  ocrMinCharsPerPage: number;
+  ocrMaxPagesSync: number;
   chunkSize: number;
   chunkOverlap: number;
   chunkStrategy: ChunkStrategy;
@@ -43,19 +53,93 @@ export interface ChunkInfo {
   hasEmbedding: boolean;
 }
 
+export interface RetrievalChannelHit {
+  id: string;
+  source: string;
+  chunkIndex: number;
+  content: string;
+  score: number;
+  rank: number;
+}
+
+export interface QueryChunkHit extends RetrievalChannelHit {
+  debug?: {
+    vectorScore: number | null;
+    vectorRank: number | null;
+    keywordScore: number | null;
+    keywordRank: number | null;
+    rrfScore: number;
+    channels: Array<"vector" | "keyword">;
+  };
+}
+
+export interface RetrievalPayload {
+  store: string;
+  embeddingsEnabled: boolean;
+  candidates: number;
+  rrfK: number;
+  timingsMs: { vectorMs: number | null; keywordMs: number; fusionMs: number };
+  vectorHits: RetrievalChannelHit[];
+  keywordHits: RetrievalChannelHit[];
+}
+
 export interface QueryResult {
+  usage?: MessageUsage;
   queryId: string;
   query: string;
-  chunks: Array<{
-    id: string;
-    source: string;
-    chunkIndex: number;
-    content: string;
-    score: number;
-  }>;
+  chunks: QueryChunkHit[];
+  /** 双路明细：与 chunks[].debug 同源，老服务端缺失时前端降级只展示 RRF。 */
+  retrieval?: RetrievalPayload;
   answer: string | null;
   generate: boolean;
   llmAvailable: boolean;
+}
+
+export type QueryDetailTraceHit = RetrievalChannelHit;
+
+export interface QueryDetailTraceChunk extends RetrievalChannelHit {
+  vectorScore: number | null;
+  vectorRank: number | null;
+  keywordScore: number | null;
+  keywordRank: number | null;
+  rrfScore: number;
+  channels: Array<"vector" | "keyword">;
+}
+
+export interface QueryDetail {
+  id: string;
+  query: string;
+  sources: string[];
+  sourceCount: number;
+  topK: number;
+  generate: boolean;
+  crag: boolean;
+  hitCount: number;
+  answerGenerated: boolean;
+  answer: string | null;
+  attribution: QueryAttribution;
+  assessment: string | null;
+  actions: string[];
+  latencyMs: number;
+  error: string | null;
+  createdAt: string;
+  feedback: QueryFeedbackRating | null;
+  feedbackComment: string | null;
+  trace: {
+    store: string;
+    embeddingsEnabled: boolean;
+    candidates: number;
+    rrfK: number;
+    timingsMs: { vectorMs: number | null; keywordMs: number; fusionMs: number };
+    visibleSources?: string[];
+    viewerGroups?: string[];
+    vectorHits: QueryDetailTraceHit[];
+    keywordHits: QueryDetailTraceHit[];
+    fused: QueryDetailTraceChunk[];
+    formatted?: string | null;
+    answer?: string | null;
+    truncated: boolean;
+  } | null;
 }
 
 export type QueryFeedbackRating = "positive" | "negative";
@@ -188,6 +272,10 @@ export function queryKnowledge(input: {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+export function getQueryDetail(queryId: string): Promise<{ detail: QueryDetail }> {
+  return request(`/query/${encodeURIComponent(queryId)}`);
 }
 
 export function getAnalyticsOverview(days = 14): Promise<AnalyticsOverview> {

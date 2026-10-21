@@ -264,6 +264,50 @@ describe("Control Plane HTTP API", () => {
     }
   });
 
+  it("allows an explicitly configured browser origin before authentication", async () => {
+    const corsApp = createControlPlaneApp({
+      management,
+      corsOrigin: "http://127.0.0.1:8088",
+      authenticate: () => null,
+    });
+    const corsServer = corsApp.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve, reject) => {
+      corsServer.once("listening", resolve);
+      corsServer.once("error", reject);
+    });
+
+    try {
+      const address = corsServer.address() as AddressInfo;
+      const url = `http://127.0.0.1:${address.port}/api/admin/mcp/services`;
+      const preflight = await fetch(url, {
+        method: "OPTIONS",
+        headers: {
+          origin: "http://127.0.0.1:8088",
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "authorization",
+        },
+      });
+      assert.equal(preflight.status, 204);
+      assert.equal(preflight.headers.get("access-control-allow-origin"), "http://127.0.0.1:8088");
+
+      const response = await fetch(url, {
+        headers: { origin: "http://127.0.0.1:8088" },
+      });
+      assert.equal(response.status, 401);
+      assert.equal(response.headers.get("access-control-allow-origin"), "http://127.0.0.1:8088");
+    } finally {
+      await new Promise<void>((resolve) => corsServer.close(() => resolve()));
+    }
+  });
+
+  it("does not enable cross-origin access by default", async () => {
+    const response = await fetch(`${baseUrl}/api/admin/mcp/services`, {
+      headers: { origin: "http://127.0.0.1:8088", "x-test-role": "operator" },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("access-control-allow-origin"), null);
+  });
+
   it("recreates a deleted service with the same slug over HTTP", async () => {
     const body = JSON.stringify({ name: "Web search", slug: "web-search", type: "MANAGED_MCP" });
     const first = await request("/api/admin/mcp/services", { method: "POST", body });
@@ -614,5 +658,144 @@ describe("Control Plane HTTP API", () => {
       "operator",
     );
     assert.equal(missingFork.status, 404);
+  });
+
+  it("manages REMOTE_MCP upstream config over HTTP with redacted tokens", async () => {
+    const created = await request(
+      "/api/admin/mcp/services",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          name: "Upstream",
+          slug: "upstream",
+          type: "REMOTE_MCP",
+          remote: {
+            transport: "streamable-http",
+            url: "https://mcp.example.com/mcp",
+            token: "super-secret",
+            timeoutMs: 15_000,
+          },
+        }),
+      },
+      "admin",
+    );
+    assert.equal(created.status, 201);
+    const createdPayload = (await created.json()) as {
+      service: { id: string };
+      draftVersion: {
+        id: string;
+        revision: number;
+        status: string;
+        remoteConfig: { url: string; hasToken: boolean; token?: string; timeoutMs: number };
+      };
+    };
+    // 创建即发布；token 脱敏，仅保留 hasToken。
+    assert.equal(createdPayload.draftVersion.status, "PUBLISHED");
+    assert.equal(createdPayload.draftVersion.remoteConfig.hasToken, true);
+    assert.ok(!("token" in createdPayload.draftVersion.remoteConfig));
+
+    const versions = (await (
+      await request(`/api/admin/mcp/services/${createdPayload.service.id}/versions`)
+    ).json()) as {
+      versions: Array<{ remoteConfig: { hasToken: boolean; token?: string } | null }>;
+    };
+    assert.equal(versions.versions[0]?.remoteConfig?.hasToken, true);
+    assert.ok(!("token" in (versions.versions[0]?.remoteConfig ?? {})));
+
+    // 已发布版本不可直接改远端配置。
+    const immutable = await request(
+      `/api/admin/mcp/services/${createdPayload.service.id}/versions/${createdPayload.draftVersion.id}/remote-config`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedRevision: createdPayload.draftVersion.revision,
+          remote: {},
+        }),
+      },
+      "admin",
+    );
+    assert.equal(immutable.status, 409);
+
+    // fork 草稿后可改；空 token=保留已有。
+    const fork = await request(
+      `/api/admin/mcp/services/${createdPayload.service.id}/versions/${createdPayload.draftVersion.id}/fork-draft`,
+      { method: "POST", body: JSON.stringify({}) },
+      "operator",
+    );
+    assert.equal(fork.status, 200);
+    const forkPayload = (await fork.json()) as {
+      version: { id: string; revision: number; remoteConfig: { hasToken: boolean } };
+    };
+    const updated = await request(
+      `/api/admin/mcp/services/${createdPayload.service.id}/versions/${forkPayload.version.id}/remote-config`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedRevision: forkPayload.version.revision,
+          remote: { url: "https://mcp.example.com/v2", token: "" },
+        }),
+      },
+      "admin",
+    );
+    assert.equal(updated.status, 200);
+    const updatedPayload = (await updated.json()) as {
+      version: { remoteConfig: { url: string; hasToken: boolean; token?: string } };
+    };
+    // 空字符串=清除 token。
+    assert.equal(updatedPayload.version.remoteConfig.url, "https://mcp.example.com/v2");
+    assert.equal(updatedPayload.version.remoteConfig.hasToken, false);
+    assert.ok(!("token" in updatedPayload.version.remoteConfig));
+
+    // MANAGED 版本没有远端配置。
+    const managed = await request(
+      "/api/admin/mcp/services",
+      { method: "POST", body: JSON.stringify({ name: "M", slug: "m", type: "MANAGED_MCP" }) },
+      "admin",
+    );
+    const managedPayload = (await managed.json()) as {
+      service: { id: string };
+      draftVersion: { id: string; revision: number };
+    };
+    const misuse = await request(
+      `/api/admin/mcp/services/${managedPayload.service.id}/versions/${managedPayload.draftVersion.id}/remote-config`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedRevision: managedPayload.draftVersion.revision,
+          remote: {},
+        }),
+      },
+      "admin",
+    );
+    assert.equal(misuse.status, 409);
+  });
+
+  it("rejects unreachable remote upstreams with a 502 probe error", async () => {
+    const probe = await request(
+      "/api/admin/mcp/remote/test-connection",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          remote: { transport: "streamable-http", url: "ftp://mcp.example.com/mcp" },
+        }),
+      },
+      "admin",
+    );
+    // 非法 URL 在输入校验阶段即被拒绝。
+    assert.equal(probe.status, 400);
+
+    const unreachable = await request(
+      "/api/admin/mcp/remote/test-connection",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          remote: { transport: "streamable-http", url: "http://127.0.0.1:1/mcp", timeoutMs: 500 },
+        }),
+      },
+      "admin",
+    );
+    assert.equal(unreachable.status, 502);
+    const payload = (await unreachable.json()) as { error: { code: string } };
+    assert.equal(payload.error.code, "UPSTREAM_ERROR");
   });
 });

@@ -23,6 +23,74 @@ interface StubServer {
   close: () => Promise<void>;
 }
 
+/** SSE 上游桩：GET /sse 建流（下发 message endpoint），POST /message 收发 JSON-RPC。 */
+function startSseStub(): Promise<StubServer> {
+  return new Promise((resolve) => {
+    const calls: StubCall[] = [];
+    let stream: ServerResponse | null = null;
+    const server = createServer((request, response) => {
+      if (request.method === "GET" && (request.url ?? "").startsWith("/sse")) {
+        calls.push({ method: request.method, headers: request.headers, body: {} });
+        response.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        response.write("event: endpoint\ndata: /message?sessionId=sse-1\n\n");
+        stream = response;
+        return;
+      }
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        const body = text.length > 0 ? JSON.parse(text) : {};
+        calls.push({ method: request.method, headers: request.headers, body });
+        const target = stream;
+        const { method, id } = body as { method?: string; id?: unknown };
+        const reply = (result: unknown): void => {
+          target?.write(
+            `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id, result })}\n\n`,
+          );
+        };
+        if (method === "initialize") {
+          reply({
+            protocolVersion: "2024-11-05",
+            capabilities: { tools: {} },
+            serverInfo: { name: "upstream-sse", version: "1.0.0" },
+          });
+        } else if (method === "tools/list") {
+          reply({
+            tools: [
+              {
+                name: "sse_echo",
+                description: "Echo over SSE",
+                inputSchema: { type: "object", properties: { text: { type: "string" } } },
+              },
+            ],
+          });
+        } else if (method === "tools/call") {
+          const params = (body as { params?: { arguments?: { text?: string } } }).params;
+          reply({ content: [{ type: "text", text: `sse:${String(params?.arguments?.text)}` }] });
+        }
+        // notifications/initialized 等无需回包。
+        response.writeHead(202);
+        response.end();
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      const stub: StubServer = {
+        url: `http://127.0.0.1:${port}/sse`,
+        calls,
+        close: () => new Promise((done) => server.close(() => done())),
+      };
+      openServers.push(stub);
+      resolve(stub);
+    });
+  });
+}
+
 const openServers: StubServer[] = [];
 
 afterEach(async () => {
@@ -266,5 +334,42 @@ describe("RemoteMcpProxy", () => {
 
     const proxy = new RemoteMcpProxy(config(stub.url, { timeoutMs: 30 }));
     await assert.rejects(proxy.listTools(), /timed out/);
+  });
+
+  it("lists and calls tools over the SSE transport", async () => {
+    const stub = await startSseStub();
+    const proxy = new RemoteMcpProxy(config(stub.url, { transport: "sse" }));
+
+    assert.deepEqual(await proxy.listTools(), [
+      {
+        name: "sse_echo",
+        description: "Echo over SSE",
+        inputSchema: { type: "object", properties: { text: { type: "string" } } },
+      },
+    ]);
+    assert.deepEqual(await proxy.callTool("sse_echo", { text: "hi" }), {
+      content: [{ type: "text", text: "sse:hi" }],
+    });
+    const methods = stub.calls.map((call) => call.body.method ?? call.method);
+    assert.ok(methods.includes("initialize"));
+    assert.ok(methods.includes("tools/list"));
+    assert.ok(methods.includes("tools/call"));
+  });
+
+  it("sends the bearer token to SSE streams and messages", async () => {
+    const stub = await startSseStub();
+    const proxy = new RemoteMcpProxy(
+      config(stub.url, { transport: "sse", token: "sse-secret", headers: { "x-tenant": "acme" } }),
+    );
+
+    await proxy.listTools();
+    const getCall = stub.calls.find((call) => call.method === "GET");
+    assert.equal(getCall?.headers.authorization, "Bearer sse-secret");
+    const posts = stub.calls.filter((call) => call.method === "POST");
+    assert.ok(posts.length > 0);
+    for (const post of posts) {
+      assert.equal(post.headers.authorization, "Bearer sse-secret");
+      assert.equal(post.headers["x-tenant"], "acme");
+    }
   });
 });

@@ -12,6 +12,7 @@ async function startServer() {
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
   app.post("/api/query", (_req, res) => res.json({ scope: res.locals.ragScope }));
   app.get("/api/documents", (_req, res) => res.json({ scope: res.locals.ragScope }));
+  app.get("/api/usage/events", (_req, res) => res.json({ scope: res.locals.ragScope }));
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -43,6 +44,7 @@ test("runtime token can query but cannot use admin endpoints", async () => {
     assert.equal(query.status, 200);
     assert.deepEqual(await query.json(), { scope: "runtime" });
     assert.equal((await fetch(`${origin}/api/documents`, { headers })).status, 401);
+    assert.equal((await fetch(`${origin}/api/usage/events`, { headers })).status, 401);
   } finally {
     await closeServer(server);
   }
@@ -56,6 +58,9 @@ test("admin token can access runtime and admin endpoints", async () => {
     const docs = await fetch(`${origin}/api/documents`, { headers });
     assert.equal(docs.status, 200);
     assert.deepEqual(await docs.json(), { scope: "admin" });
+    const usage = await fetch(`${origin}/api/usage/events`, { headers });
+    assert.equal(usage.status, 200);
+    assert.deepEqual(await usage.json(), { scope: "admin" });
   } finally {
     await closeServer(server);
   }

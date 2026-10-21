@@ -1,3 +1,4 @@
+import cors from "cors";
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import {
   ExecutionLimitsSchema,
@@ -5,6 +6,8 @@ import {
   PromptArgumentSchema,
   PromptDefinitionSchema,
   PromptMessageSchema,
+  RemoteServiceConfigPatchSchema,
+  RemoteServiceConfigSchema,
   ToolEnvironmentUpdateSchema,
 } from "@open-agent-tools/mcp-contracts";
 import { z, ZodError } from "zod";
@@ -14,7 +17,12 @@ import type { AuditService } from "./audit.js";
 import type { ArtifactBuildQueue } from "./build-queue.js";
 import type { ClientAccessService } from "./client-access.js";
 import type { McpScope } from "./client-access-repository.js";
-import { ManagementError, type McpManagementService } from "./management.js";
+import {
+  ManagementError,
+  maskVersionRemoteConfig,
+  type McpManagementService,
+} from "./management.js";
+import type { McpServiceVersionRecord } from "./types.js";
 import type { ObservabilityService } from "./observability/overview.js";
 import type { Actor } from "./types.js";
 
@@ -26,6 +34,7 @@ export interface ControlPlaneAppOptions {
   audit?: AuditService;
   observability?: ObservabilityService;
   authenticate?: (request: Request) => Actor | null | Promise<Actor | null>;
+  corsOrigin?: string | false;
 }
 
 const ANONYMOUS_ADMIN_ACTOR = Object.freeze({ id: "anonymous", role: "admin" } satisfies Actor);
@@ -48,6 +57,22 @@ const UpdateVersionLimitsBodySchema = z
   .object({
     expectedRevision: z.number().int().positive(),
     limits: ExecutionLimitsSchema,
+  })
+  .strict();
+const UpdateRemoteConfigBodySchema = z
+  .object({
+    expectedRevision: z.number().int().positive(),
+    remote: RemoteServiceConfigPatchSchema,
+  })
+  .strict();
+const TestRemoteConnectionBodySchema = z
+  .object({
+    remote: RemoteServiceConfigSchema,
+  })
+  .strict();
+const TestSavedRemoteConnectionBodySchema = z
+  .object({
+    remote: RemoteServiceConfigSchema.optional(),
   })
   .strict();
 const ToolPatchSchema = ManagedToolSchema.partial().strict();
@@ -137,14 +162,30 @@ function statusForError(error: ManagementError): number {
     case "IMMUTABLE_VERSION":
     case "INVALID_STATE":
       return 409;
+    case "UPSTREAM_ERROR":
+      return 502;
     case "VALIDATION_ERROR":
       return 400;
   }
 }
 
+/** 版本对外呈现：远端 token 脱敏，仅保留 hasToken。 */
+function presentVersion(version: McpServiceVersionRecord) {
+  return maskVersionRemoteConfig(version);
+}
+
 export function createControlPlaneApp(options: ControlPlaneAppOptions): Express {
   const app = express();
   const { management } = options;
+  if (options.corsOrigin) {
+    app.use(
+      cors({
+        origin: options.corsOrigin,
+        methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Authorization", "Content-Type", "X-Request-Id"],
+      }),
+    );
+  }
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/health", (_request, response) => {
@@ -252,7 +293,10 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
         { name: body.name ?? "", slug: body.slug ?? "", remote: body.remote },
         actorFrom(response),
       );
-      response.status(201).json(created);
+      response.status(201).json({
+        service: created.service,
+        draftVersion: presentVersion(created.draftVersion),
+      });
       return;
     }
     if (body.type !== "MANAGED_MCP") {
@@ -265,7 +309,10 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
       { name: body.name ?? "", slug: body.slug ?? "" },
       actorFrom(response),
     );
-    response.status(201).json(created);
+    response.status(201).json({
+      service: created.service,
+      draftVersion: presentVersion(created.draftVersion),
+    });
   });
 
   app.get("/api/admin/mcp/services/:serviceId", async (request, response) => {
@@ -344,11 +391,16 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
 
   app.get("/api/admin/mcp/services/:serviceId/versions", async (request, response) => {
     response.json({
-      versions: await management.listVersions(
-        request.params.serviceId as string,
-        actorFrom(response),
-      ),
+      versions: (
+        await management.listVersions(request.params.serviceId as string, actorFrom(response))
+      ).map(presentVersion),
     });
+  });
+
+  /** 新建前测试：用表单填写的完整远端配置探测上游，不落库。 */
+  app.post("/api/admin/mcp/remote/test-connection", async (request, response) => {
+    const body = TestRemoteConnectionBodySchema.parse(request.body);
+    response.json(await management.testRemoteConnection(body.remote, actorFrom(response)));
   });
 
   app.put(
@@ -357,13 +409,51 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
       await assertRouteVersion(request, actorFrom(response));
       const body = UpdateVersionLimitsBodySchema.parse(request.body);
       response.json({
-        version: await management.updateVersionLimits(
-          request.params.versionId as string,
-          body.limits,
-          body.expectedRevision,
-          actorFrom(response),
+        version: presentVersion(
+          await management.updateVersionLimits(
+            request.params.versionId as string,
+            body.limits,
+            body.expectedRevision,
+            actorFrom(response),
+          ),
         ),
       });
+    },
+  );
+
+  app.put(
+    "/api/admin/mcp/services/:serviceId/versions/:versionId/remote-config",
+    async (request, response) => {
+      await assertRouteVersion(request, actorFrom(response));
+      const body = UpdateRemoteConfigBodySchema.parse(request.body);
+      response.json({
+        version: presentVersion(
+          await management.updateRemoteConfig(
+            request.params.versionId as string,
+            body.remote,
+            body.expectedRevision,
+            actorFrom(response),
+          ),
+        ),
+      });
+    },
+  );
+
+  app.post(
+    "/api/admin/mcp/services/:serviceId/versions/:versionId/test-connection",
+    async (request, response) => {
+      const version = await assertRouteVersion(request, actorFrom(response));
+      const body = TestSavedRemoteConnectionBodySchema.parse(request.body);
+      const saved = version.remoteConfig;
+      if (!body.remote && !saved) {
+        throw new ManagementError("INVALID_STATE", "Remote version has no upstream configuration");
+      }
+      // 表单 token 留空=保留已有：用已保存 token 补齐后再探测，才能真实反映发布后行为。
+      const remote =
+        body.remote && saved?.token && body.remote.token === undefined
+          ? { ...body.remote, token: saved.token }
+          : (body.remote ?? saved!);
+      response.json(await management.testRemoteConnection(remote, actorFrom(response)));
     },
   );
 
@@ -386,7 +476,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
         body.expectedRevision,
         actorFrom(response),
       );
-      response.status(201).json({ version });
+      response.status(201).json({ version: presentVersion(version) });
     },
   );
 
@@ -396,12 +486,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
       await assertRouteVersion(request, actorFrom(response));
       const body = UpdateToolBodySchema.parse(request.body);
       response.json({
-        version: await management.updateTool(
-          request.params.versionId as string,
-          request.params.toolId as string,
-          body.tool,
-          body.expectedRevision,
-          actorFrom(response),
+        version: presentVersion(
+          await management.updateTool(
+            request.params.versionId as string,
+            request.params.toolId as string,
+            body.tool,
+            body.expectedRevision,
+            actorFrom(response),
+          ),
         ),
       });
     },
@@ -441,7 +533,7 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
         body.expectedRevision,
         actorFrom(response),
       );
-      response.status(201).json({ version });
+      response.status(201).json({ version: presentVersion(version) });
     },
   );
 
@@ -451,12 +543,14 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
       await assertRouteVersion(request, actorFrom(response));
       const body = UpdatePromptBodySchema.parse(request.body);
       response.json({
-        version: await management.updatePrompt(
-          request.params.versionId as string,
-          request.params.promptId as string,
-          body.prompt,
-          body.expectedRevision,
-          actorFrom(response),
+        version: presentVersion(
+          await management.updatePrompt(
+            request.params.versionId as string,
+            request.params.promptId as string,
+            body.prompt,
+            body.expectedRevision,
+            actorFrom(response),
+          ),
         ),
       });
     },
@@ -499,10 +593,12 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
       await assertRouteVersion(request, actorFrom(response));
       const body = ExpectedRevisionSchema.parse(request.body);
       response.json({
-        version: await management.validateVersion(
-          request.params.versionId as string,
-          body.expectedRevision,
-          actorFrom(response),
+        version: presentVersion(
+          await management.validateVersion(
+            request.params.versionId as string,
+            body.expectedRevision,
+            actorFrom(response),
+          ),
         ),
       });
     },
@@ -514,10 +610,12 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
       await assertRouteVersion(request, actorFrom(response));
       const body = ExpectedRevisionSchema.parse(request.body);
       response.json({
-        version: await management.resetVersionToDraft(
-          request.params.versionId as string,
-          body.expectedRevision,
-          actorFrom(response),
+        version: presentVersion(
+          await management.resetVersionToDraft(
+            request.params.versionId as string,
+            body.expectedRevision,
+            actorFrom(response),
+          ),
         ),
       });
     },
@@ -527,10 +625,12 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
     "/api/admin/mcp/services/:serviceId/versions/:versionId/fork-draft",
     async (request, response) => {
       response.json({
-        version: await management.forkDraftVersion(
-          request.params.serviceId as string,
-          request.params.versionId as string,
-          actorFrom(response),
+        version: presentVersion(
+          await management.forkDraftVersion(
+            request.params.serviceId as string,
+            request.params.versionId as string,
+            actorFrom(response),
+          ),
         ),
       });
     },
@@ -541,13 +641,15 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
     async (request, response) => {
       await assertRouteVersion(request, actorFrom(response));
       const body = ExpectedRevisionSchema.parse(request.body);
-      response.json(
-        await management.publishVersion(
-          request.params.versionId as string,
-          body.expectedRevision,
-          actorFrom(response),
-        ),
+      const published = await management.publishVersion(
+        request.params.versionId as string,
+        body.expectedRevision,
+        actorFrom(response),
       );
+      response.json({
+        service: published.service,
+        version: presentVersion(published.version),
+      });
     },
   );
 
@@ -556,14 +658,16 @@ export function createControlPlaneApp(options: ControlPlaneAppOptions): Express 
     async (request, response) => {
       await assertRouteVersion(request, actorFrom(response));
       const body = ExpectedRevisionSchema.parse(request.body);
-      response.json(
-        await management.rollbackVersion(
-          request.params.serviceId as string,
-          request.params.versionId as string,
-          body.expectedRevision,
-          actorFrom(response),
-        ),
+      const rolledBack = await management.rollbackVersion(
+        request.params.serviceId as string,
+        request.params.versionId as string,
+        body.expectedRevision,
+        actorFrom(response),
       );
+      response.json({
+        service: rolledBack.service,
+        version: presentVersion(rolledBack.version),
+      });
     },
   );
 

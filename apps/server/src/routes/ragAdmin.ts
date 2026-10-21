@@ -2,6 +2,7 @@ import http, { type IncomingMessage } from "node:http";
 import https from "node:https";
 import { Router, type Request, type Response } from "express";
 import { logTrace, truncate } from "../trace.js";
+import { resolveWorkspace } from "../workspace.js";
 
 export const ragAdminRouter: ReturnType<typeof Router> = Router();
 
@@ -24,6 +25,11 @@ ragAdminRouter.use("/api/admin/rag", async (req: Request, res: Response) => {
     return;
   }
   const { baseUrl, token } = config();
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+    return;
+  }
   const target = `${baseUrl}${req.originalUrl.replace(/^\/api\/admin\/rag/, "")}`;
   const headers = new Headers();
   for (const [name, value] of Object.entries(req.headers)) {
@@ -32,6 +38,7 @@ ragAdminRouter.use("/api/admin/rag", async (req: Request, res: Response) => {
     else if (Array.isArray(value)) value.forEach((item) => headers.append(name, item));
   }
   if (token) headers.set("authorization", `Bearer ${token}`);
+  headers.set("x-workspace-id", workspace.workspaceId);
 
   try {
     await proxyRequest(req, res, target, headers);

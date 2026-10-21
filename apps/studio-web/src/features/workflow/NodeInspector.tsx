@@ -21,7 +21,7 @@ import { TemplateField } from "./TemplateField.js";
 import { ExecutionPolicyEditor } from "./ExecutionPolicyEditor.js";
 import { HttpNodeEditor } from "./HttpNodeEditor.js";
 import { SqlQueryNodeEditor } from "./SqlQueryNodeEditor.js";
-import { nodeInputs } from "./model.js";
+import { nodeInputs, validateNodeResources } from "./model.js";
 import { useEffect, useState } from "react";
 import { PlayCircleOutlined, ReloadOutlined } from "../../lib/icons.js";
 import type { ProviderMetadata } from "../../features/providers/api.js";
@@ -102,6 +102,7 @@ export function NodeInspector({
   );
   const availableRagSources = new Set(catalog?.rag.sources.map((source) => source.source) ?? []);
   const missingRagSources = ragSources.filter((source) => !availableRagSources.has(source));
+  const graphResourceError = data.kind === "graph" ? validateNodeResources(data, catalog) : null;
   return (
     <Form component="div" layout="vertical" className="inspector-content node-inspector-content">
       <Flex className="inspector-title-row">
@@ -116,8 +117,8 @@ export function NodeInspector({
           className="node-test-command"
           type="text"
           htmlType="button"
-          disabled={testDisabled}
-          title="单独测试当前节点"
+          disabled={testDisabled || Boolean(graphResourceError)}
+          title={graphResourceError ? `节点检查不通过：${graphResourceError}` : "单独测试当前节点"}
           onClick={onTest}
         >
           <PlayCircleOutlined /> {testPending ? "测试中" : "测试运行"}
@@ -148,7 +149,7 @@ export function NodeInspector({
         <NodeTestResultPanel
           result={testResult}
           pending={testPending}
-          disabled={testDisabled}
+          disabled={testDisabled || Boolean(graphResourceError)}
           onTest={onTest}
         />
       ) : (
@@ -306,7 +307,7 @@ export function NodeInspector({
                 />
               ) : null}
               {resourceError &&
-              (data.kind === "rag" || data.kind === "mcp" || data.kind === "sql") ? (
+              (data.kind === "rag" || data.kind === "graph" || data.kind === "mcp" || data.kind === "sql") ? (
                 <Alert
                   className="node-resource-alert"
                   type="error"
@@ -327,9 +328,12 @@ export function NodeInspector({
                   showIcon
                 />
               ) : null}
-              {data.kind === "rag" ? (
+              {data.kind === "rag" || data.kind === "graph" ? (
                 <>
-                  <Form.Item label="挂载文档">
+                  <Form.Item
+                    label={data.kind === "graph" ? "图谱文档（至少选择一个）" : "挂载文档"}
+                    extra={data.kind === "graph" ? "仅在所选文档的实体与关系中检索，不会检索其他文档。" : undefined}
+                  >
                     <Flex vertical className="workflow-resource-options">
                       {missingRagSources.map((source) => (
                         <Checkbox
@@ -380,15 +384,25 @@ export function NodeInspector({
                       )}
                     </Flex>
                   </Form.Item>
-                  <Form.Item label={`Top-K · ${String(data.config.topK)}`}>
-                    <Slider
-                      ariaLabelForHandle="Top-K"
-                      min={1}
-                      max={10}
-                      value={Number(data.config.topK)}
-                      onChange={(value) => updateConfig("topK", value)}
+                  {graphResourceError ? (
+                    <Alert
+                      className="node-resource-alert"
+                      type="error"
+                      title={`节点检查不通过：${graphResourceError}`}
+                      showIcon
                     />
-                  </Form.Item>
+                  ) : null}
+                  {data.kind === "rag" ? (
+                    <Form.Item label={`Top-K · ${String(data.config.topK)}`}>
+                      <Slider
+                        ariaLabelForHandle="Top-K"
+                        min={1}
+                        max={10}
+                        value={Number(data.config.topK)}
+                        onChange={(value) => updateConfig("topK", value)}
+                      />
+                    </Form.Item>
+                  ) : null}
                 </>
               ) : null}
               {data.kind === "graph" || data.kind === "rag" ? (
@@ -539,7 +553,7 @@ export function NodeInspector({
                   />
                 </>
               ) : null}
-              {(data.kind === "rag" || data.kind === "mcp") && !loading ? (
+              {(data.kind === "rag" || data.kind === "graph" || data.kind === "mcp") && !loading ? (
                 <Button
                   className="resource-refresh-link"
                   type="text"

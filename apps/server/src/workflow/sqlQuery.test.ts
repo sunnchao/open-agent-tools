@@ -6,6 +6,7 @@ import { runWorkflowSqlQuery, WorkflowSqlError, type WorkflowSqlResult } from ".
 import { executeWorkflow, executeWorkflowNodeTest, type WorkflowEvent } from "./executor.js";
 
 const queryResult = (values: Partial<ObservatoryQueryResult> = {}): ObservatoryQueryResult => ({
+  usage: { requests: 1, inputTokens: 20, outputTokens: 5, totalTokens: 25, toolCalls: 0, toolErrors: 0 },
   sourceId: "ops",
   question: "用户",
   auditId: "audit-1",

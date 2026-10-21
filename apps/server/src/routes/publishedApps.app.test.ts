@@ -8,6 +8,7 @@ import { after, before, describe, it } from "node:test";
 import { createApp } from "../app.js";
 import { closeDb } from "../db.js";
 import { createProvider, setDefaultProvider } from "../providers/store.js";
+import { listRecentUsage } from "../usage.js";
 
 let server: Server;
 let origin: string;
@@ -135,6 +136,8 @@ describe("published apps", () => {
     assert.match(body, /"delta":"你好"/);
     assert.match(body, /"done":true/);
     assert.match(body, /"totalTokens":38/);
+    assert.match(body, /"requests":1/);
+    assert.equal(listRecentUsage()[0]?.source, "app_chat");
   });
 
   it("ignores caller-supplied resources and model on the public endpoint", async () => {

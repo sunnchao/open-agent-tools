@@ -167,7 +167,7 @@ The test drops and recreates the target database's `public` schema and must use 
 
 ## Current limitations
 
-- Only managed MCP services are supported; remote MCP forwarding is not wired in.
+- Remote MCP (`REMOTE_MCP`) proxies upstream `tools/list`/`tools/call` (Streamable HTTP and SSE) while local Prompts are still rendered by the Gateway; upstream Prompts/Resources proxying and Tool list caching are not supported yet.
 - Each request creates a stateless MCP Server; long-lived sessions are not provided.
 - Distributed authorization/capability caching and active invalidation are not integrated yet.
 - Production rate limits, concurrency quotas, and complete observability must be supplied by the gateway infrastructure.

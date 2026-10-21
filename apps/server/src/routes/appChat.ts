@@ -7,7 +7,6 @@ import { listSchemaSources } from "../schemaSources/store.js";
 import { getDefaultProvider, getProvider } from "../providers/store.js";
 import { createLlmClient } from "../providers/clients/index.js";
 import { normalizeResourceBindings } from "../resources.js";
-import { recordUsageEvent } from "../usage.js";
 import { logDebugDuration, logTrace, truncate } from "../trace.js";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
 import { ChatTurnError, streamChatTurn, usageSnapshot, type ChatTurnUsage } from "./chatCore.js";
@@ -222,6 +221,8 @@ appChatRouter.post("/api/apps/:slug/chat", async (req: Request, res: Response) =
             send,
             span,
             schemaSources,
+            usageSource: "app_chat",
+            onUsage: (usage) => { turnUsage = usage; },
           });
           fullContent = result.fullContent;
           toolRounds = result.toolRounds;
@@ -251,20 +252,6 @@ appChatRouter.post("/api/apps/:slug/chat", async (req: Request, res: Response) =
       });
     }
     const snapshot = turnUsage ? usageSnapshot(turnUsage) : null;
-    if (snapshot) {
-      recordUsageEvent({
-        kind: "chat",
-        workspaceId,
-        sessionId: resolvedSessionId,
-        providerId: provider.id,
-        model,
-        inputTokens: snapshot.inputTokens,
-        outputTokens: snapshot.outputTokens,
-        toolCalls: snapshot.toolCalls,
-        durationMs: Date.now() - chatStartedAt,
-        status: outcome === "error" ? "error" : "ok",
-      });
-    }
     logDebugDuration("app_chat.done", chatStartedAt, {
       slug: app.slug,
       toolRounds,

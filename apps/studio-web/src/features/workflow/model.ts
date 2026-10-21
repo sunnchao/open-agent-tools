@@ -64,6 +64,7 @@ export function defaultConfig(kind: NodeKind): Record<string, WorkflowConfigValu
   if (kind === "rag") return { sources: [], topK: 5, query: "{{query}}", inputs: [], outputs: [] };
   if (kind === "graph")
     return {
+      sources: [],
       query: "{{query}}",
       inputs: [],
       outputs: [{ name: "formatted", selector: "$result.formatted" }],
@@ -228,6 +229,19 @@ export function validateNodeResources(
     const available = new Set(catalog.rag.sources.map((source) => source.source));
     const missing = sources.find((source) => !available.has(source));
     if (missing) return `RAG 文档已失效：${missing}`;
+  }
+
+  if (data.kind === "graph") {
+    const sources = data.config.sources;
+    if (!Array.isArray(sources) || sources.length === 0) return "图谱检索至少选择一个文档";
+    if (sources.some((source) => typeof source !== "string" || !source.trim())) {
+      return "图谱检索文档配置无效，请重新选择文档";
+    }
+    if (!catalog) return "资源目录尚未加载，无法校验图谱文档";
+    if (catalog.rag.error) return `图谱文档加载失败：${catalog.rag.error}`;
+    const available = new Set(catalog.rag.sources.map((source) => source.source));
+    const missing = sources.find((source) => !available.has(source));
+    if (missing) return `图谱文档已失效：${missing}`;
   }
 
   if (data.kind === "mcp") {

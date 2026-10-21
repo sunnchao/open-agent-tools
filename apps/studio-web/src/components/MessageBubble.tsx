@@ -1,9 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Alert, Button, Card } from "antd";
-import { CopyOutlined, ReloadOutlined } from "../lib/icons.js";
+import { CopyOutlined, DownOutlined, ReloadOutlined, UpOutlined } from "../lib/icons.js";
 import type {
   Message,
-  MessageUsage,
   RagCitation,
   SqlResultProps,
   ToolCall,
@@ -14,6 +13,7 @@ import { CitationViewer } from "./CitationViewer.js";
 import { FinancialReportCard } from "./FinancialReportCard.js";
 import { SqlResultCard } from "./SqlResultCard.js";
 import { ToolCalls } from "./ToolCalls.js";
+import { UsageTag } from "./UsageTag.js";
 
 interface MessageBubbleProps {
   message: Message;
@@ -71,6 +71,9 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
             }
             style={{ maxWidth: 640, width: "100%" }}
           />
+          <div className="msg-meta">
+            <UsageTag usage={message.usage} />
+          </div>
         </div>
       </div>
     );
@@ -164,7 +167,7 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
         <div className="msg-meta">
           <span>{formatTime(message.createdAt)}</span>
           {isStopped ? <span>已停止生成</span> : null}
-          <MessageUsageTag usage={message.usage} />
+          <UsageTag usage={message.usage} />
           {canRegenerate ? (
             <Button
               type="link"
@@ -183,57 +186,116 @@ export function MessageBubble({ message, onRetry, onRegenerate }: MessageBubbleP
   );
 }
 
-/** token 与工具用量标签：与 `/api/admin/usage` 同口径，便于成本对账。 */
-function MessageUsageTag({ usage }: { usage?: MessageUsage }) {
-  if (!usage || usage.totalTokens <= 0) return null;
-  const parts = [`${formatTokens(usage.totalTokens)} tokens`];
-  if (usage.toolCalls > 0) {
-    parts.push(
-      usage.toolErrors > 0
-        ? `工具 ${usage.toolCalls} 次（${usage.toolErrors} 失败）`
-        : `工具 ${usage.toolCalls} 次`,
-    );
-  }
-  return (
-    <span title={`输入 ${usage.inputTokens} · 输出 ${usage.outputTokens}`}>
-      {parts.join(" · ")}
-    </span>
-  );
-}
-
-function formatTokens(value: number): string {
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-  return String(value);
-}
+/** 片段数超过该阈值时整个引用区默认折叠，避免长列表把对话撑爆。 */
+const CITATION_AUTO_OPEN_LIMIT = 5;
+/** 引用区展开后首屏最多展示的行数，其余收进「展开其余」按钮。 */
+const CITATION_VISIBLE_LIMIT = 8;
 
 function RagCitations({ citations }: { citations?: RagCitation[] }) {
+  const [sectionOpen, setSectionOpen] = useState(() => (citations?.length ?? 0) <= CITATION_AUTO_OPEN_LIMIT);
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const groups = useMemo(() => {
+    const ordered: { source: string; items: { citation: RagCitation; index: number }[] }[] = [];
+    const bySource = new Map<string, { source: string; items: { citation: RagCitation; index: number }[] }>();
+    for (const [index, citation] of (citations ?? []).entries()) {
+      let group = bySource.get(citation.source);
+      if (!group) {
+        group = { source: citation.source, items: [] };
+        bySource.set(citation.source, group);
+        ordered.push(group);
+      }
+      group.items.push({ citation, index });
+    }
+    return ordered;
+  }, [citations]);
+  // 首屏只展示前 N 个（按后端相关度排序），避免 render 期计数，保证并发渲染安全。
+  const visibleIndexes = useMemo(() => {
+    const set = new Set<number>();
+    const total = citations?.length ?? 0;
+    const limit = showAll ? total : Math.min(total, CITATION_VISIBLE_LIMIT);
+    for (let i = 0; i < limit; i += 1) set.add(i);
+    return set;
+  }, [citations, showAll]);
   if (!citations || citations.length === 0) return null;
+  const sourceCount = groups.length;
+  const hiddenCount = citations.length - visibleIndexes.size;
+  const toggleSection = () => {
+    setSectionOpen((open) => {
+      if (open) {
+        setExpanded(null);
+        setShowAll(false);
+      }
+      return !open;
+    });
+  };
   return (
     <section className="rag-citations" aria-label="引用文档">
-      <p className="rag-citations__title">引用文档 · {citations.length} 个片段</p>
-      <ul className="rag-citations__list">
-        {citations.map((citation, index) => {
-          const isOpen = expanded === index;
-          return (
-            <li className="rag-citation" key={`${citation.source}-${citation.chunkIndex}-${index}`}>
-              <Button
-                type="text"
-                block
-                className="rag-citation__toggle"
-                aria-expanded={isOpen}
-                onClick={() => setExpanded(isOpen ? null : index)}
-                style={{ height: "auto", textAlign: "left" }}
-              >
-                <span className="rag-citation__source">{citation.source}</span>
-                <span className="rag-citation__index">第 {Number(citation.chunkIndex) + 1} 段</span>
-                <span className="rag-citation__snippet">{citation.content}</span>
-              </Button>
-              {isOpen ? <CitationViewer citation={citation} /> : null}
-            </li>
-          );
-        })}
-      </ul>
+      <Button
+        type="text"
+        block
+        className="rag-citations__header"
+        aria-expanded={sectionOpen}
+        onClick={toggleSection}
+      >
+        <span className="rag-citations__title">
+          引用文档 · {citations.length} 个片段
+          {sourceCount > 1 ? ` · ${sourceCount} 个来源` : ` · ${groups[0]?.source ?? ""}`}
+        </span>
+        {sectionOpen ? <UpOutlined /> : <DownOutlined />}
+      </Button>
+      {sectionOpen ? (
+        <>
+          {groups.map((group) =>
+            group.items.some(({ index }) => visibleIndexes.has(index)) ? (
+            <div className="rag-citations__group" key={group.source}>
+              {sourceCount > 1 ? (
+                <p className="rag-citations__group-title">
+                  {group.source} · {group.items.length} 个片段
+                </p>
+              ) : null}
+              <ul className="rag-citations__list">
+              {group.items.map(({ citation, index }) => {
+                if (!visibleIndexes.has(index)) return null;
+                const isOpen = expanded === index;
+                return (
+                  <li
+                    className="rag-citation"
+                    key={`${citation.source}-${citation.chunkIndex}-${index}`}
+                  >
+                    <Button
+                      type="text"
+                      block
+                      className="rag-citation__toggle"
+                      aria-expanded={isOpen}
+                      onClick={() => setExpanded(isOpen ? null : index)}
+                      style={{ height: "auto", textAlign: "left" }}
+                    >
+                      <span className="rag-citation__index">
+                        第 {Number(citation.chunkIndex) + 1} 段
+                      </span>
+                      <span className="rag-citation__snippet">{citation.content}</span>
+                    </Button>
+                    {isOpen ? <CitationViewer citation={citation} /> : null}
+                  </li>
+                );
+              })}
+              </ul>
+            </div>
+            ) : null,
+          )}
+          {hiddenCount > 0 || showAll ? (
+            <Button
+              type="link"
+              size="small"
+              className="rag-citations__more"
+              onClick={() => setShowAll((all) => !all)}
+            >
+              {showAll ? "收起多余片段" : `展开其余 ${hiddenCount} 个片段`}
+            </Button>
+          ) : null}
+        </>
+      ) : null}
     </section>
   );
 }

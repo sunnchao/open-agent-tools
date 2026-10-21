@@ -5,6 +5,7 @@ import { openDb } from "../db.js";
 import type { HistoryTurn } from "../oneapiDemo/text2sql.js";
 import type { detectRowLimitIntent } from "../schema-inject.js";
 import { DEFAULT_WORKSPACE_ID } from "../workspace.js";
+import type { UsageSnapshot } from "../usageTracking.js";
 
 export const QUERY_STEPS = [
   { id: "source", label: "解析数据源" },
@@ -60,6 +61,7 @@ export interface QueryAuditSummary {
 }
 
 export interface QueryAuditRecord extends QueryAuditSummary {
+  usage?: UsageSnapshot;
   rowLimit?: ReturnType<typeof detectRowLimitIntent>;
   history: HistoryTurn[];
   steps: QueryStep[];

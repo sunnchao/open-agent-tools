@@ -56,8 +56,14 @@ const artifactUploads = new ArtifactUploadService(
   inspectionQueue.queue,
 );
 const queueMonitor = new QueueMonitor(inspectionQueue.queue, {
-  backlogWarning: numberEnvironment("OBSERVABILITY_QUEUE_BACKLOG_WARNING", DEFAULT_QUEUE_THRESHOLDS.backlogWarning),
-  backlogCritical: numberEnvironment("OBSERVABILITY_QUEUE_BACKLOG_CRITICAL", DEFAULT_QUEUE_THRESHOLDS.backlogCritical),
+  backlogWarning: numberEnvironment(
+    "OBSERVABILITY_QUEUE_BACKLOG_WARNING",
+    DEFAULT_QUEUE_THRESHOLDS.backlogWarning,
+  ),
+  backlogCritical: numberEnvironment(
+    "OBSERVABILITY_QUEUE_BACKLOG_CRITICAL",
+    DEFAULT_QUEUE_THRESHOLDS.backlogCritical,
+  ),
 });
 const observability = new ObservabilityService({ management, audit, queueMonitor });
 const alertLoop = createAlertLoop({
@@ -84,6 +90,7 @@ const app = createControlPlaneApp({
   buildQueue: inspectionQueue.queue,
   audit,
   observability,
+  corsOrigin: process.env.MCP_CORS_ORIGIN?.trim() || false,
 });
 const port = Number(process.env.PORT) || 4200;
 const server = app.listen(port, () => {

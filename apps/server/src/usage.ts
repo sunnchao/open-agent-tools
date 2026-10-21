@@ -3,9 +3,12 @@ import { DEFAULT_WORKSPACE_ID, openDb } from "./db.js";
 
 export type UsageEventKind = "chat" | "tool";
 export type UsageToolKind = "mcp" | "sql" | "builtin";
+export type UsageSource = "web_chat" | "app_chat" | "sql_query" | "rag_query" | "rag_graph";
 
 export interface UsageEventInput {
   kind: UsageEventKind;
+  source?: UsageSource;
+  requests?: number;
   workspaceId?: string | null;
   sessionId?: string | null;
   providerId?: string | null;
@@ -28,6 +31,15 @@ export interface UsageEvent extends UsageEventInput {
   toolCalls: number;
   durationMs: number;
   status: "ok" | "error" | "cancelled";
+  source: UsageSource;
+  requests: number;
+}
+
+export interface UsageBreakdown {
+  chatTurns: number;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
 }
 
 export interface UsageSummary {
@@ -36,6 +48,7 @@ export interface UsageSummary {
   totals: {
     events: number;
     chatTurns: number;
+    requests: number;
     toolCalls: number;
     inputTokens: number;
     outputTokens: number;
@@ -43,17 +56,27 @@ export interface UsageSummary {
     chatDurationMs: number;
     toolDurationMs: number;
   };
-  byModel: Array<{ model: string; chatTurns: number; inputTokens: number; outputTokens: number }>;
+  byModel: Array<{ model: string } & UsageBreakdown>;
+  bySource: Array<{ source: UsageSource } & UsageBreakdown>;
   byTool: Array<{ toolKind: string; toolName: string; calls: number; errors: number }>;
-  daily: Array<{ date: string; chatTurns: number; toolCalls: number; totalTokens: number }>;
+  daily: Array<{
+    date: string;
+    chatTurns: number;
+    requests: number;
+    toolCalls: number;
+    totalTokens: number;
+  }>;
 }
 
 function sanitizeNumbers(
   value: UsageEventInput,
-): Required<Pick<UsageEventInput, "inputTokens" | "outputTokens" | "toolCalls" | "durationMs">> {
+): Required<
+  Pick<UsageEventInput, "requests" | "inputTokens" | "outputTokens" | "toolCalls" | "durationMs">
+> {
   const finite = (n: number | undefined): number =>
     Number.isFinite(n) && (n ?? 0) >= 0 ? Math.floor(n ?? 0) : 0;
   return {
+    requests: finite(value.requests ?? (value.kind === "chat" ? 1 : 0)),
     inputTokens: finite(value.inputTokens),
     outputTokens: finite(value.outputTokens),
     toolCalls: finite(value.toolCalls),
@@ -65,12 +88,16 @@ function sanitizeNumbers(
  * 记录一条用量事件（账单与成本对账的原始凭证）。
  * 只追加、不更新，失败时不抛错——计量不能把业务请求拖垮。
  */
-export function recordUsageEvent(input: UsageEventInput): UsageEvent | null {
+export function recordUsageEvent(
+  input: UsageEventInput,
+  identity?: { id: string; createdAt: number },
+): UsageEvent | null {
   if (input.kind !== "chat" && input.kind !== "tool") return null;
   const numbers = sanitizeNumbers(input);
   const event: UsageEvent = {
-    id: randomUUID(),
+    id: identity?.id ?? randomUUID(),
     kind: input.kind,
+    source: input.source ?? "web_chat",
     // 未显式指定归属时落到默认空间：否则按空间过滤会把无归属事件整个漏掉。
     workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
     sessionId: input.sessionId ?? null,
@@ -80,15 +107,15 @@ export function recordUsageEvent(input: UsageEventInput): UsageEvent | null {
     toolName: input.toolName ?? null,
     ...numbers,
     status: input.status ?? "ok",
-    createdAt: Date.now(),
+    createdAt: identity?.createdAt ?? Date.now(),
   };
   try {
     openDb()
       .prepare(
-        `INSERT INTO usage_events (
+        `INSERT OR IGNORE INTO usage_events (
            id, kind, workspace_id, session_id, provider_id, model, tool_kind, tool_name,
-           input_tokens, output_tokens, tool_calls, duration_ms, status, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           source, requests, input_tokens, output_tokens, tool_calls, duration_ms, status, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
@@ -99,6 +126,8 @@ export function recordUsageEvent(input: UsageEventInput): UsageEvent | null {
         event.model ?? null,
         event.toolKind ?? null,
         event.toolName ?? null,
+        event.source,
+        event.requests,
         event.inputTokens,
         event.outputTokens,
         event.toolCalls,
@@ -120,6 +149,8 @@ function dayKey(timestamp: number): string {
 
 interface UsageRow {
   kind: string;
+  source: UsageSource;
+  requests: number;
   workspace_id: string | null;
   session_id: string | null;
   provider_id: string | null;
@@ -141,7 +172,7 @@ export function summarizeUsage(from?: number, to?: number, workspaceId?: string)
   const scope = workspaceId ? " AND workspace_id = ?" : "";
   const rows = openDb()
     .prepare(
-      `SELECT kind, workspace_id, session_id, provider_id, model, tool_kind, tool_name,
+      `SELECT kind, source, requests, workspace_id, session_id, provider_id, model, tool_kind, tool_name,
               input_tokens, output_tokens, tool_calls, duration_ms, status, created_at
        FROM usage_events
        WHERE created_at >= ? AND created_at <= ?${scope}
@@ -155,6 +186,7 @@ export function summarizeUsage(from?: number, to?: number, workspaceId?: string)
     totals: {
       events: 0,
       chatTurns: 0,
+      requests: 0,
       toolCalls: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -163,34 +195,48 @@ export function summarizeUsage(from?: number, to?: number, workspaceId?: string)
       toolDurationMs: 0,
     },
     byModel: [],
+    bySource: [],
     byTool: [],
     daily: [],
   };
-  const models = new Map<
-    string,
-    { chatTurns: number; inputTokens: number; outputTokens: number }
-  >();
+  const models = new Map<string, UsageBreakdown>();
+  const sources = new Map<UsageSource, UsageBreakdown>();
   const tools = new Map<
     string,
     { toolKind: string; toolName: string; calls: number; errors: number }
   >();
   const days = new Map<
     string,
-    { chatTurns: number; toolCalls: number; inputTokens: number; outputTokens: number }
+    {
+      chatTurns: number;
+      requests: number;
+      toolCalls: number;
+      inputTokens: number;
+      outputTokens: number;
+    }
   >();
 
   for (const row of rows) {
+    const chatTurn =
+      row.kind === "chat" && (row.source === "web_chat" || row.source === "app_chat");
     summary.totals.events += 1;
+    summary.totals.requests += row.requests;
     summary.totals.inputTokens += row.input_tokens;
     summary.totals.outputTokens += row.output_tokens;
     if (row.kind === "chat") {
-      summary.totals.chatTurns += 1;
+      if (chatTurn) summary.totals.chatTurns += 1;
       summary.totals.chatDurationMs += row.duration_ms;
       // 注意：chat 行的 tool_calls 只做元信息保留，不计入 toolCalls；
       // 工具调用总量以 kind='tool' 的单条事件为准，避免重复统计。
       const model = row.model ?? "unknown";
-      const entry = models.get(model) ?? { chatTurns: 0, inputTokens: 0, outputTokens: 0 };
-      entry.chatTurns += 1;
+      const entry = models.get(model) ?? {
+        chatTurns: 0,
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      if (chatTurn) entry.chatTurns += 1;
+      entry.requests += row.requests;
       entry.inputTokens += row.input_tokens;
       entry.outputTokens += row.output_tokens;
       models.set(model, entry);
@@ -208,14 +254,27 @@ export function summarizeUsage(from?: number, to?: number, workspaceId?: string)
       if (row.status === "error") entry.errors += 1;
       tools.set(key, entry);
     }
+    const source = sources.get(row.source) ?? {
+      chatTurns: 0,
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    };
+    if (chatTurn) source.chatTurns += 1;
+    source.requests += row.requests;
+    source.inputTokens += row.input_tokens;
+    source.outputTokens += row.output_tokens;
+    sources.set(row.source, source);
     const day = days.get(dayKey(row.created_at)) ?? {
       chatTurns: 0,
+      requests: 0,
       toolCalls: 0,
       inputTokens: 0,
       outputTokens: 0,
     };
-    if (row.kind === "chat") day.chatTurns += 1;
-    else day.toolCalls += 1;
+    if (chatTurn) day.chatTurns += 1;
+    if (row.kind === "tool") day.toolCalls += 1;
+    day.requests += row.requests;
     day.inputTokens += row.input_tokens;
     day.outputTokens += row.output_tokens;
     days.set(dayKey(row.created_at), day);
@@ -224,12 +283,16 @@ export function summarizeUsage(from?: number, to?: number, workspaceId?: string)
   summary.totals.totalTokens = summary.totals.inputTokens + summary.totals.outputTokens;
   summary.byModel = [...models.entries()]
     .map(([model, entry]) => ({ model, ...entry }))
-    .sort((left, right) => right.chatTurns - left.chatTurns);
+    .sort((left, right) => right.requests - left.requests);
   summary.byTool = [...tools.values()].sort((left, right) => right.calls - left.calls);
+  summary.bySource = [...sources.entries()]
+    .map(([source, entry]) => ({ source, ...entry }))
+    .sort((left, right) => right.requests - left.requests);
   summary.daily = [...days.entries()]
     .map(([date, entry]) => ({
       date,
       chatTurns: entry.chatTurns,
+      requests: entry.requests,
       toolCalls: entry.toolCalls,
       totalTokens: entry.inputTokens + entry.outputTokens,
     }))
@@ -241,7 +304,7 @@ export function summarizeUsage(from?: number, to?: number, workspaceId?: string)
 export function listRecentUsage(limit = 50, workspaceId?: string): UsageEvent[] {
   const rows = openDb()
     .prepare(
-      `SELECT id, kind, workspace_id, session_id, provider_id, model, tool_kind, tool_name,
+      `SELECT id, kind, source, requests, workspace_id, session_id, provider_id, model, tool_kind, tool_name,
               input_tokens, output_tokens, tool_calls, duration_ms, status, created_at
        FROM usage_events
        ${workspaceId ? "WHERE workspace_id = ?" : ""}
@@ -255,6 +318,8 @@ export function listRecentUsage(limit = 50, workspaceId?: string): UsageEvent[] 
     ) as unknown as Array<{
     id: string;
     kind: UsageEventKind;
+    source: UsageSource;
+    requests: number;
     workspace_id: string | null;
     session_id: string | null;
     provider_id: string | null;
@@ -271,6 +336,8 @@ export function listRecentUsage(limit = 50, workspaceId?: string): UsageEvent[] 
   return rows.map((row) => ({
     id: row.id,
     kind: row.kind,
+    source: row.source,
+    requests: row.requests,
     workspaceId: row.workspace_id,
     sessionId: row.session_id,
     providerId: row.provider_id,

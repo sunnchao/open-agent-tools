@@ -41,6 +41,12 @@ import {
   type ResultCheck,
 } from "./resultChecks.js";
 import { loadResultBaseline, recordResultBaseline } from "./resultBaselines.js";
+import {
+  currentUsage,
+  currentUsageWorkspaceId,
+  trackUsage,
+  type UsageSnapshot,
+} from "../usageTracking.js";
 
 const ONEAPI_INTENT_TABLES: Record<string, string[]> = {
   log_query: ["logs"],
@@ -62,6 +68,7 @@ export interface HistoryTurn {
 }
 
 export interface ObservatoryQueryResult {
+  usage: UsageSnapshot;
   auditId: string;
   steps: QueryStep[];
   sourceId: string;
@@ -345,8 +352,25 @@ export async function runSchemaText2Sql(
   onProgress?: (event: QueryProgressEvent) => void,
   options: ObservatoryRunOptions = { audit: {} },
 ): Promise<ObservatoryQueryResult> {
-  const audit = createQueryAudit(sourceId, question, history, onProgress, options.audit);
+  return trackUsage(
+    { source: "sql_query", workspaceId: options.audit.workspace },
+    () => runSchemaText2SqlCore(sourceId, question, history, onProgress, options),
+  );
+}
+
+async function runSchemaText2SqlCore(
+  sourceId: string | undefined,
+  question: string,
+  history: HistoryTurn[],
+  onProgress: ((event: QueryProgressEvent) => void) | undefined,
+  options: ObservatoryRunOptions,
+): Promise<ObservatoryQueryResult> {
+  const audit = createQueryAudit(sourceId, question, history, onProgress, {
+    ...options.audit,
+    workspace: options.audit.workspace ?? currentUsageWorkspaceId(),
+  });
   const result: ObservatoryQueryResult = {
+    usage: currentUsage(),
     auditId: audit.record.id,
     steps: audit.record.steps,
     sourceId: sourceId ?? "",
@@ -648,5 +672,7 @@ export async function runSchemaText2Sql(
       error: finished.error ?? "查询失败",
       durationMs: finished.durationMs,
     };
+  } finally {
+    audit.patch({ usage: { ...result.usage } });
   }
 }

@@ -34,3 +34,32 @@ pnpm --filter @open-agent-tools/rag-server dev
 语义切分必须配置 `OPENAI_API_KEY` 和可用的 Embeddings 模型；能力不可用时 API 返回 400，不会静默退化成固定切分。
 
 环境变量见 `.env.example`。默认数据库为 `apps/rag-server/rag.db`。
+
+## 存储后端：SQLite / Elasticsearch
+
+默认 `RAG_STORE=sqlite`，零运维单文件跑通；切 ES 只需先起本地集群再切开关：
+
+```bash
+# 1. 起 ES + Kibana（单节点演示，数据卷 es-data 持久化）
+docker compose -f scripts/docker-compose.elasticsearch.yml up -d
+curl http://localhost:9200  # 期望 {"tagline":"You Know, for Search"}
+
+# 2. 切 rag-server 到 ES（另开终端）
+RAG_STORE=elasticsearch RAG_ES_NODE=http://localhost:9200 \
+  pnpm --filter @open-agent-tools/rag-server dev
+curl http://127.0.0.1:4001/api/health  # store 应为 "elasticsearch"
+```
+
+| 变量                  | 默认                    | 说明                                                               |
+| --------------------- | ----------------------- | ------------------------------------------------------------------ |
+| `RAG_STORE`           | `sqlite`                | `sqlite` / `elasticsearch`（`es` 为别名）                          |
+| `RAG_ES_NODE`         | `http://localhost:9200` | ES 节点地址                                                        |
+| `RAG_ES_INDEX_PREFIX` | `rag`                   | 实际索引 `<prefix>-chunks` / `<prefix>-documents`                  |
+| `RAG_ES_DIMS`         | `1536`                  | 向量维度，须与 embedding 模型一致（`text-embedding-3-small=1536`） |
+
+注意：
+
+- ES 索引维度建时固定，换 embedding 模型先删索引重建（维度 mismatch 时 `knn` 会 400，可用 `DELETE /<prefix>-chunks,/<prefix>-documents` 清掉重跑）。
+- `replaceSource` 在 SQLite 下是事务原子，在 ES 下是 `delete_by_query + bulk` best-effort，失败重传修复；`title/tags/allowedGroups` 人工运营数据重传不覆盖（与 SQLite 一致）。
+- 中文默认 `standard` 分词可用但精度一般；生产中文建议用带 `analysis-ik` 的自定义镜像并把 `content` 改为 `ik_max_word`（`store-elasticsearch.ts` 有标记）。
+- 无 `RAG_ES_NODE` 时 `packages/rag/test/store-elasticsearch.test.ts` 的集成用例自动跳过；有 ES 时 `RAG_ES_NODE=http://localhost:9200 pnpm --filter @open-agent-tools/rag test` 即跑真机。

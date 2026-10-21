@@ -180,6 +180,8 @@ export function openDb(path = getDbPath()): DatabaseSync {
       model TEXT,
       tool_kind TEXT,
       tool_name TEXT,
+      source TEXT NOT NULL DEFAULT 'web_chat',
+      requests INTEGER NOT NULL DEFAULT 0,
       input_tokens INTEGER NOT NULL DEFAULT 0,
       output_tokens INTEGER NOT NULL DEFAULT 0,
       tool_calls INTEGER NOT NULL DEFAULT 0,
@@ -294,10 +296,37 @@ export function openDb(path = getDbPath()): DatabaseSync {
   migrateProvidersTable(db);
   migrateSchemaSourcesTable(db);
   migrateWorkspaceColumns(db);
+  migrateUsageColumns(db);
   ensureDefaultWorkspace(db);
 
   logDebugDuration("db.open", startedAt, { path });
   return db;
+}
+
+function migrateUsageColumns(database: DatabaseSync): void {
+  const columns = new Set(
+    (database.prepare("PRAGMA table_info(usage_events)").all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    ),
+  );
+  if (columns.has("source") && columns.has("requests")) return;
+  database.exec("BEGIN");
+  try {
+    if (!columns.has("source")) {
+      database.exec("ALTER TABLE usage_events ADD COLUMN source TEXT NOT NULL DEFAULT 'web_chat'");
+    }
+    if (!columns.has("requests")) {
+      database.exec("ALTER TABLE usage_events ADD COLUMN requests INTEGER NOT NULL DEFAULT 0");
+      database.exec("UPDATE usage_events SET requests = 1 WHERE kind = 'chat'");
+    }
+    database
+      .prepare("UPDATE usage_events SET workspace_id = ? WHERE workspace_id IS NULL")
+      .run(DEFAULT_WORKSPACE_ID);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 /** 为存量库补齐 workspace 归属列：新建库由 CREATE TABLE 直接带上，老库走 ALTER。 */

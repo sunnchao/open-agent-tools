@@ -7,6 +7,7 @@ export type MessageStatus = "streaming" | "complete" | "error" | "stopped";
 export type ToolCallStatus = "pending" | "done" | "error";
 
 export interface SqlResultProps {
+  usage?: MessageUsage;
   rows: Record<string, unknown>[];
   sourceId?: string;
   sourceName?: string;
@@ -78,6 +79,8 @@ export interface Message {
 
 /** 与服务端 SSE `usage` 事件、`/api/admin/usage` 汇总保持同一口径。 */
 export interface MessageUsage {
+  /** Older saved messages may not contain the request count. */
+  requests?: number;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;

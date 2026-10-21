@@ -22,6 +22,8 @@ import {
 } from "../aiQuery/permission.js";
 import { routeIntentWithGateA } from "../aiQuery/decisionProvider.js";
 import { buildChartSuggestion, type ChartSuggestion } from "../aiQuery/chartSuggest.js";
+import { currentUsage, trackUsage } from "../usageTracking.js";
+import { resolveWorkspace } from "../workspace.js";
 
 /**
  * AI 问数端点（POST /api/ai/query，标准 SSE）。
@@ -631,6 +633,7 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
         `event: done\ndata: ${JSON.stringify({
           code,
           sessionId: sid,
+          usage: { ...currentUsage() },
           meta: { ...meta, ...intentMeta, durationMs: Date.now() - startedAt },
         })}\n\n`,
       );
@@ -680,7 +683,17 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
     return;
   }
 
-  void (async () => {
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    failWith("INVALID_REQUEST");
+    return;
+  }
+  await trackUsage({
+    source: "sql_query",
+    workspaceId: workspace.workspaceId,
+    sessionId: sessionKey,
+    onUsage: (usage) => sendEvent("usage", { usage }),
+  }, async () => {
     try {
       const providerId = process.env.AI_QUERY_PROVIDER_ID;
       const provider: ProviderWithKey | null = providerId
@@ -888,5 +901,5 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
       );
       failWith("AI_SERVICE_UNAVAILABLE");
     }
-  })();
+  });
 });

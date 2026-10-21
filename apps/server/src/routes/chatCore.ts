@@ -15,7 +15,13 @@ import {
 import { callMcpTool, type normalizeResourceBindings, resolveMcpTools } from "../resources.js";
 import { LlmRetrievalEvaluator, type RetrievalEvaluator } from "@open-agent-tools/rag/crag";
 import { createChatCragController } from "../crag.js";
-import { recordUsageEvent, type UsageEventInput, type UsageToolKind } from "../usage.js";
+import {
+  recordUsageEvent,
+  type UsageEventInput,
+  type UsageSource,
+  type UsageToolKind,
+} from "../usage.js";
+import { currentUsage, recordToolCall, trackUsage, type UsageSnapshot } from "../usageTracking.js";
 import { logDuration, logTrace, truncate } from "../trace.js";
 import {
   startObservation,
@@ -49,22 +55,34 @@ export interface ChatStreamParams {
   send: (data: Record<string, unknown>) => void;
   span: ObservationHandle;
   schemaSources: SqlQuestionSource[];
+  usageSource?: UsageSource;
+  onUsage?: (usage: UsageSnapshot) => void;
 }
 
-export interface ChatTurnUsage {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  /** 累计触发的工具调用次数（含成功与失败）。 */
-  toolCalls: number;
-  toolErrors: number;
-}
+export type ChatTurnUsage = UsageSnapshot;
 
 /**
  * 单轮 chat 的核心流式逻辑（RAG 检索 + MCP 工具解析 + 多轮 LLM 工具调用）。
  * 所有 LLM 调用（generation）、工具调用（tool）、检索（retriever）都会写入 Langfuse。
  */
 export async function streamChatTurn(
+  params: ChatStreamParams,
+): Promise<{ fullContent: string; toolRounds: number; usage: ChatTurnUsage }> {
+  return trackUsage(
+    {
+      source: params.usageSource ?? "web_chat",
+      workspaceId: params.workspaceId,
+      sessionId: params.resolvedSessionId,
+      onUsage: (usage) => {
+        params.onUsage?.(usage);
+        params.send({ usage });
+      },
+    },
+    () => streamChatTurnCore(params),
+  );
+}
+
+async function streamChatTurnCore(
   params: ChatStreamParams,
 ): Promise<{ fullContent: string; toolRounds: number; usage: ChatTurnUsage }> {
   const {
@@ -82,13 +100,8 @@ export async function streamChatTurn(
   let fullContent = "";
   let toolRounds = 0;
   let awaitingSqlClarification = false;
-  const usage: ChatTurnUsage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    totalTokens: 0,
-    toolCalls: 0,
-    toolErrors: 0,
-  };
+  const usage = currentUsage();
+  params.onUsage?.({ ...usage });
 
   // 历史会话中的 tool 行缺少 OpenAI 要求的 assistant tool_calls 上下文，统一丢弃。
   const completionMessages: LlmMessage[] = messages
@@ -305,10 +318,6 @@ export async function streamChatTurn(
     }
 
     const roundContent = result.content;
-    if (result.tokenUsage) {
-      usage.inputTokens += result.tokenUsage.inputTokens;
-      usage.outputTokens += result.tokenUsage.outputTokens;
-    }
     generation.update({
       output: { content: roundContent },
       ...(result.tokenUsage
@@ -327,10 +336,6 @@ export async function streamChatTurn(
       inputTokens: result.tokenUsage?.inputTokens,
       outputTokens: result.tokenUsage?.outputTokens,
     });
-    // token 用量透出（P0-4）：每轮结束下发一次累计值，前端无需等 done 即可展示成本。
-    if (result.tokenUsage) {
-      send({ usage: usageSnapshot(usage) });
-    }
     if (!allowTools) break;
 
     const calls = result.toolCalls.map((call, index) => ({
@@ -361,6 +366,7 @@ export async function streamChatTurn(
       const kind: UsageToolKind = mcp ? "mcp" : sqlSource ? "sql" : "builtin";
       const usageEvent: UsageEventInput = {
         kind: "tool",
+        source: params.usageSource ?? "web_chat",
         workspaceId,
         sessionId: resolvedSessionId ?? null,
         providerId,
@@ -371,7 +377,7 @@ export async function streamChatTurn(
       send({ tool_call: { id: call.id, name: displayName, arguments: call.arguments } });
       let toolContent: string;
       const toolStartedAt = Date.now();
-      usage.toolCalls += 1;
+      let toolFailed = false;
       const toolObservation = startObservation(
         "call-tool",
         {
@@ -429,7 +435,7 @@ export async function streamChatTurn(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         toolContent = JSON.stringify({ error: message });
-        usage.toolErrors += 1;
+        toolFailed = true;
         recordUsageEvent({
           ...usageEvent,
           durationMs: Date.now() - toolStartedAt,
@@ -462,6 +468,7 @@ export async function streamChatTurn(
         }
       } finally {
         toolObservation.end();
+        recordToolCall(toolFailed);
       }
       completionMessages.push({
         role: "tool",
@@ -475,14 +482,9 @@ export async function streamChatTurn(
 }
 
 /** SSE 下发的用量快照（前端展示与成本对账共用同一口径）。 */
-export function usageSnapshot(usage: ChatTurnUsage): {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  toolCalls: number;
-  toolErrors: number;
-} {
+export function usageSnapshot(usage: ChatTurnUsage): UsageSnapshot {
   return {
+    requests: usage.requests,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     totalTokens: usage.inputTokens + usage.outputTokens,

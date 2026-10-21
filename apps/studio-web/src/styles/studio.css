@@ -3694,6 +3694,37 @@ select:focus-visible {
   font-weight: 650;
 }
 
+.rag-citations__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: auto;
+  padding: 9px 0 5px;
+  color: var(--studio-rag);
+  font-weight: 650;
+}
+
+.rag-citations__header .rag-citations__title {
+  padding: 0;
+}
+
+.rag-citations__group-title {
+  padding: 6px 0 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--studio-ink);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.rag-citations__more {
+  padding-left: 0;
+  font-size: 12px;
+}
+
 .rag-citations__list {
   display: grid;
   gap: 6px;
@@ -3709,7 +3740,7 @@ select:focus-visible {
 
 .rag-citation__toggle {
   display: grid;
-  grid-template-columns: auto auto 1fr;
+  grid-template-columns: auto 1fr;
   gap: 8px;
   align-items: baseline;
   width: 100%;

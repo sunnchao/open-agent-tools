@@ -1,5 +1,6 @@
 import type { Rag } from "@open-agent-tools/rag";
 import type { GraphSourceState, KnowledgeGraph } from "@open-agent-tools/rag/graph";
+import { AsyncResource } from "node:async_hooks";
 
 export interface GraphLifecycleOptions {
   rag: Rag;
@@ -52,6 +53,7 @@ export class GraphLifecycle {
   private logger: Pick<Console, "log" | "error">;
   /** 待抽取队列（去重），配合 running 标志实现串行消费。 */
   private queue: string[] = [];
+  private jobs = new Map<string, () => Promise<GraphSourceState | null>>();
   private running = false;
   /** 当前正在抽取的来源，对账时归入 building。 */
   private current: string | null = null;
@@ -66,12 +68,14 @@ export class GraphLifecycle {
   /**
    * 文档入库后调用：登记来源并排队重建图谱。
    * 不 await 抽取过程，上传接口需立即响应；进度通过 sync-status 查询。
+   * ES 后端下 `listChunks` 是异步，这里必须 `await` 登记完成再排队。
    */
-  onDocumentsIngested(sources: string[]): void {
+  async onDocumentsIngested(sources: string[]): Promise<void> {
     for (const source of sources) {
+      const chunks = await this.rag.listChunks(source);
       this.graph.store.markSource(source, {
         status: "pending",
-        chunks: this.rag.listChunks(source).length,
+        chunks: chunks.length,
       });
     }
     if (!this.autoExtract) return;
@@ -85,6 +89,7 @@ export class GraphLifecycle {
    */
   onDocumentRemoved(source: string): { relations: number; entities: number } {
     this.queue = this.queue.filter((s) => s !== source);
+    this.jobs.delete(source);
     const removed = this.graph.clearSource(source);
     this.logger.log(
       `[lifecycle] removed graph data for "${source}": -${removed.entities} entities, -${removed.relations} relations`,
@@ -92,12 +97,15 @@ export class GraphLifecycle {
     return removed;
   }
 
-  /** 知识库与图谱库的一致性快照。 */
-  status(): SyncStatus {
-    const ragSources = this.rag.listSources().map((source) => ({
-      source,
-      chunks: this.rag.listChunks(source).length,
-    }));
+  /** 知识库与图谱库的一致性快照（ES 后端下需 await）。 */
+  async status(): Promise<SyncStatus> {
+    const sources = await this.rag.listSources();
+    const ragSources = await Promise.all(
+      sources.map(async (source) => ({
+        source,
+        chunks: (await this.rag.listChunks(source)).length,
+      })),
+    );
     const diff = this.graph.diff(ragSources);
     // 内存队列中的来源可能尚未落到 building 状态，补进去避免前端误判为缺失
     const building = [...new Set([...diff.building, ...(this.current ? [this.current] : [])])];
@@ -120,7 +128,7 @@ export class GraphLifecycle {
    * 同步等待完成（前端点「同步」后需要确定性结果），因此单独走串行循环。
    */
   async reconcile(): Promise<ReconcileResult> {
-    const status = this.status();
+    const status = await this.status();
     const removed: string[] = [];
     const rebuilt: string[] = [];
     const failed: Array<{ source: string; error: string }> = [];
@@ -147,7 +155,8 @@ export class GraphLifecycle {
 
   /** 重建单个来源（先清后建，幂等）。知识库已无该来源时退化为清理。 */
   async rebuild(source: string): Promise<GraphSourceState | null> {
-    const chunks = this.rag.listChunks(source).map((c) => ({
+    const listed = await this.rag.listChunks(source);
+    const chunks = listed.map((c) => ({
       id: c.id,
       source: c.source,
       chunkIndex: c.chunkIndex,
@@ -168,7 +177,13 @@ export class GraphLifecycle {
   }
 
   private enqueue(source: string): void {
-    if (!this.queue.includes(source) && this.current !== source) this.queue.push(source);
+    if (!this.queue.includes(source) && this.current !== source) {
+      this.queue.push(source);
+      this.jobs.set(
+        source,
+        AsyncResource.bind(() => this.rebuild(source)),
+      );
+    }
   }
 
   /** 串行消费队列；单实例内自旋，重入安全。 */
@@ -180,7 +195,9 @@ export class GraphLifecycle {
         const source = this.queue.shift()!;
         this.current = source;
         try {
-          const state = await this.rebuild(source);
+          const rebuild = this.jobs.get(source)!;
+          this.jobs.delete(source);
+          const state = await rebuild();
           this.logger.log(
             `[lifecycle] built "${source}": ${state?.entities ?? 0} entities, ${state?.relations ?? 0} relations`,
           );

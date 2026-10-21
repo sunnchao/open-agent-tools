@@ -6,7 +6,6 @@ import { getDefaultProvider, getProvider } from "../providers/store.js";
 import { createLlmClient } from "../providers/clients/index.js";
 import { normalizeResourceBindings, type McpToolBinding } from "../resources.js";
 import { resolveWorkspace } from "../workspace.js";
-import { recordUsageEvent } from "../usage.js";
 import { logDebugDuration, logTrace, truncate } from "../trace.js";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
 import { ChatTurnError, streamChatTurn, usageSnapshot, type ChatTurnUsage } from "./chatCore.js";
@@ -187,6 +186,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
               send,
               span,
               schemaSources,
+              onUsage: (usage) => { turnUsage = usage; },
             });
             fullContent = result.fullContent;
             toolRounds = result.toolRounds;
@@ -239,22 +239,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
         status: outcome,
       });
     }
-    // 计量：整轮对话的 token 与工具轮数（账单与成本对账的原始凭证）。
     const snapshot = turnUsage ? usageSnapshot(turnUsage) : null;
-    if (snapshot) {
-      recordUsageEvent({
-        kind: "chat",
-        workspaceId,
-        sessionId: resolvedSessionId ?? null,
-        providerId: selectedProvider.id,
-        model: selectedModel,
-        inputTokens: snapshot.inputTokens,
-        outputTokens: snapshot.outputTokens,
-        toolCalls: snapshot.toolCalls,
-        durationMs: Date.now() - chatStartedAt,
-        status: outcome === "error" ? "error" : "ok",
-      });
-    }
     logDebugDuration("chat.done", chatStartedAt, {
       sessionId: resolvedSessionId ?? null,
       toolRounds,

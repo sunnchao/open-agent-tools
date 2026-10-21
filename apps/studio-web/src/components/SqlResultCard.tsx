@@ -1,6 +1,7 @@
 import { Alert, Card, Table, Tag } from "antd";
 import type { SqlResultProps } from "../types.js";
 import { QueryExecution, formatDuration } from "../features/observatory/QueryExecution.js";
+import { UsageTag } from "./UsageTag.js";
 
 export function SqlResultCard({
   rows,
@@ -11,6 +12,7 @@ export function SqlResultCard({
   durationMs,
   truncated,
   clarifying,
+  usage,
 }: SqlResultProps) {
   const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))].map((key) => ({
     title: key,
@@ -30,6 +32,11 @@ export function SqlResultCard({
         </Tag>
       }
     >
+      {usage ? (
+        <p className="chat-sql-result-note">
+          <UsageTag usage={usage} />
+        </p>
+      ) : null}
       {clarifying ? (
         <Alert type="info" showIcon title={clarifying} />
       ) : (

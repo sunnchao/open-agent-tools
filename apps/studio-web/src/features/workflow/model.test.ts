@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ResourceCatalog } from "../resources/api.js";
 import {
   migrateNodeData,
+  defaultConfig,
   nodeInputs,
   nodeOutputs,
   validateNodeResources,
@@ -124,6 +125,37 @@ describe("workflow resource model", () => {
         catalog,
       ),
     ).toBeNull();
+  });
+
+  it("requires explicit, available document scopes for graph nodes", () => {
+    expect(defaultConfig("graph").sources).toEqual([]);
+    expect(migrateNodeData(data("graph", { query: "topic" })).config.sources).toEqual([]);
+    for (const sources of [undefined, []]) {
+      expect(validateNodeResources(data("graph", { sources }), catalog)).toMatch(/至少选择一个文档/);
+    }
+    for (const sources of [[""], [" "], [42]]) {
+      expect(validateNodeResources(data("graph", { sources }), catalog)).toMatch(/配置无效/);
+    }
+    expect(validateNodeResources(data("graph", { sources: ["missing.md"] }), catalog)).toMatch(/已失效/);
+    expect(validateNodeResources(data("graph", { sources: ["guide.md"] }), null)).toMatch(/尚未加载/);
+    expect(validateNodeResources(data("graph", { sources: ["guide.md"] }), {
+      ...catalog, rag: { sources: [], error: "offline" },
+    })).toMatch(/加载失败/);
+    expect(validateNodeResources(data("graph", { sources: ["guide.md"] }), catalog)).toBeNull();
+  });
+
+  it("includes unconfigured graph documents in workflow node checks", () => {
+    const nodes = [data("start", {}, "start"), data("graph", { query: "topic" }, "graph"), data("end", {
+      inputs: [{ name: "answer", source: { type: "literal", value: "done" } }],
+      outputs: [{ name: "answer", selector: "$inputs.answer" }],
+    }, "end")]
+      .map((node) => ({ id: node.id, data: node }));
+    const edges = [{ source: "start", target: "graph" }, { source: "graph", target: "end" }];
+    expect(validateWorkflowGraph(nodes, edges, catalog)).toContainEqual({
+      code: "resource", nodeId: "graph", message: "图谱检索至少选择一个文档",
+    });
+    nodes[1]!.data.config.sources = ["guide.md"];
+    expect(validateWorkflowGraph(nodes, edges, catalog)).toEqual([]);
   });
 
   it("validates a connected workflow and reports structural issues", () => {

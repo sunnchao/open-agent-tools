@@ -44,6 +44,40 @@ export interface McpExecutionLimits {
   network: "none" | "bridge";
 }
 
+export type RemoteTransport = "streamable-http" | "sse";
+
+/** 远端上游配置（脱敏视图）：token 原文永不下发，仅告知是否存在。 */
+export interface RemoteServiceConfigPublic {
+  transport: RemoteTransport;
+  url: string;
+  headers?: Record<string, string>;
+  timeoutMs: number;
+  hasToken: boolean;
+}
+
+export interface RemoteProbeTool {
+  name: string;
+  description?: string;
+}
+
+export interface RemoteProbeResult {
+  transport: RemoteTransport;
+  url: string;
+  timeoutMs: number;
+  latencyMs: number;
+  toolCount: number;
+  tools: RemoteProbeTool[];
+}
+
+export interface RemoteServiceConfigInput {
+  transport: RemoteTransport;
+  url: string;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  /** 新建时传入原文；更新时传 null/省略=保留原文，空字符串=清除。 */
+  token?: string | null;
+}
+
 export interface McpVersion {
   id: string;
   serviceId: string;
@@ -57,6 +91,8 @@ export interface McpVersion {
   artifactObjectKey: string | null;
   artifactSize: number | null;
   imageDigest: string | null;
+  /** REMOTE_MCP 版本的上游配置（token 已脱敏）；MANAGED_MCP 为 null。 */
+  remoteConfig: RemoteServiceConfigPublic | null;
   tools: McpTool[];
   prompts: McpPrompt[];
   revision: number;
@@ -338,6 +374,59 @@ export async function createService(input: {
   return request("/services", {
     method: "POST",
     body: JSON.stringify({ ...input, type: "MANAGED_MCP" }),
+  });
+}
+
+export async function createRemoteService(input: {
+  name: string;
+  slug: string;
+  remote: RemoteServiceConfigInput;
+}): Promise<{ service: McpService; draftVersion: McpVersion }> {
+  return request("/services", {
+    method: "POST",
+    body: JSON.stringify({
+      name: input.name,
+      slug: input.slug,
+      type: "REMOTE_MCP",
+      remote: input.remote,
+    }),
+  });
+}
+
+export async function updateRemoteConfig(
+  serviceId: string,
+  versionId: string,
+  expectedRevision: number,
+  remote: Partial<RemoteServiceConfigInput>,
+): Promise<McpVersion> {
+  return (
+    await request<{ version: McpVersion }>(
+      `/services/${serviceId}/versions/${versionId}/remote-config`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ expectedRevision, remote }),
+      },
+    )
+  ).version;
+}
+
+/** 新建前测试：用表单填写的完整远端配置探测上游，不落库。 */
+export function testRemoteConnection(remote: RemoteServiceConfigInput): Promise<RemoteProbeResult> {
+  return request("/remote/test-connection", {
+    method: "POST",
+    body: JSON.stringify({ remote }),
+  });
+}
+
+/** 测试已保存版本的远端配置；不传 remote 时用服务端保存值（含已有 token）。 */
+export function testSavedRemoteConnection(
+  serviceId: string,
+  versionId: string,
+  remote?: RemoteServiceConfigInput,
+): Promise<RemoteProbeResult> {
+  return request(`/services/${serviceId}/versions/${versionId}/test-connection`, {
+    method: "POST",
+    body: JSON.stringify(remote ? { remote } : {}),
   });
 }
 

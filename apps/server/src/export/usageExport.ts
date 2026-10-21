@@ -20,6 +20,8 @@ export interface UsageExportRow {
   id: string;
   created_at: string;
   kind: string;
+  source: string;
+  requests: number;
   workspace_id: string;
   model: string;
   tool_name: string;
@@ -45,6 +47,8 @@ interface UsageExportDbRow {
   id: string;
   created_at: number;
   kind: string;
+  source: string;
+  requests: number;
   workspace_id: string | null;
   model: string | null;
   tool_name: string | null;
@@ -69,6 +73,8 @@ export const USAGE_EXPORT_COLUMNS: Array<CsvColumn<UsageExportRow>> = [
   { header: "total_tokens", value: (row) => row.total_tokens },
   { header: "duration_ms", value: (row) => row.duration_ms },
   { header: "ref_id", value: (row) => row.ref_id },
+  { header: "source", value: (row) => row.source },
+  { header: "requests", value: (row) => row.requests },
 ];
 
 /**
@@ -103,7 +109,7 @@ export function listUsageExportRows(options: UsageExportOptions): {
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const fetched = openDb()
     .prepare(
-      `SELECT id, created_at, kind, workspace_id, model, tool_name, status,
+      `SELECT id, created_at, kind, source, requests, workspace_id, model, tool_name, status,
               input_tokens, output_tokens, duration_ms, session_id
        FROM usage_events
        ${where}
@@ -119,6 +125,8 @@ export function listUsageExportRows(options: UsageExportOptions): {
       id: row.id,
       created_at: new Date(row.created_at).toISOString(),
       kind: row.kind,
+      source: row.source,
+      requests: row.requests,
       workspace_id: row.workspace_id ?? "",
       model: row.model ?? "",
       tool_name: row.tool_name ?? "",

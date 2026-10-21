@@ -536,6 +536,7 @@ describe("workflow executor", () => {
             id: "graph",
             kind: "graph",
             config: {
+              sources: ["guide.md"],
               query: "{{query}} 供应商",
               inputs: [{ name: "query", source: { type: "run", variable: "query" } }],
               outputs: [{ name: "formatted", selector: "$result.formatted" }],
@@ -546,10 +547,13 @@ describe("workflow executor", () => {
       }),
       () => undefined,
       {
-        retrieveRagGraph: async ({ query }) => ({
-          formatted: `图谱结果: ${query}`,
-          seeds: [{ id: "openai", name: "openai" }],
-        }),
+        retrieveRagGraph: async ({ query, sources }) => {
+          assert.deepEqual(sources, ["guide.md"]);
+          return {
+            formatted: `图谱结果: ${query}`,
+            seeds: [{ id: "openai", name: "openai" }],
+          };
+        },
       },
     );
     const nodeOutput = (outputs as Record<string, Record<string, unknown>>).graph;
@@ -561,7 +565,7 @@ describe("workflow executor", () => {
     await assert.rejects(
       executeWorkflow(
         base({
-          nodes: [{ id: "graph", kind: "graph", config: { query: "" } }],
+          nodes: [{ id: "graph", kind: "graph", config: { query: "", sources: ["guide.md"] } }],
           edges: [],
         }),
         () => undefined,
@@ -569,6 +573,33 @@ describe("workflow executor", () => {
       ),
       /query/,
     );
+  });
+
+  it("rejects graph nodes without documents in runs and isolated node tests", async () => {
+    let calls = 0;
+    const dependencies = { retrieveRagGraph: async () => {
+      calls += 1;
+      return { formatted: "", seeds: [] };
+    } };
+    for (const sources of [undefined, [], [""], [" "]]) {
+      const node = { id: "graph", kind: "graph" as const, config: { query: "topic", sources } };
+      await assert.rejects(executeWorkflow(base({ nodes: [node] }), () => undefined, dependencies), /文档/);
+      await assert.rejects(executeWorkflowNodeTest({ node, inputs: {} }, dependencies), /文档/);
+    }
+    assert.equal(calls, 0);
+  });
+
+  it("passes selected graph documents during isolated node tests", async () => {
+    const result = await executeWorkflowNodeTest({
+      node: { id: "graph", kind: "graph", config: { query: "topic", sources: ["guide.md", "faq.md"] } },
+      inputs: {},
+    }, {
+      retrieveRagGraph: async ({ sources }) => {
+        assert.deepEqual(sources, ["guide.md", "faq.md"]);
+        return { formatted: "scoped result", seeds: [] };
+      },
+    });
+    assert.equal(result.status, "success");
   });
 });
 

@@ -5,6 +5,7 @@ import type { LlmClient } from "./types.js";
 import { OpenAIChatClient } from "./openai-chat.js";
 import { OpenAIResponseClient } from "./openai-response.js";
 import { AnthropicMessageClient } from "./anthropic-message.js";
+import { trackLlmRequest } from "../../usageTracking.js";
 
 export type { LlmClient, LlmMessage, LlmToolDefinition, LlmStreamResult, LlmCompleteResult } from "./types.js";
 
@@ -17,7 +18,7 @@ function withDebugLogging(client: LlmClient, provider: ProviderWithKey): LlmClie
   const debugComplete: LlmClient["complete"] = async (params) => {
     const startedAt = Date.now();
     try {
-      const result = await client.complete(params);
+      const result = await trackLlmRequest(provider.id, params.model, () => client.complete(params));
       logDebugDuration("llm.complete", startedAt, {
         providerId: provider.id,
         format: client.format,
@@ -40,7 +41,7 @@ function withDebugLogging(client: LlmClient, provider: ProviderWithKey): LlmClie
   const debugStreamChat: LlmClient["streamChat"] = async (params) => {
     const startedAt = Date.now();
     try {
-      const result = await client.streamChat(params);
+      const result = await trackLlmRequest(provider.id, params.model, () => client.streamChat(params));
       logDebugDuration("llm.stream_chat", startedAt, {
         providerId: provider.id,
         format: client.format,

@@ -51,6 +51,24 @@ describe("published apps admin api", () => {
 });
 
 describe("employee app api", () => {
+  it("delivers usage before completion, including the final usage snapshot", async () => {
+    const usage = { requests: 2, inputTokens: 100, outputTokens: 20, totalTokens: 120, toolCalls: 1, toolErrors: 0 };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      `data: ${JSON.stringify({ usage: { ...usage, requests: 1 } })}\n\n` +
+      `data: ${JSON.stringify({ done: true, usage })}\n\n`,
+    )));
+    const received: unknown[] = [];
+    await new Promise<void>((resolve, reject) => {
+      streamAppChat("hr", [{ role: "user", content: "hi" }], {
+        onDelta: () => undefined,
+        onUsage: (snapshot) => received.push(snapshot),
+        onDone: resolve,
+        onError: reject,
+      });
+    });
+    expect(received).toEqual([{ ...usage, requests: 1 }, usage]);
+  });
+
   it("loads the public profile without a token", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
       Promise.resolve(

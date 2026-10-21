@@ -55,6 +55,7 @@ export async function runChatSqlQuestion(
     selectedTables: result.selectedTables,
     steps: result.steps.map(({ input: _input, output: _output, ...step }) => step),
     durationMs: result.durationMs,
+    usage: result.usage,
     truncated: result.truncated === true,
     ...(result.clarifying ? { clarifying: result.clarifying } : {}),
   };

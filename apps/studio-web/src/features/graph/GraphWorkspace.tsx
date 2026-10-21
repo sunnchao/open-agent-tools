@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   App,
@@ -10,6 +10,7 @@ import {
   Flex,
   Input,
   List,
+  Select,
   Spin,
   Tag,
   Typography,
@@ -24,6 +25,7 @@ import {
   MarkerType,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
   type Node,
   type NodeProps,
   type NodeTypes,
@@ -38,25 +40,26 @@ import {
 } from "../../lib/icons.js";
 import { StudioPage } from "../../components/studio/StudioPageHeader.js";
 import { StudioNotice, type StudioNoticeValue } from "../../components/studio/StudioNotice.js";
+import { UsageTag } from "../../components/UsageTag.js";
+import type { MessageUsage } from "../../types.js";
+import { listDocuments, type DocumentSource } from "../rag/api.js";
 import {
-  listEntities,
+  documentGraph,
   neighborsOf,
   reconcileGraph,
-  relationTypes,
   retrieveGraph,
   syncStatus,
+  type DocumentGraph,
   type EntityInfo,
   type GraphEdge,
   type GraphExport,
   type GraphNode,
-  type RelationTypeStat,
   type SyncStatus,
 } from "./api.js";
 import { RelationEdge } from "./RelationEdge.js";
 import {
   parallelCurveOffsets,
   RELATION_PORTS,
-  relationPortsForNodes,
   rerouteRelationEdges,
   type RelationFlowEdge,
 } from "./relationRouting.js";
@@ -130,9 +133,10 @@ const edgeTypes = { relation: RelationEdge };
 function layoutGraph(exportData: GraphExport): GraphFlowNode[] {
   const centerId = exportData.nodes[0]?.id;
   const ring = exportData.nodes.filter((n) => n.id !== centerId);
+  let ringIndex = -1;
   return exportData.nodes.map((node) => {
-    const ringIndex = ring.findIndex((n) => n.id === node.id);
     const isCenter = node.id === centerId;
+    if (!isCenter) ringIndex += 1;
     const ringNumber = ringIndex >= 0 ? Math.floor(ringIndex / 12) : 0;
     const indexInRing = ringIndex >= 0 ? ringIndex % 12 : 0;
     const countInRing = Math.min(12, Math.max(1, ring.length - ringNumber * 12));
@@ -154,16 +158,13 @@ function layoutGraph(exportData: GraphExport): GraphFlowNode[] {
 
 function edgesFrom(exportData: GraphExport, nodes: GraphFlowNode[]): RelationFlowEdge[] {
   const offsets = parallelCurveOffsets(exportData.edges);
-  return exportData.edges.map((edge) => {
+  const edges: RelationFlowEdge[] = exportData.edges.map((edge) => {
     const source = `node-${edge.source}`;
     const target = `node-${edge.target}`;
-    const ports = relationPortsForNodes(source, target, nodes);
     return {
       id: `edge-${edge.id}`,
       source,
       target,
-      sourceHandle: ports.sourceHandle,
-      targetHandle: ports.targetHandle,
       type: "relation",
       label: edge.relType,
       data: {
@@ -177,6 +178,7 @@ function edgesFrom(exportData: GraphExport, nodes: GraphFlowNode[]): RelationFlo
       markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "#9a978f" },
     };
   });
+  return rerouteRelationEdges(edges, nodes);
 }
 
 /** 合并子图：按 id 去重合并节点与边。 */
@@ -211,8 +213,25 @@ function GraphCanvas({
   onEdgeClick: (edgeId: string, sourceName: string, targetName: string) => void;
   onPaneClick: () => void;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const [nodes, setNodes] = useState<GraphFlowNode[]>([]);
   const [edges, setEdges] = useState<RelationFlowEdge[]>([]);
+  const { fitView } = useReactFlow<GraphFlowNode, RelationFlowEdge>();
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => void fitView({ padding: 0.2 }));
+    });
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [fitView]);
 
   useEffect(() => {
     if (!data) {
@@ -223,7 +242,10 @@ function GraphCanvas({
     const nextNodes = layoutGraph(data);
     setNodes(nextNodes);
     setEdges(edgesFrom(data, nextNodes));
-  }, [data]);
+    // 等新节点提交到 React Flow 后再适配视图，后续检索与展开也需要重新定位。
+    const frame = requestAnimationFrame(() => void fitView({ padding: 0.2 }));
+    return () => cancelAnimationFrame(frame);
+  }, [data, fitView]);
 
   useEffect(() => {
     const showAll = (data?.edges.length ?? 0) <= 24;
@@ -261,8 +283,9 @@ function GraphCanvas({
   const nodeByFlowId = new Map(nodes.map((node) => [node.id, node.data.name]));
 
   return (
-    <div style={{ height: "100%", minHeight: 420 }}>
+    <div ref={containerRef} style={{ height: "100%", minHeight: 420 }}>
       <ReactFlow
+        style={{ minHeight: 420 }}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
@@ -284,7 +307,7 @@ function GraphCanvas({
         elementsSelectable
         edgesFocusable
         connectionMode={ConnectionMode.Loose}
-        minZoom={0.3}
+        minZoom={0.001}
         maxZoom={2}
         proOptions={{ hideAttribution: true }}
       >
@@ -299,10 +322,12 @@ function GraphCanvas({
 function GraphSyncBar({
   status,
   syncing,
+  lastUsage,
   onReconcile,
 }: {
   status: SyncStatus | null;
   syncing: boolean;
+  lastUsage?: MessageUsage;
   onReconcile: () => void;
 }) {
   if (!status) return null;
@@ -328,6 +353,22 @@ function GraphSyncBar({
       showIcon
       type={alertType}
       message={label}
+      description={
+        status.usage || lastUsage ? (
+          <Flex vertical gap={4}>
+            {status.usage ? (
+              <span>
+                当前空间累计建图用量 · <UsageTag usage={status.usage} />
+              </span>
+            ) : null}
+            {lastUsage ? (
+              <span>
+                本次建图用量 · <UsageTag usage={lastUsage} />
+              </span>
+            ) : null}
+          </Flex>
+        ) : undefined
+      }
       action={
         drifted > 0 && pending === 0 ? (
           <Button
@@ -346,6 +387,12 @@ function GraphSyncBar({
 
 export function GraphWorkspace() {
   const { message } = App.useApp();
+  const [documents, setDocuments] = useState<DocumentSource[]>([]);
+  const [documentsLoading, setDocumentsLoading] = useState(true);
+  const [source, setSource] = useState<string>();
+  const [documentData, setDocumentData] = useState<DocumentGraph | null>(null);
+  const [graphRevision, setGraphRevision] = useState(0);
+  const requestId = useRef(0);
   const [query, setQuery] = useState("");
   const [exportData, setExportData] = useState<GraphExport | null>(null);
   const [selected, setSelected] = useState<EntityInfo | null>(null);
@@ -354,12 +401,31 @@ export function GraphWorkspace() {
     sourceName: string;
     targetName: string;
   } | null>(null);
-  const [entities, setEntities] = useState<EntityInfo[]>([]);
-  const [relTypes, setRelTypes] = useState<RelationTypeStat[]>([]);
   const [busy, setBusy] = useState<"search" | "expand" | "list" | null>(null);
   const [notice, setNotice] = useState<StudioNoticeValue | null>(null);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [usage, setUsage] = useState<MessageUsage>();
+  const [buildUsage, setBuildUsage] = useState<MessageUsage>();
+  const entities = documentData?.nodes ?? [];
+  const relTypes = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const edge of documentData?.edges ?? []) {
+      counts.set(edge.relType, (counts.get(edge.relType) ?? 0) + 1);
+    }
+    return [...counts].map(([relType, count]) => ({ relType, count })).sort((a, b) => b.count - a.count);
+  }, [documentData]);
+
+  const refreshDocuments = useCallback(async () => {
+    setDocumentsLoading(true);
+    try {
+      setDocuments((await listDocuments()).sources);
+    } catch (reason) {
+      setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
+    } finally {
+      setDocumentsLoading(false);
+    }
+  }, []);
 
   const refreshSync = useCallback(async () => {
     try {
@@ -369,26 +435,49 @@ export function GraphWorkspace() {
     }
   }, []);
 
-  const refreshEntities = useCallback(async () => {
+  const refreshDocument = useCallback(async () => {
+    const currentRequest = ++requestId.current;
+    setDocumentData(null);
+    setExportData(null);
+    setSelected(null);
+    setSelectedRelation(null);
+    setUsage(undefined);
+    if (!source) {
+      setBusy(null);
+      return;
+    }
     setBusy("list");
     try {
-      const [entityResult, typeResult] = await Promise.all([
-        listEntities({ limit: 100 }),
-        relationTypes(),
-      ]);
-      setEntities(entityResult.entities);
-      setRelTypes(typeResult.types);
+      const result = await documentGraph(source);
+      if (currentRequest !== requestId.current) return;
+      setDocumentData(result);
+      setExportData(result);
     } catch (reason) {
+      if (currentRequest !== requestId.current) return;
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
-      setBusy(null);
+      if (currentRequest === requestId.current) setBusy(null);
     }
-  }, []);
+  }, [source]);
 
   useEffect(() => {
-    void refreshEntities();
+    void refreshDocuments();
     void refreshSync();
-  }, [refreshEntities, refreshSync]);
+  }, [refreshDocuments, refreshSync]);
+
+  useEffect(() => {
+    void refreshDocument();
+    return () => { requestId.current += 1; };
+  }, [refreshDocument, graphRevision]);
+
+  useEffect(() => {
+    if (source && !documentsLoading && !documents.some((document) => document.source === source)) {
+      requestId.current += 1;
+      setSource(undefined);
+      setQuery("");
+      setNotice({ type: "error", text: "所选文档已失效，请重新选择文档" });
+    }
+  }, [documents, documentsLoading, source]);
 
   // 后台抽取是异步的，构建期间轮询直到落地，否则用户看不到图谱何时可用
   const inProgress = (sync?.building.length ?? 0) + (sync?.queued ?? 0) > 0;
@@ -399,19 +488,22 @@ export function GraphWorkspace() {
         const next = await syncStatus().catch(() => null);
         if (!next) return;
         setSync(next);
-        if (next.building.length + next.queued === 0) void refreshEntities();
+        if (next.building.length + next.queued === 0) setGraphRevision((value) => value + 1);
       })();
     }, 2000);
     return () => clearInterval(timer);
-  }, [inProgress, refreshEntities]);
+  }, [inProgress]);
 
   const handleReconcile = async () => {
     setSyncing(true);
     setNotice(null);
+    setBuildUsage(undefined);
     try {
       const result = await reconcileGraph();
       setSync(result.status);
-      await refreshEntities();
+      setBuildUsage(result.usage);
+      setGraphRevision((value) => value + 1);
+      await Promise.all([refreshDocuments(), refreshSync()]);
       const parts: string[] = [];
       if (result.rebuilt.length > 0) parts.push(`重建 ${result.rebuilt.length} 篇`);
       if (result.removed.length > 0) parts.push(`清理 ${result.removed.length} 项残留`);
@@ -429,47 +521,54 @@ export function GraphWorkspace() {
     }
   };
 
-  const runSearch = async () => {
-    const trimmed = query.trim();
+  const runSearch = async (searchQuery = query) => {
+    const trimmed = searchQuery.trim();
     if (!trimmed) return;
+    if (!source) {
+      setNotice({ type: "error", text: "请先选择文档，再检索图谱" });
+      return;
+    }
+    const currentRequest = ++requestId.current;
     setBusy("search");
     setNotice(null);
+    setUsage(undefined);
     try {
-      const result = await retrieveGraph(trimmed, 2);
+      const result = await retrieveGraph(trimmed, 2, [source]);
+      if (currentRequest !== requestId.current) return;
+      setUsage(result.usage);
       setSelected(null);
       setSelectedRelation(null);
       if (!result.subgraph || result.subgraph.nodes.length === 0) {
         setExportData(null);
-        setNotice({ type: "error", text: "知识图谱中未找到相关实体" });
+        setNotice({ type: "error", text: "所选文档中未找到相关实体" });
         return;
       }
       setExportData(result.subgraph);
       const hitText = `命中种子: ${result.seeds.map((s) => s.name).join("、") || "无"}`;
       setNotice({ type: "success", text: hitText });
     } catch (reason) {
+      if (currentRequest !== requestId.current) return;
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
-      setBusy(null);
+      if (currentRequest === requestId.current) setBusy(null);
     }
   };
 
   const expandEntity = async (entityId: string) => {
+    if (!source) return;
+    const currentRequest = ++requestId.current;
     setBusy("expand");
     setSelectedRelation(null);
     try {
-      const entityName = exportData?.nodes.find((node) => node.id === entityId)?.name ?? entityId;
-      const [neighbors, info] = await Promise.all([
-        neighborsOf(entityId, 2),
-        listEntities({ search: entityName, limit: 20 }),
-      ]);
-      setSelected(
-        info.entities.find((entity) => entity.id === entityId) ?? info.entities[0] ?? null,
-      );
+      const neighbors = await neighborsOf(entityId, 2, source);
+      if (currentRequest !== requestId.current) return;
+      setSelected(entities.find((entity) => entity.id === entityId) ?? null);
       setExportData((current) => mergeExport(current, neighbors));
     } catch (reason) {
+      if (currentRequest !== requestId.current) return;
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
-      setBusy(null);
+      if (currentRequest === requestId.current) setBusy(null);
     }
   };
 
@@ -486,7 +585,7 @@ export function GraphWorkspace() {
     <StudioPage
       eyebrow="上下文工程 / 知识图谱"
       title="知识图谱"
-      description="从知识库抽取实体与关系，检索子图验证问答依据。"
+      description="先选择文档，查看该文档的完整实体与关系，再在文档范围内检索子图。"
       actions={
         <>
           <Badge status="success" text="GraphRAG" />
@@ -494,7 +593,8 @@ export function GraphWorkspace() {
             icon={<ReloadOutlined spin={busy === "list"} />}
             onClick={() => {
               setNotice(null);
-              void refreshEntities();
+              void refreshDocument();
+              void refreshDocuments();
               void refreshSync();
             }}
           >
@@ -505,36 +605,92 @@ export function GraphWorkspace() {
       extra={<StudioNotice notice={notice} />}
     >
       <Flex vertical gap={12} style={{ flex: 1, minHeight: 0, padding: 16, overflowY: "auto" }}>
-        <GraphSyncBar status={sync} syncing={syncing} onReconcile={() => void handleReconcile()} />
+        <GraphSyncBar
+          status={sync}
+          syncing={syncing}
+          lastUsage={buildUsage}
+          onReconcile={() => void handleReconcile()}
+        />
         <Card size="small">
-          <Flex gap={8} align="center">
+          <Flex vertical gap={8} style={{ marginBottom: 12 }}>
+            <Typography.Text strong>选择文档</Typography.Text>
+            <Select
+              aria-label="图谱文档"
+              value={source}
+              placeholder="请先选择文档"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              loading={documentsLoading}
+              options={documents.map((document) => ({
+                value: document.source,
+                label: document.title && document.title !== document.source
+                  ? `${document.title} · ${document.source}`
+                  : document.source,
+              }))}
+              notFoundContent={documentsLoading ? <Spin size="small" /> : "暂无文档，请先上传文档"}
+              onChange={(nextSource: string | undefined) => {
+                requestId.current += 1;
+                setSource(nextSource);
+                setQuery("");
+                setNotice(null);
+                setDocumentData(null);
+                setExportData(null);
+                setSelected(null);
+                setSelectedRelation(null);
+                setUsage(undefined);
+                setBusy(null);
+              }}
+            />
+          </Flex>
+          <Flex gap={8} align="center" wrap>
             <Input.Search
               aria-label="子图检索"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onSearch={() => void runSearch()}
-              placeholder="输入实体名或问题，定位种子并扩展子图（如：OpenAI）"
+              placeholder={source ? "在当前文档内搜索实体或问题" : "请先选择文档"}
+              disabled={!source || !documentData || busy !== null}
               loading={busy === "search"}
               enterButton="子图检索"
-              style={{ flex: 1 }}
+              style={{ flex: "1 1 240px" }}
             />
+            <Button
+              disabled={!documentData || busy !== null}
+              onClick={() => {
+                requestId.current += 1;
+                setQuery("");
+                setUsage(undefined);
+                setSelected(null);
+                setSelectedRelation(null);
+                setNotice(null);
+                setExportData(documentData);
+              }}
+            >
+              显示完整图谱
+            </Button>
           </Flex>
+          {usage ? (
+            <Typography.Text type="secondary" style={{ display: "block", marginTop: 8, fontSize: 12 }}>
+              <UsageTag usage={usage} />
+            </Typography.Text>
+          ) : null}
         </Card>
 
-        <Flex gap={12} align="flex-start" style={{ flex: "1 1 auto", minHeight: 480 }}>
+        <Flex gap={12} align="flex-start" wrap style={{ flex: "1 1 auto", minHeight: 480 }}>
           <Card
             size="small"
             title="实体索引"
             extra={<Tag>{entities.length}</Tag>}
-            style={{ width: 280, flex: "0 0 auto", maxHeight: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}
-            styles={{ body: { padding: 8, overflowY: "auto" } }}
+            style={{ width: 280, maxWidth: "100%", flex: "0 0 auto", maxHeight: 560, overflow: "hidden", display: "flex", flexDirection: "column" }}
+            styles={{ body: { padding: 8, minHeight: 0, overflowY: "auto" } }}
           >
             {busy === "list" ? (
               <Flex justify="center" style={{ padding: 24 }}>
                 <Spin aria-label="正在加载实体" />
               </Flex>
             ) : entities.length === 0 ? (
-              <Empty description="上传文档后自动抽取实体；也可先手动触发抽取。" />
+              <Empty description={source ? "该文档暂无实体，请等待建图或同步图谱" : "请先选择文档"} />
             ) : (
               <List
                 size="small"
@@ -546,7 +702,7 @@ export function GraphWorkspace() {
                     <List.Item
                       onClick={() => {
                         setQuery(entity.name);
-                        void runSearch();
+                        void runSearch(entity.name);
                       }}
                       style={{ cursor: "pointer", borderRadius: 8, padding: "6px 8px" }}
                     >
@@ -565,33 +721,39 @@ export function GraphWorkspace() {
           <Card
             size="small"
             title={
-              <Flex gap={8} align="center">
-                <ApartmentOutlined />
-                <Typography.Text strong>
-                  子图 {stats ? `${stats.entities} 实体 · ${stats.relations} 关系` : "未检索"}
-                </Typography.Text>
+              <Flex gap={8} align="center" justify="space-between" wrap>
+                <Flex gap={8} align="center">
+                  <ApartmentOutlined />
+                  <Typography.Text strong>
+                    图谱 {stats ? `${stats.entities} 实体 · ${stats.relations} 关系` : source ? "暂无数据" : "未选择文档"}
+                  </Typography.Text>
+                </Flex>
+                <Flex gap={4} wrap>
+                  {Object.keys(TYPE_COLORS).map((type) => (
+                    <Tag key={type} color="default">
+                      {type}
+                    </Tag>
+                  ))}
+                </Flex>
               </Flex>
             }
-            extra={
-              <Flex gap={4} wrap>
-                {Object.keys(TYPE_COLORS).map((type) => (
-                  <Tag key={type} color="default">
-                    {type}
-                  </Tag>
-                ))}
-              </Flex>
-            }
-            style={{ flex: 1, minWidth: 0, minHeight: 480, display: "flex", flexDirection: "column" }}
+            style={{ flex: "1 1 320px", minWidth: "min(320px, 100%)", minHeight: 480, display: "flex", flexDirection: "column" }}
             styles={{ body: { flex: 1, minHeight: 420, padding: 8, display: "flex", flexDirection: "column" } }}
           >
             <div style={{ flex: 1, minHeight: 420 }}>
-              <GraphCanvas
+              {exportData?.nodes.length ? <GraphCanvas
                 data={exportData}
                 selectedEdgeId={selectedRelation?.edge.id ?? null}
                 onNodeClick={(id) => void expandEntity(id)}
                 onEdgeClick={selectRelation}
                 onPaneClick={() => setSelectedRelation(null)}
-              />
+              /> : (
+                <Flex align="center" justify="center" style={{ minHeight: 420 }}>
+                  {busy === "list" ? <Spin aria-label="正在加载文档图谱" /> : (
+                    <Empty description={!source ? "请先选择文档，查看其实体与关系" : "当前图谱暂无实体"} />
+                  )}
+                </Flex>
+              )}
             </div>
             <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: "8px 0 0" }}>
               点击节点展开 2 跳邻域；点击连线查看关系；拖拽节点调整布局。
@@ -601,7 +763,7 @@ export function GraphWorkspace() {
           <Card
             size="small"
             title={selectedRelation ? "关系详情" : "实体详情"}
-            style={{ width: 300, flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}
+            style={{ width: 300, maxWidth: "100%", flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}
           >
             {selectedRelation ? (
               <Descriptions size="small" column={1} bordered>

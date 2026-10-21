@@ -88,7 +88,8 @@ function nodeSummary(data: WorkflowNodeData): string {
       : "选择 RAG 文档";
   }
   if (data.kind === "graph") {
-    return String(data.config.query ?? "{{query}}");
+    const sources = Array.isArray(data.config.sources) ? data.config.sources : [];
+    return sources.length > 0 ? `${sources.length} 个文档 · 图谱检索` : "选择图谱文档";
   }
   if (data.kind === "sql") return String(data.config.query || "配置问数问题");
   if (data.kind === "llm") return `MODEL: ${String(data.config.model)}`;

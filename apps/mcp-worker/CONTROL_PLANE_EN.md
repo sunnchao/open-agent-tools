@@ -22,7 +22,7 @@ The former Control Plane sources, including its entry, live in `apps/mcp-worker/
 
 - The Control Plane never extracts, installs, or executes user code in its own process.
 - It does not serve `/mcp/services/:serviceSlug`; that endpoint belongs to the MCP Gateway.
-- The current HTTP create endpoint accepts `MANAGED_MCP` only. Remote MCP management is not wired into the runtime entry point.
+- The current HTTP create endpoint accepts `MANAGED_MCP` and `REMOTE_MCP`; remote upstream management is wired into the runtime entry point.
 - `apps/mcp-server` is outside this merge's scope; its structure, role, and documentation remain unchanged.
 
 ## Runtime dependencies
@@ -47,16 +47,19 @@ test -e apps/mcp-worker/.env || cp apps/mcp-worker/.env.example apps/mcp-worker/
 
 Background `dev`/`dev:worker` use `--env-file=.env`; background `start`/`start:worker` retain injected environment variables and do not automatically load `.env`. Production deployments should configure only each process's required variables and privileges; give the admin process no Docker/Registry permissions.
 
-| Variable                | Required              | Description                                          |
-| ----------------------- | --------------------- | ---------------------------------------------------- |
-| `DATABASE_URL`          | Yes                   | MCP management database connection string            |
-| `REDIS_URL`             | Yes                   | Artifact inspection/build queue                      |
-| `ARTIFACT_S3_BUCKET`    | Yes                   | ZIP and SBOM bucket                                  |
-| `ARTIFACT_S3_REGION`    | No                    | Default `us-east-1`                                  |
-| `ARTIFACT_S3_ENDPOINT`  | No                    | Custom endpoint for MinIO; enables path-style access |
-| `AWS_ACCESS_KEY_ID`     | Environment-dependent | S3 credentials                                       |
-| `AWS_SECRET_ACCESS_KEY` | Environment-dependent | S3 credentials                                       |
-| `PORT`                  | No                    | HTTP port, default `4200`                            |
+| Variable                | Required              | Description                                                       |
+| ----------------------- | --------------------- | ----------------------------------------------------------------- |
+| `DATABASE_URL`          | Yes                   | MCP management database connection string                         |
+| `REDIS_URL`             | Yes                   | Artifact inspection/build queue                                   |
+| `ARTIFACT_S3_BUCKET`    | Yes                   | ZIP and SBOM bucket                                               |
+| `ARTIFACT_S3_REGION`    | No                    | Default `us-east-1`                                               |
+| `ARTIFACT_S3_ENDPOINT`  | No                    | Custom endpoint for MinIO; enables path-style access              |
+| `AWS_ACCESS_KEY_ID`     | Environment-dependent | S3 credentials                                                    |
+| `AWS_SECRET_ACCESS_KEY` | Environment-dependent | S3 credentials                                                    |
+| `PORT`                  | No                    | HTTP port, default `4200`                                         |
+| `MCP_CORS_ORIGIN`       | No                    | Browser origin allowed to call the admin API; disabled by default |
+
+When Studio Web is served as a separate static site, set `MCP_CORS_ORIGIN` to that site's origin (for example `http://127.0.0.1:8088`). CORS runs before JSON parsing and authentication so preflight requests are not rejected with 401. When empty, cross-origin access remains disabled and no CORS response headers are emitted.
 
 ## Database migrations
 
@@ -193,6 +196,18 @@ POST /services/:serviceId/versions/:versionId/publish
 POST /services/:serviceId/versions/:versionId/rollback
 ```
 
+### Remote MCP services (REMOTE_MCP)
+
+```text
+POST /services                                              # type=REMOTE_MCP, published immediately
+PUT  /services/:serviceId/versions/:versionId/remote-config # update upstream config (DRAFT/FAILED/READY)
+POST /services/:serviceId/versions/:versionId/test-connection
+POST /remote/test-connection                               # pre-creation probe with a full config, nothing persisted
+```
+
+`remote` at creation is the full upstream config (`transport`=`streamable-http`/`sse`, `url`, `headers`, `token`, `timeoutMs`).
+Version responses carry a redacted `remoteConfig` view (only `hasToken` for the token); on update, `token: null`/omitted keeps the stored value and an empty string clears it. The version-scoped probe without `remote` tests the stored config (including its token). Failed probes return `502 UPSTREAM_ERROR`. Local Prompts of remote versions are still rendered by the Gateway, so the Gateway proxies upstream Tools while keeping local Prompts.
+
 ### Client access
 
 ```text
@@ -252,7 +267,7 @@ TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcp_test \
 ## Current limitations
 
 - The administration API currently has no identity authentication or user isolation and is suitable only for local development or a trusted network.
-- The create endpoint does not yet support `REMOTE_MCP`.
+- Remote upstreams accept any http(s) URL without private-network/metadata-address blocking; keep Worker/Gateway in a restricted network for production.
 - Full automatic draft forking from a published version still needs to be completed.
 - No Execution query API is available; Build and Audit queries currently return at most 200 records.
 - Audit export, archival, retention policies, and distributed Gateway cache invalidation are not integrated yet.

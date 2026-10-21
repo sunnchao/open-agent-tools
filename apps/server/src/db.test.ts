@@ -199,4 +199,68 @@ describe("sqlite chat storage", () => {
     }>;
     assert.ok(columns.some((column) => column.name === "schema_name"));
   });
+
+  it("migrates legacy usage without changing tokens or resetting request counts on reopen", () => {
+    closeDb();
+    const legacy = new DatabaseSync(process.env.SQLITE_PATH!);
+    legacy.exec(`
+      DROP TABLE usage_events;
+      CREATE TABLE usage_events (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        session_id TEXT,
+        provider_id TEXT,
+        model TEXT,
+        tool_kind TEXT,
+        tool_name TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        tool_calls INTEGER NOT NULL DEFAULT 0,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'ok',
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO usage_events (id, kind, input_tokens, output_tokens, created_at)
+        VALUES ('legacy-chat', 'chat', 120, 25, 1), ('legacy-tool', 'tool', 0, 0, 2);
+    `);
+    legacy.close();
+
+    const migrated = openDb();
+    const rows = migrated
+      .prepare(
+        `
+      SELECT id, source, requests, workspace_id, input_tokens, output_tokens
+      FROM usage_events ORDER BY id
+    `,
+      )
+      .all();
+    assert.deepEqual(
+      rows.map((row) => ({ ...row })),
+      [
+        {
+          id: "legacy-chat",
+          source: "web_chat",
+          requests: 1,
+          workspace_id: "default",
+          input_tokens: 120,
+          output_tokens: 25,
+        },
+        {
+          id: "legacy-tool",
+          source: "web_chat",
+          requests: 0,
+          workspace_id: "default",
+          input_tokens: 0,
+          output_tokens: 0,
+        },
+      ],
+    );
+    migrated.prepare("UPDATE usage_events SET requests = 3 WHERE id = ?").run("legacy-chat");
+    closeDb();
+    assert.equal(
+      openDb().prepare("SELECT requests FROM usage_events WHERE id = ?").get("legacy-chat")
+        ?.requests,
+      3,
+    );
+  });
 });

@@ -8,6 +8,7 @@ import {
 import { logTrace } from "../trace.js";
 import { listRecentUsage, summarizeUsage } from "../usage.js";
 import { resolveWorkspace } from "../workspace.js";
+import { syncRagUsage } from "../ragUsage.js";
 
 export const usageRouter: ReturnType<typeof Router> = Router();
 
@@ -23,7 +24,7 @@ function parseTimestamp(value: unknown): number | undefined {
  * 用量汇总：计费、扩容与续费谈判的证据来源。
  * 支持 `from`/`to`（ISO 时间）或 `days`（最近 N 天，默认 30，上限 365）。
  */
-usageRouter.get("/api/admin/usage", (req: Request, res: Response) => {
+usageRouter.get("/api/admin/usage", async (req: Request, res: Response) => {
   const workspace = resolveWorkspace(req);
   if (!workspace.ok) {
     res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
@@ -40,6 +41,7 @@ usageRouter.get("/api/admin/usage", (req: Request, res: Response) => {
   }
   // 支持显式 `workspaceId=*` 查看全局，避免多空间时看不到合计。
   const scopeAll = req.query.workspaceId === "*";
+  await syncRagUsage();
   const summary = summarizeUsage(from, to, scopeAll ? undefined : workspace.workspaceId);
   logTrace("usage.summary", {
     workspaceId: scopeAll ? "*" : workspace.workspaceId,
@@ -52,7 +54,7 @@ usageRouter.get("/api/admin/usage", (req: Request, res: Response) => {
 });
 
 /** 最近用量事件（对账抽查与排障）。 */
-usageRouter.get("/api/admin/usage/events", (req: Request, res: Response) => {
+usageRouter.get("/api/admin/usage/events", async (req: Request, res: Response) => {
   const workspace = resolveWorkspace(req);
   if (!workspace.ok) {
     res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
@@ -60,6 +62,7 @@ usageRouter.get("/api/admin/usage/events", (req: Request, res: Response) => {
   }
   const limit = Number(req.query.limit);
   const scopeAll = req.query.workspaceId === "*";
+  await syncRagUsage();
   const events = listRecentUsage(
     Number.isFinite(limit) ? limit : 50,
     scopeAll ? undefined : workspace.workspaceId,
@@ -74,7 +77,7 @@ usageRouter.get("/api/admin/usage/events", (req: Request, res: Response) => {
  * `workspaceId=*` 导出全局;`kind=chat|tool` 可只导某一类事件。
  * 结果有条数硬上限,超限截断并通过 `x-export-truncated` 明示。
  */
-usageRouter.get("/api/admin/usage/export", (req: Request, res: Response) => {
+usageRouter.get("/api/admin/usage/export", async (req: Request, res: Response) => {
   const format = parseExportFormat(req.query.format);
   if (!format) {
     res.status(400).json({ error: "format 必须为 csv 或 json" });
@@ -103,6 +106,7 @@ usageRouter.get("/api/admin/usage/export", (req: Request, res: Response) => {
   }
   // 与汇总/事件接口一致:显式 `workspaceId=*` 导出全局,否则按当前空间归集。
   const scopeAll = req.query.workspaceId === "*";
+  await syncRagUsage();
   const { rows, truncated } = listUsageExportRows({
     from,
     to,

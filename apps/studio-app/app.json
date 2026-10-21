@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Studio App",
+    "slug": "studio-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "studio-app",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": { "supportsTablet": true },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": { "bundler": "metro", "favicon": "./assets/icon.png" },
+    "extra": {
+      "agentServerUrl": "http://localhost:3000",
+      "mcpBaseUrl": "http://localhost:4200",
+      "ragPathPrefix": "/api/admin/rag"
+    }
+  }
+}

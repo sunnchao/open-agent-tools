@@ -1,4 +1,4 @@
-import type { ChatRequestMessage, Message, ToolCall } from "../../types.js";
+import type { ChatRequestMessage, Message, MessageUsage, ToolCall } from "../../types.js";
 import { newId } from "../../lib/ids.js";
 import { parseSseBuffer } from "../../lib/api.js";
 
@@ -68,6 +68,7 @@ export async function fetchAppProfile(slug: string): Promise<AppChatProfile> {
 export interface AppChatHandlers {
   onDelta: (delta: string) => void;
   onDone: () => void;
+  onUsage?: (usage: MessageUsage) => void;
   onError: (error: string) => void;
   onStopped?: () => void;
   onAssistantMessageId?: (id: string) => void;
@@ -123,6 +124,7 @@ export function streamAppChat(
         const { events, rest } = parseSseBuffer(buffer);
         buffer = rest;
         for (const event of events) {
+          if (event.usage) handlers.onUsage?.(event.usage as MessageUsage);
           if (typeof event.assistantMessageId === "string") {
             handlers.onAssistantMessageId?.(event.assistantMessageId);
           }

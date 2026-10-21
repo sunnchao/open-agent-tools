@@ -167,7 +167,7 @@ TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcp_test \
 
 ## 当前限制
 
-- 仅支持托管 MCP 服务；远程 MCP 转发尚未接入。
+- 远端 MCP（`REMOTE_MCP`）透传上游 `tools/list`/`tools/call`（Streamable HTTP 与 SSE），本地 Prompts 仍由网关渲染；暂不支持上游 Prompts/Resources 透传与 Tool 列表缓存。
 - 当前实例按请求创建无状态 MCP Server，不提供长生命周期 Session。
 - 尚未接入分布式授权/能力缓存及主动失效通知。
 - 生产限流、并发配额和完整可观测性仍需由网关基础设施补充。
