@@ -86,6 +86,38 @@ test("findEntitiesByName 精确优先、包含次之、规范化匹配", () => {
   cleanup();
 });
 
+test("document graphs include every entity and only relationships from that document", () => {
+  const { dbPath, cleanup } = tmpDb();
+  const store = new SqliteGraphStore({ dbPath });
+  try {
+    const nodes = Array.from({ length: 130 }, (_, index) => entity(`entity-${index}`));
+    for (const node of nodes) {
+      store.upsertEntity(node);
+      store.linkEntitySource(node.id, "selected.md");
+    }
+    const other = entity("other-document-only");
+    store.upsertEntity(other);
+    store.linkEntitySource(other.id, "other.md");
+    for (const node of nodes.slice(0, 2)) store.linkEntitySource(node.id, "other.md");
+    const shared = relation(nodes[0]!.id, nodes[1]!.id, "shared", "a:0", "selected.md");
+    store.upsertRelation(shared);
+    store.upsertRelation({ ...shared, source: "other.md", sourceChunk: "b:0" });
+    store.upsertRelation(relation(nodes[0]!.id, nodes[1]!.id, "other-only", "b:0", "other.md"));
+    store.upsertRelation(relation(nodes[0]!.id, other.id, "other-only", "b:0", "other.md"));
+
+    const selected = store.graphForSource("selected.md");
+    assert.equal(selected.entities.length, 130);
+    assert.ok(selected.entities.some((node) => node.id === nodes[129]!.id));
+    assert.ok(!selected.entities.some((node) => node.id === other.id));
+    assert.deepEqual(selected.relations.map((edge) => edge.id), [shared.id]);
+    assert.equal(store.graphForSource("missing.md").entities.length, 0);
+    assert.equal(store.graphForSource("missing.md").relations.length, 0);
+  } finally {
+    store.close();
+    cleanup();
+  }
+});
+
 test("neighbors 多跳 BFS 扩展", () => {
   const { dbPath, cleanup } = tmpDb();
   const s = new SqliteGraphStore({ dbPath });

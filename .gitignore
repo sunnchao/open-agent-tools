@@ -15,6 +15,7 @@ build
 coverage
 .turbo
 .superpowers
+.expo
 .DS_Store
 *.log
 .env
@@ -23,6 +24,7 @@ coverage
 *.tsbuildinfo
 *.sqlite
 *.sqlite-journal
+.pnpm-store
 apps/server/data/
 
 # PDF 解析生成产物（含 metadata.source，勿提交）

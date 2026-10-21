@@ -92,6 +92,8 @@ export interface GraphStore {
     hops: number,
     opts?: { maxNodes?: number; minWeight?: number; sources?: readonly string[] },
   ): Subgraph;
+  /** 某文档贡献的完整图谱，包含孤立实体，不做邻域或数量截断。 */
+  graphForSource(source: string): Subgraph;
   /**
    * 级联删除某来源：删该来源的关系 → 解绑实体来源 → 删除不再被任何来源引用的实体及其别名。
    * 被多个来源共享的实体只解绑，不删除。

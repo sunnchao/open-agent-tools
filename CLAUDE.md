@@ -161,6 +161,9 @@ All admin endpoints are under `/api/admin/mcp`:
 - `/services/:serviceId/versions/:versionId/validate` — validate Prompt-only or built versions
 - `/services/:serviceId/versions/:versionId/publish` — publish version
 - `/services/:serviceId/versions/:versionId/rollback` — rollback version
+- `/services` with `type: "REMOTE_MCP"` — register a remote MCP upstream (published immediately)
+- `/services/:serviceId/versions/:versionId/remote-config` — update upstream config (token redacted, `null` keeps, `""` clears)
+- `/remote/test-connection`, `/services/:serviceId/versions/:versionId/test-connection` — probe upstream reachability
 - `/clients`, `/clients/:id/keys`, `/clients/:id/grants` — client, Key, and Grant management
 
 Write operations use `expectedRevision` for optimistic concurrency control.
@@ -179,7 +182,7 @@ The Gateway uses stateless Streamable HTTP; `GET` and `DELETE` return `405 Metho
 ## Current Limitations
 
 - Managed Tools support Node.js 20 ESM/npm only. Python, Java, Yarn, pnpm Tool packages, Bun, and user-supplied Dockerfiles are not supported.
-- Managed MCP Resources and remote MCP service proxying are not implemented.
+- Managed MCP Resources are not implemented (remote MCP proxying is supported: Streamable HTTP / SSE upstream tools proxy + local Prompts).
 - Studio Web and Control Plane have no identity authentication or user isolation — suitable only for localhost/trusted networks.
 - No Docker Compose or Kubernetes deployment manifest is included.
 - Node.js 20 has reached upstream end-of-life; production rollout requires a security exception or migration to a supported LTS.

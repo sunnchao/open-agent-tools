@@ -46,6 +46,8 @@ interface DocumentRow {
   chunk_overlap: number;
   separators_json: string;
   semantic_threshold: number | null;
+  ocr_applied: number;
+  ocr_status: string;
   created_at: string;
   updated_at: string;
 }
@@ -66,6 +68,7 @@ function parseStringArray(value: string): string[] {
 }
 
 function toDocument(r: DocumentRow): DocumentInfo {
+  const status = r.ocr_status as DocumentInfo["ocrStatus"];
   return {
     source: r.source,
     title: r.title,
@@ -81,6 +84,11 @@ function toDocument(r: DocumentRow): DocumentInfo {
     chunkOverlap: r.chunk_overlap,
     separators: parseStringArray(r.separators_json),
     semanticThreshold: r.semantic_threshold,
+    ocrApplied: (r.ocr_applied ?? 0) === 1,
+    ocrStatus:
+      status === "ocr" || status === "ocr_needed" || status === "ocr_failed" || status === "text_layer"
+        ? status
+        : "none",
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -124,6 +132,8 @@ export class SqliteVectorStore implements VectorStore {
         chunk_overlap   INTEGER NOT NULL DEFAULT 50,
         separators_json TEXT NOT NULL DEFAULT '[]',
         semantic_threshold REAL,
+        ocr_applied     INTEGER NOT NULL DEFAULT 0,
+        ocr_status      TEXT NOT NULL DEFAULT 'none',
         created_at      TEXT NOT NULL,
         updated_at      TEXT NOT NULL
       );
@@ -166,6 +176,8 @@ export class SqliteVectorStore implements VectorStore {
     metadata: DocumentWriteMetadata,
   ): void {
     const now = new Date().toISOString();
+    const ocrApplied = metadata.ocrApplied ? 1 : 0;
+    const ocrStatus = metadata.ocrStatus ?? "none";
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.deleteSourceRows(source);
@@ -175,8 +187,8 @@ export class SqliteVectorStore implements VectorStore {
           `INSERT INTO documents (
              source, title, tags_json, mime_type, byte_size, content_hash, chunk_count,
              version, chunk_strategy, chunk_size, chunk_overlap, separators_json,
-             semantic_threshold, created_at, updated_at
-           ) VALUES (?, ?, '[]', ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+             semantic_threshold, ocr_applied, ocr_status, created_at, updated_at
+           ) VALUES (?, ?, '[]', ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(source) DO UPDATE SET
            allowed_groups_json = documents.allowed_groups_json,
              mime_type = excluded.mime_type,
@@ -189,6 +201,8 @@ export class SqliteVectorStore implements VectorStore {
              chunk_overlap = excluded.chunk_overlap,
              separators_json = excluded.separators_json,
              semantic_threshold = excluded.semantic_threshold,
+             ocr_applied = excluded.ocr_applied,
+             ocr_status = excluded.ocr_status,
              updated_at = excluded.updated_at`,
         )
         .run(
@@ -203,6 +217,8 @@ export class SqliteVectorStore implements VectorStore {
           metadata.chunkOverlap,
           JSON.stringify(metadata.separators),
           metadata.semanticThreshold,
+          ocrApplied,
+          ocrStatus,
           now,
           now,
         );
@@ -390,6 +406,12 @@ export class SqliteVectorStore implements VectorStore {
       this.db.exec(
         `ALTER TABLE documents ADD COLUMN allowed_groups_json TEXT NOT NULL DEFAULT '[]'`,
       );
+    }
+    if (!names.has("ocr_applied")) {
+      this.db.exec(`ALTER TABLE documents ADD COLUMN ocr_applied INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (!names.has("ocr_status")) {
+      this.db.exec(`ALTER TABLE documents ADD COLUMN ocr_status TEXT NOT NULL DEFAULT 'none'`);
     }
   }
 

@@ -8,6 +8,7 @@ packages:
 catalog:
   "@aws-sdk/client-s3": ^3.883.0
   "@aws-sdk/s3-request-presigner": ^3.883.0
+  "@elastic/elasticsearch": ^8.17.0
   "@langchain/community": ^1.1.29
   "@langchain/core": ^1.2.3
   "@langchain/openai": ^1.5.5
@@ -28,7 +29,8 @@ catalog:
   drizzle-orm: ^0.44.5
   express: ^5.1.0
   ioredis: ^5.7.0
+  mysql2: ^3.14.0
   pg: ^8.16.3
   zod: ^4.4.3
-  "@elastic/elasticsearch": ^8.17.0
-  mysql2: ^3.14.0
+patchedDependencies:
+  '@expo/cli@0.24.24': patches/@expo__cli@0.24.24.patch

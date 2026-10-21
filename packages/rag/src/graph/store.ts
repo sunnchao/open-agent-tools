@@ -282,6 +282,26 @@ export class SqliteGraphStore implements GraphStore {
     return contains.map(toEntity);
   }
 
+  graphForSource(source: string): Subgraph {
+    const entities = this.db
+      .prepare(
+        `SELECT e.* FROM entities e
+         JOIN entity_sources es ON es.entity_id = e.id
+         WHERE es.source = ? ORDER BY length(e.name), e.name, e.id`,
+      )
+      .all(source) as unknown as EntityRow[];
+    const relations = this.db
+      .prepare(
+        `SELECT r.* FROM relations r
+         JOIN relation_sources rs ON rs.relation_id = r.id
+         JOIN entity_sources src ON src.entity_id = r.src_id AND src.source = rs.source
+         JOIN entity_sources dst ON dst.entity_id = r.dst_id AND dst.source = rs.source
+         WHERE rs.source = ? ORDER BY r.id`,
+      )
+      .all(source) as unknown as RelationRow[];
+    return makeSubgraph(entities.map(toEntity), relations.map(toRelation));
+  }
+
   neighbors(
     entityId: string,
     hops: number,

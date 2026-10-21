@@ -62,7 +62,14 @@ export const nodeConfigSchemas = {
       query: z.string().optional(),
     })
     .passthrough(),
-  graph: z.object({ ...bindings, ...execution, query: z.string().optional() }).passthrough(),
+  graph: z
+    .object({
+      ...bindings,
+      ...execution,
+      sources: z.array(z.string().refine((source) => source.trim().length > 0, "文档不能为空")).optional(),
+      query: z.string().optional(),
+    })
+    .passthrough(),
   sql: z
     .object({
       ...bindings,
@@ -152,6 +159,7 @@ const defaultNodeConfig: Record<NodeKind, Record<string, unknown>> = {
   },
   rag: { sources: [], topK: 5, query: "{{query}}", inputs: [], outputs: [] },
   graph: {
+    sources: [],
     query: "{{query}}",
     inputs: [],
     outputs: [{ name: "formatted", selector: "$result.formatted" }],

@@ -15,12 +15,16 @@ import type {
   DocumentMetadataPatch,
   IngestResult,
   RetrievalResult,
+  VectorStore,
 } from "./types.js";
 
 export type {
+  ChannelHit,
   Chunk,
   ChunkStrategy,
   ScoredChunk,
+  ScoredChunkDebug,
+  RetrievalDebug,
   ChunkInfo,
   DocumentInfo,
   DocumentMetadataPatch,
@@ -29,33 +33,62 @@ export type {
   IngestResult,
   VectorStore,
   DocumentLoader,
+  OcrStatus,
 } from "./types.js";
 export { SqliteVectorStore, type SqliteStoreOptions } from "./store.js";
-export { reciprocalRankFusion, formatChunks, type RetrieveOptions } from "./retriever.js";
+export {
+  ElasticsearchVectorStore,
+  buildKeywordQuery,
+  buildKnnFilter,
+  type ElasticsearchStoreOptions,
+} from "./store-elasticsearch.js";
+export {
+  reciprocalRankFusion,
+  reciprocalRankFusionWithDebug,
+  formatChunks,
+  type RetrieveOptions,
+} from "./retriever.js";
 export { cosine, escapeFtsQuery, sha1 } from "./utils.js";
 export { TextFileLoader, PdfFileLoader } from "./loaders.js";
 export { DEFAULT_SEPARATORS, normalizeSource } from "./ingest.js";
+export {
+  cleanOcrText,
+  DEFAULT_OCR_DECISION,
+  FakeOcrProvider,
+  isLikelyScanned,
+  normalizeOcrDecision,
+  NoopOcrProvider,
+  type OcrDecision,
+  type OcrPage,
+  type OcrProvider,
+} from "./ocr.js";
+export { TesseractOcrProvider, type TesseractOcrOptions } from "./ocr-tesseract.js";
 
 export interface RagOptions {
   /** 必填时启用向量检索；缺省则退化为纯 BM25 关键词检索（无 API Key 环境可用）。 */
   embeddings?: EmbeddingsInterface;
-  /** SQLite 数据库文件路径，默认 ./rag.db。 */
+  /** SQLite 数据库文件路径，默认 ./rag.db。传入 `store` 时忽略。 */
   dbPath?: string;
+  /** 注入存储后端：缺省为 SQLite；传 `ElasticsearchVectorStore` 即切换到 ES。 */
+  store?: VectorStore;
   chunkSize?: number;
   chunkOverlap?: number;
   chunkStrategy?: ChunkStrategy;
   separators?: string[];
   /** 语义切分相似度阈值（0-1），仅在提供 embeddings 时生效。 */
   semanticThreshold?: number;
+  /** PDF OCR 兜底提供方；缺省为诊断模式（检出疑似扫描但不识别）。 */
+  ocr?: import("./ocr.js").OcrProvider;
+  ocrDecision?: Partial<import("./ocr.js").OcrDecision>;
 }
 
-/** RAG 引擎门面：入库 + 混合检索 + 知识库管理。 */
+/** RAG 引擎门面：入库 + 混合检索 + 知识库管理。存储后端可为同步（SQLite）或异步（ES），门面一律 async。 */
 export class Rag {
-  private store: SqliteVectorStore;
+  private store: VectorStore;
   private ingestOpts: IngestOptions;
 
   constructor(opts: RagOptions = {}) {
-    this.store = new SqliteVectorStore({ dbPath: opts.dbPath ?? "./rag.db" });
+    this.store = opts.store ?? new SqliteVectorStore({ dbPath: opts.dbPath ?? "./rag.db" });
     this.ingestOpts = {
       store: this.store,
       embeddings: opts.embeddings,
@@ -64,6 +97,8 @@ export class Rag {
       chunkStrategy: opts.chunkStrategy ?? "fixed",
       separators: opts.separators ? [...opts.separators] : [...DEFAULT_SEPARATORS],
       semanticThreshold: opts.semanticThreshold,
+      ocr: opts.ocr,
+      ocrDecision: opts.ocrDecision,
     };
   }
 
@@ -80,7 +115,13 @@ export class Rag {
     files: Array<{ name: string; data: Uint8Array }>,
     options: Pick<
       IngestOptions,
-      "chunkSize" | "chunkOverlap" | "chunkStrategy" | "separators" | "semanticThreshold"
+      | "chunkSize"
+      | "chunkOverlap"
+      | "chunkStrategy"
+      | "separators"
+      | "semanticThreshold"
+      | "ocr"
+      | "ocrDecision"
     > = {},
   ): Promise<IngestResult> {
     const ingestOptions = { ...this.ingestOpts, ...options };
@@ -97,7 +138,7 @@ export class Rag {
 
   /** 混合检索：向量 kNN + FTS5 BM25 → RRF → Top-K。 */
   async retrieve(query: string, opts: RetrieveOptions = {}): Promise<RetrievalResult> {
-    const sources = this.resolveVisibleSources(opts.sources, opts.viewerGroups);
+    const sources = await this.resolveVisibleSources(opts.sources, opts.viewerGroups);
     return retrieve(this.store, this.ingestOpts.embeddings, query, {
       ...opts,
       sources,
@@ -112,16 +153,16 @@ export class Rag {
    * - 分组含 "*"：等同管理侧，可见全部文档；
    * - sources 缺省：全库范围内按 ACL 过滤；显式 [] 则仍为不检索。
    */
-  resolveVisibleSources(
+  async resolveVisibleSources(
     sources: readonly string[] | undefined,
     viewerGroups: readonly string[] | undefined,
-  ): string[] | undefined {
+  ): Promise<string[] | undefined> {
     if (sources?.length === 0) return [];
     // 管理侧且未限定来源时保持原来的「全库」语义，不枚举文档。
     if (viewerGroups === undefined && !sources) return undefined;
     const unrestricted = viewerGroups === undefined || viewerGroups.includes("*");
-    const visible = this.store
-      .listDocuments()
+    const documents = await this.store.listDocuments();
+    const visible = documents
       .filter(
         (document) =>
           unrestricted ||
@@ -135,31 +176,36 @@ export class Rag {
   }
 
   /** 列出某来源的全部分块元信息（id、序号、原文、长度、是否含向量）。 */
-  listChunks(source: string): ChunkInfo[] {
+  async listChunks(source: string): Promise<ChunkInfo[]> {
+    if (!this.store.listChunksBySource) return [];
     return this.store.listChunksBySource(source);
   }
 
-  listSources(): string[] {
+  async listSources(): Promise<string[]> {
     return this.store.listSources();
   }
 
-  listDocuments(): DocumentInfo[] {
+  async listDocuments(): Promise<DocumentInfo[]> {
     return this.store.listDocuments();
   }
 
-  updateDocument(source: string, patch: DocumentMetadataPatch): DocumentInfo | null {
+  async updateDocument(source: string, patch: DocumentMetadataPatch): Promise<DocumentInfo | null> {
     return this.store.updateDocument(source, patch);
   }
 
-  clearSource(source: string): void {
-    this.store.removeBySource(source);
+  async clearSource(source: string): Promise<void> {
+    await this.store.removeBySource(source);
   }
 
-  getStats(): { chunks: number; sources: string[] } {
-    return { chunks: this.store.countChunks(), sources: this.store.listSources() };
+  async getStats(): Promise<{ chunks: number; sources: string[] }> {
+    const [chunks, sources] = await Promise.all([
+      this.store.countChunks(),
+      this.store.listSources(),
+    ]);
+    return { chunks, sources };
   }
 
-  close(): void {
-    this.store.close();
+  async close(): Promise<void> {
+    await this.store.close?.();
   }
 }

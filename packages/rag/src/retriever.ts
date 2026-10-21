@@ -1,5 +1,11 @@
 import type { EmbeddingsInterface } from "@langchain/core/embeddings";
-import type { RetrievalResult, ScoredChunk, VectorStore } from "./types.js";
+import type {
+  ChannelHit,
+  RetrievalResult,
+  ScoredChunk,
+  ScoredChunkDebug,
+  VectorStore,
+} from "./types.js";
 
 export interface RetrieveOptions {
   /** 最终返回的命中数，默认 5。 */
@@ -38,6 +44,9 @@ export function reciprocalRankFusion(lists: ScoredChunk[][], k = 60): ScoredChun
 /**
  * 混合检索：向量 kNN（若有 embeddings）+ FTS5 BM25 → RRF 融合 → Top-K。
  * 无 embeddings 时退化为纯关键词检索。
+ *
+ * 返回的 chunks.score 为 RRF 融合分；chunks[].debug 与 result.debug 保留双路
+ * 原始分（向量余弦 / BM25）与排名，供前端区分展示与审计回溯。
  */
 export async function retrieve(
   store: VectorStore,
@@ -49,15 +58,81 @@ export async function retrieve(
   if (sources?.length === 0) {
     return { query, chunks: [], formatted: () => "" };
   }
-  const lists: ScoredChunk[][] = [];
+  let vectorList: ScoredChunk[] = [];
+  let vectorMs: number | null = null;
   if (embeddings) {
+    const started = Date.now();
     const qv = (await embeddings.embedDocuments([query]))[0] ?? [];
-    lists.push(store.vectorSearch(qv, candidates, sources));
+    vectorList = await store.vectorSearch(qv, candidates, sources);
+    vectorMs = Date.now() - started;
   }
-  lists.push(store.keywordSearch(query, candidates, sources)); // store 内部做 CJK 切分 + AND→OR 降级
+  const keywordStarted = Date.now();
+  const keywordList = await store.keywordSearch(query, candidates, sources); // store 内部做 CJK 切分 + AND→OR 降级
+  const keywordMs = Date.now() - keywordStarted;
 
-  const chunks = reciprocalRankFusion(lists, rrfK).slice(0, topK);
-  return { query, chunks, formatted: () => formatChunks(chunks) };
+  const fusionStarted = Date.now();
+  const chunks = reciprocalRankFusionWithDebug(vectorList, keywordList, rrfK).slice(0, topK);
+  const fusionMs = Date.now() - fusionStarted;
+  const debug = {
+    embeddingsEnabled: Boolean(embeddings),
+    candidates,
+    rrfK,
+    timingsMs: { vectorMs, keywordMs, fusionMs },
+    vectorHits: withRank(vectorList),
+    keywordHits: withRank(keywordList),
+  };
+  return { query, chunks, formatted: () => formatChunks(chunks), debug };
+}
+
+function withRank(list: ScoredChunk[]): ChannelHit[] {
+  return list.map((hit, rank) => ({
+    id: hit.id,
+    source: hit.source,
+    chunkIndex: hit.chunkIndex,
+    content: hit.content,
+    score: hit.score,
+    rank,
+  }));
+}
+
+/**
+ * 带双路明细的 RRF：除融合分外，还记录每个命中的向量/关键词原始分与排名。
+ * channels 用于前端打标“仅向量 / 仅关键词 / 双路命中”。
+ */
+export function reciprocalRankFusionWithDebug(
+  vectorList: ScoredChunk[],
+  keywordList: ScoredChunk[],
+  k = 60,
+): ScoredChunk[] {
+  const vectorRank = new Map(vectorList.map((hit, rank) => [hit.id, rank] as const));
+  const keywordRank = new Map(keywordList.map((hit, rank) => [hit.id, rank] as const));
+  const vectorScore = new Map(vectorList.map((hit) => [hit.id, hit] as const));
+  const keywordScore = new Map(keywordList.map((hit) => [hit.id, hit] as const));
+  const fused = reciprocalRankFusion(
+    [vectorList, keywordList].filter((l) => l.length > 0),
+    k,
+  );
+  return fused.map((hit) => {
+    const vr = vectorRank.get(hit.id) ?? null;
+    const kr = keywordRank.get(hit.id) ?? null;
+    const vs = vectorScore.get(hit.id)?.score ?? null;
+    const ks = keywordScore.get(hit.id)?.score ?? null;
+    const channels: ScoredChunkDebug["channels"] = [
+      ...(vr !== null ? ["vector" as const] : []),
+      ...(kr !== null ? ["keyword" as const] : []),
+    ];
+    return {
+      ...hit,
+      debug: {
+        vectorScore: vs,
+        vectorRank: vr,
+        keywordScore: ks,
+        keywordRank: kr,
+        rrfScore: hit.score,
+        channels,
+      },
+    };
+  });
 }
 
 /** 带引用格式，可直接拼入 system prompt。 */

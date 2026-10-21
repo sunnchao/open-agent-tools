@@ -45,6 +45,15 @@ export default tseslint.config(
     },
   },
   {
+    files: ["apps/studio-app/src/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+    },
+  },
+  {
     files: ["apps/rag-server/server/**/*.{ts,tsx}"],
     languageOptions: {
       globals: {

@@ -1,0 +1,95 @@
+# 本地 Elasticsearch 一键编排（单机演示用）。
+#
+# 用法：
+#   docker compose -f scripts/docker-compose.elasticsearch.yml up -d
+#   curl http://localhost:9200              # 期望 {"tagline":"You Know, for Search"}
+#   docker compose -f scripts/docker-compose.elasticsearch.yml ps
+#   docker compose -f scripts/docker-compose.elasticsearch.yml logs -f elasticsearch
+#   docker compose -f scripts/docker-compose.elasticsearch.yml down        # 停服保留数据
+#   docker compose -f scripts/docker-compose.elasticsearch.yml down -v    # 停服并清空数据
+#
+# 接入 RAG（另开终端）：
+#   RAG_STORE=elasticsearch RAG_ES_NODE=http://localhost:9200 \
+#     pnpm --filter @open-agent-tools/rag-server dev
+#   curl http://127.0.0.1:4001/api/health  # store 应为 "elasticsearch"
+#
+# 安全声明：
+# - `xpack.security.enabled=false` 只适合本机演示；生产请启用安全、挂 TLS、设强口令，
+#   并把端口绑定到内网（参考 scripts/deploy/docker-compose.prod.yml 的 127.0.0.1 写法）。
+# - 默认 JVM 1g（`ES_JAVA_OPTS`），8g 以下笔记本建议保持；数据盘用 named volume `es-data`。
+# - 与仓库既有 `scripts/docker-compose.yml（MinIO）` 不冲突，可同时 `up -d`。
+# - Apple Silicon（arm64）可用；ES 8.17 官方镜像含 arm64。内存不足时先 `docker stats` 看占用。
+#
+# 版本锁定说明：
+# - 镜像 `8.17.0` 与 `pnpm-workspace.yaml` 的 `@elastic/elasticsearch: ^8.17.0` 同大版本，
+#   避免 client/server 协议漂移。小版本升级改这里即可。
+# - 需要中文 IK 分词时，另起带插件的自定义镜像（见下方注释），不要直接在容器内装插件
+#   （重启即丢，且与版本强绑定）。
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    container_name: open-agent-elasticsearch
+    restart: unless-stopped
+    environment:
+      # 单节点直起，不做集群发现
+      - discovery.type=single-node
+      # 本地演示关闭安全；生产务必删除本行并配置 ELASTIC_PASSWORD + TLS
+      - xpack.security.enabled=false
+      # 单机内存保护：测试索引很小，1g 足够；生产按数据量调大并配 mlockall
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      # 允许跨域调 Kibana Dev Tools（本地演示方便）
+      - http.cors.enabled=true
+      - http.cors.allow-origin=/.*/
+      - http.cors.allow-headers=X-Requested-With,X-Auth-Token,Content-Type,Content-Length,Authorization
+      - http.cors.allow-credentials=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      # 只绑回环，避免局域网裸奔；跨主机访问再改内网 IP + 防火墙
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # 可选：Kibana 调试控制台（http://127.0.0.1:5601）。
+  # 不需要可注释掉整个 kibana 段，只起 elasticsearch 不影响 RAG。
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.17.0
+    container_name: open-agent-kibana
+    restart: unless-stopped
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "127.0.0.1:5601:5601"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  es-data:
+
+# ---- 中文 IK 分词（可选，生产中文建议开）----
+# ES 官方镜像不含 IK。做法：另写 Dockerfile：
+#   FROM docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+#   RUN bin/elasticsearch-plugin install --batch \
+#     https://release.infinilabs.com/analysis-ik/stable/elasticsearch-analysis-ik-8.17.0.zip
+# 构建 `docker build -t rag-es-ik:8.17.0 -f Dockerfile.es-ik .` 后把上面
+# `image:` 换成它，并把 `packages/rag/src/store-elasticsearch.ts` 里
+# `content` 的 `analyzer: standard` 改为 `ik_max_word`（注释处有标记），重建索引。

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { nodeKindSchema, nodeConfigSchemas, workflowGraphSchema } from "./graph.js";
+import { effectiveNodeConfig, nodeKindSchema, nodeConfigSchemas, workflowGraphSchema } from "./graph.js";
 
 it("provides one kind/config contract and enforces execution bounds", () => {
   assert.equal(nodeKindSchema.options.length, 10);
@@ -17,6 +17,14 @@ it("provides one kind/config contract and enforces execution bounds", () => {
     (nodeConfigSchemas.mcp.parse({ service: "legacy" }) as { service?: string }).service,
     "legacy",
   );
+});
+it("types graph document scopes while allowing an unconfigured draft", () => {
+  assert.equal(nodeConfigSchemas.graph.safeParse({ query: "query" }).success, true);
+  assert.deepEqual(effectiveNodeConfig("graph").sources, []);
+  assert.equal(nodeConfigSchemas.graph.safeParse({ sources: ["guide.md"] }).success, true);
+  for (const sources of ["guide.md", [42], [""], [" "]]) {
+    assert.equal(nodeConfigSchemas.graph.safeParse({ sources }).success, false);
+  }
 });
 it("validates SQL query nodes and their result limits", () => {
   assert.equal(

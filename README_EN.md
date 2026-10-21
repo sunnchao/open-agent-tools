@@ -29,6 +29,7 @@ Enterprises no longer have to juggle a set of isolated AI tools: connect data so
 - Upload Node.js Tool ZIP archives, validate archive/npm package structure, run `npm ci`, and run an optional build.
 - Build and push digest-addressed OCI images, generate CycloneDX SBOMs, and scan images with Trivy.
 - Execute Tools in isolated Docker containers; validate and render Prompts directly in the Gateway.
+- Register remote MCP upstreams behind the Gateway: create a `REMOTE_MCP` service with an upstream URL (Streamable HTTP / SSE), auth token, and timeout. The Gateway proxies upstream `tools/list`/`tools/call` while still rendering local Prompts; upstream tokens are write-only, editable per version, testable with one click, and published versions require a forked draft to change.
 - Service-level runtime environment variables: configure variables such as `TAVILY_API_KEY` for Tools under "MCP → Services → Environment variables". Values are write-only and never echoed back; a saved change takes effect on the next call, with no rebuild or republish.
 - Per-version runtime limits: once a package has been inspected, adjust the timeout, memory, CPU, and network mode (`none` disables networking, `bridge` allows it) in the preview panel. Published versions are read-only.
 - Keep Studio Web and the administration API temporarily anonymous, with every visitor acting as an administrator.
@@ -38,7 +39,7 @@ Enterprises no longer have to juggle a set of isolated AI tools: connect data so
 - Provide a React administration console covering services, Tools, Prompts, builds, versions, client authorization, and audit.
 - Custom Function Tools: `packages/function-tools` collects MCP tool packages that can be packaged and uploaded independently. It currently contains `pinyin` (Chinese characters to pinyin, runs offline) and `web-search` (Tavily web search, requires `bridge` networking and `TAVILY_API_KEY`), plus an interactive packaging script.
 
-The managed runtime currently supports Node.js 20, ESM, and npm only. Python, Java, managed MCP Resources, and remote MCP proxying are outside the currently runnable scope.
+The managed runtime currently supports Node.js 20, ESM, and npm only. Python, Java, and managed MCP Resources are outside the currently runnable scope.
 
 ## Architecture
 
@@ -501,7 +502,7 @@ Docker E2E tests also require a local Docker daemon and a pre-built test Runner 
 ## Current limitations
 
 - Managed Tools support Node.js 20 ESM/npm only. Python, Java, Yarn, pnpm Tool packages, Bun, and user-supplied Dockerfiles are not supported.
-- Managed MCP Resources and remote MCP service proxying are not implemented.
+- Managed MCP Resources are not implemented (remote MCP proxying is supported, see above).
 - The administration console now provides Builds, Clients/Access, and Audit views; a dedicated Executions page is still pending.
 - Studio Web, the Control Plane, and the Agent Server currently have no identity authentication or user isolation and must not be exposed directly to the public internet.
 - The repository has no one-command Docker Compose or Kubernetes deployment manifest.

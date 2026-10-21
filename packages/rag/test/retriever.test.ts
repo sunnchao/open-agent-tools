@@ -61,8 +61,8 @@ test("文档 ACL：viewerGroups 只能拿到公开与命中文档", async () => 
       { name: "hr.md", data: new TextEncoder().encode("HR 薪酬带宽。") },
       { name: "finance.md", data: new TextEncoder().encode("财务预算流程。") },
     ]);
-    rag.updateDocument("hr.md", { allowedGroups: ["hr"] });
-    rag.updateDocument("finance.md", { allowedGroups: ["finance"] });
+    await rag.updateDocument("hr.md", { allowedGroups: ["hr"] });
+    await rag.updateDocument("finance.md", { allowedGroups: ["finance"] });
 
     const hrOnly = await rag.retrieve("标准 流程 带宽", {
       topK: 10,
@@ -82,7 +82,7 @@ test("文档 ACL：viewerGroups 只能拿到公开与命中文档", async () => 
     const admin = await rag.retrieve("标准 流程 带宽", { topK: 10 });
     assert.ok(admin.chunks.some((chunk) => chunk.source === "finance.md"));
   } finally {
-    rag.close();
+    await rag.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

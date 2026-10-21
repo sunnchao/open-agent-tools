@@ -13,6 +13,15 @@ import type {
 import { sha1 } from "./utils.js";
 import { loaderFor, loaderForName } from "./loaders.js";
 import { chunkDocuments, DEFAULT_SEPARATORS } from "./chunking.js";
+import {
+  DEFAULT_OCR_DECISION,
+  isLikelyScanned,
+  normalizeOcrDecision,
+  totalTextLength,
+  type OcrDecision,
+  type OcrProvider,
+  type OcrStatus,
+} from "./ocr.js";
 
 export { DEFAULT_SEPARATORS } from "./chunking.js";
 
@@ -27,13 +36,22 @@ export interface IngestOptions {
   separators?: string[];
   /** 语义切分相似度阈值（0-1），仅在有 embeddings 时生效。 */
   semanticThreshold?: number;
+  /** PDF OCR 兜底：缺省关闭（纯文本路径），保持原生链路零变化。 */
+  ocr?: OcrProvider;
+  ocrDecision?: Partial<OcrDecision>;
 }
 
 /** 从本地路径入库一份文档，返回写入的分块数。幂等：先清该 source 旧数据。 */
 export async function ingestPath(path: string, opts: IngestOptions): Promise<number> {
-  const loader = loaderFor(path);
+  const ocrDecision = normalizeOcrDecision(opts.ocrDecision);
+  const loader = loaderFor(path, { ocr: opts.ocr, ocrDecision });
   const [docs, data] = await Promise.all([loader.load(path), readFile(path)]);
-  return ingestDocuments(normalizeSource(path), docs, opts, fileMetadata(path, data, opts));
+  return ingestDocuments(
+    normalizeSource(path),
+    docs,
+    opts,
+    fileMetadata(path, data, opts, ocrInfoForDocs(path, docs, ocrDecision)),
+  );
 }
 
 /** 从内存 Buffer 入库一份文档（Web 上传场景），返回写入的分块数。幂等。 */
@@ -42,9 +60,15 @@ export async function ingestBuffer(
   data: Uint8Array,
   opts: IngestOptions,
 ): Promise<number> {
-  const loader = loaderForName(name);
+  const ocrDecision = normalizeOcrDecision(opts.ocrDecision);
+  const loader = loaderForName(name, { ocr: opts.ocr, ocrDecision });
   const docs = await loader.loadBuffer(name, data);
-  return ingestDocuments(normalizeSource(name), docs, opts, fileMetadata(name, data, opts));
+  return ingestDocuments(
+    normalizeSource(name),
+    docs,
+    opts,
+    fileMetadata(name, data, opts, ocrInfoForDocs(name, docs, ocrDecision)),
+  );
 }
 
 async function ingestDocuments(
@@ -61,7 +85,7 @@ async function ingestDocuments(
     embeddings: opts.embeddings,
     semanticThreshold: opts.semanticThreshold,
   });
-  if (chunks.length === 0) throw new Error(`document "${source}" has no indexable content`);
+  if (chunks.length === 0) throw diagnosticEmptyError(source, docs, metadata, opts.ocrDecision);
 
   const contents = chunks.map((c) => c.content);
   const vectors = opts.embeddings
@@ -73,7 +97,8 @@ async function ingestDocuments(
     vector: Float32Array.from(vectors[i] ?? []),
   }));
   // embeddings 完成后再进入原子替换；外部模型失败时旧版本仍然可检索。
-  opts.store.replaceSource(
+  // SQLite 下是事务原子；ES 下是 delete+bulk best-effort，失败时需重传修复。
+  await opts.store.replaceSource(
     source,
     rows.map(({ chunk, vector }) => ({ chunk, embedding: vector })),
     metadata,
@@ -81,7 +106,12 @@ async function ingestDocuments(
   return chunks.length;
 }
 
-function fileMetadata(name: string, data: Uint8Array, opts: IngestOptions): DocumentWriteMetadata {
+function fileMetadata(
+  name: string,
+  data: Uint8Array,
+  opts: IngestOptions,
+  ocr?: { ocrApplied: boolean; ocrStatus: OcrStatus; ocrPages: number },
+): DocumentWriteMetadata {
   const extension = extname(name).toLowerCase();
   const mimeType =
     extension === ".pdf"
@@ -101,7 +131,59 @@ function fileMetadata(name: string, data: Uint8Array, opts: IngestOptions): Docu
       (opts.chunkStrategy ?? (opts.embeddings ? "semantic" : "fixed")) === "semantic"
         ? (opts.semanticThreshold ?? 0.75)
         : null,
+    ocrApplied: ocr?.ocrApplied ?? false,
+    ocrStatus: ocr?.ocrStatus ?? (extension === ".pdf" ? "text_layer" : "none"),
+    ocrPages: ocr?.ocrPages ?? 0,
   };
+}
+
+/** 按页文本推导 OCR 标记：供 fileMetadata 与 store 落库使用。 */
+function ocrInfoForDocs(
+  name: string,
+  docs: Document[],
+  ocrDecision?: Partial<OcrDecision>,
+): { ocrApplied: boolean; ocrStatus: OcrStatus; ocrPages: number } {
+  const decision = normalizeOcrDecision(ocrDecision);
+  const isPdf = extname(name).toLowerCase() === ".pdf";
+  const ocrApplied = docs.some((d) => d.metadata?.ocr === true);
+  if (ocrApplied) return { ocrApplied: true, ocrStatus: "ocr", ocrPages: docs.length };
+  if (!isPdf) return { ocrApplied: false, ocrStatus: "none", ocrPages: 0 };
+  const pages = docs.length > 0 ? docs.length : 1;
+  const textLen = totalTextLength(docs);
+  if (isLikelyScanned(textLen, pages, decision.minCharsPerPage)) {
+    const failed = docs.some((d) => typeof d.metadata?.ocrError === "string");
+    return {
+      ocrApplied: false,
+      ocrStatus: failed ? "ocr_failed" : "ocr_needed",
+      ocrPages: docs.length,
+    };
+  }
+  return { ocrApplied: false, ocrStatus: "text_layer", ocrPages: docs.length };
+}
+
+/** 空内容错误细分：扫描疑似 vs OCR 后仍空，便于前端分流提示。 */
+function diagnosticEmptyError(
+  source: string,
+  docs: Document[],
+  metadata: DocumentWriteMetadata,
+  ocrDecision?: Partial<OcrDecision>,
+): Error {
+  const decision = normalizeOcrDecision(ocrDecision ?? DEFAULT_OCR_DECISION);
+  const pages = docs.length > 0 ? docs.length : 1;
+  const textLen = totalTextLength(docs);
+  const avg = Math.floor(textLen / pages);
+  if (metadata.ocrApplied) {
+    return new Error(
+      `document "${source}" has no indexable content after OCR (ocr applied to ${pages} pages, still empty)`,
+    );
+  }
+  if (isLikelyScanned(textLen, pages, decision.minCharsPerPage)) {
+    const ocrOff = decision.enabled ? "" : " Enable OCR (RAG_OCR_ENABLED=true) and re-upload.";
+    return new Error(
+      `document "${source}" has no indexable content (likely scanned PDF, ${pages} pages, avg ${avg} chars).${ocrOff}`,
+    );
+  }
+  return new Error(`document "${source}" has no indexable content`);
 }
 
 /** 归一化 source 为文件名，避免绝对路径写入元数据。 */

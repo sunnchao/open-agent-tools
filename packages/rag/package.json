@@ -35,6 +35,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@elastic/elasticsearch": "catalog:",
     "@langchain/community": "catalog:",
     "@langchain/core": "catalog:",
     "@langchain/textsplitters": "catalog:"

@@ -101,11 +101,11 @@ test("无 embeddings 时退化为纯 BM25 入库与检索", async () => {
   await rag.ingestBuffers([
     { name: "note.txt", data: new TextEncoder().encode("RAG 检索增强生成 混合检索") },
   ]);
-  assert.equal(rag.getStats().chunks, 1);
+  assert.equal((await rag.getStats()).chunks, 1);
   const res = await rag.retrieve("RAG 检索");
   assert.ok(res.chunks.length >= 1, "BM25 应能命中关键词");
   assert.ok(res.formatted().includes("note.txt"));
-  rag.close();
+  await rag.close();
   cleanup();
 });
 
@@ -114,10 +114,10 @@ test("Rag 门面：ingest + listSources + clearSource", async () => {
   const rag = new Rag({ dbPath: join(dir, "rag.db"), embeddings: new FakeEmbeddings() });
   await rag.ingestBuffers([{ name: "a.txt", data: new TextEncoder().encode("hello aaa") }]);
   await rag.ingestBuffers([{ name: "b.txt", data: new TextEncoder().encode("world bbb") }]);
-  assert.deepEqual(rag.listSources(), ["a.txt", "b.txt"]);
-  rag.clearSource("a.txt");
-  assert.deepEqual(rag.listSources(), ["b.txt"]);
-  rag.close();
+  assert.deepEqual(await rag.listSources(), ["a.txt", "b.txt"]);
+  await rag.clearSource("a.txt");
+  assert.deepEqual(await rag.listSources(), ["b.txt"]);
+  await rag.close();
   cleanup();
 });
 
@@ -134,10 +134,10 @@ test("Rag 门面：单次上传可覆盖分块设置", async () => {
     chunkOverlap: 0,
   });
 
-  const chunks = rag.listChunks("settings.txt");
+  const chunks = await rag.listChunks("settings.txt");
   assert.ok(chunks.length > 1);
   assert.ok(chunks.every((chunk) => chunk.length <= 100));
-  rag.close();
+  await rag.close();
   cleanup();
 });
 
@@ -156,10 +156,10 @@ test("Rag 门面：单次上传可覆盖分段标识符", async () => {
   );
 
   assert.deepEqual(
-    rag.listChunks("separators.txt").map((chunk) => chunk.content),
+    (await rag.listChunks("separators.txt")).map((chunk) => chunk.content),
     ["alpha", "|bravo", "|charlie"],
   );
-  rag.close();
+  await rag.close();
   cleanup();
 });
 
@@ -177,10 +177,10 @@ test("Rag 门面：语义策略按话题切分并记录阈值", async () => {
     ],
     { chunkStrategy: "semantic", chunkSize: 200, chunkOverlap: 0, semanticThreshold: 0.75 },
   );
-  assert.equal(rag.listChunks("topics.txt").length, 2);
-  const document = rag.listDocuments()[0]!;
+  assert.equal((await rag.listChunks("topics.txt")).length, 2);
+  const document = (await rag.listDocuments())[0]!;
   assert.equal(document.chunkStrategy, "semantic");
   assert.equal(document.semanticThreshold, 0.75);
-  rag.close();
+  await rag.close();
   cleanup();
 });

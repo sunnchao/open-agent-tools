@@ -29,6 +29,7 @@ open-agent-tools 是一个服务于企业内部的 AI 工具项目：把企业�
 - 上传 Node.js Tool ZIP 包，校验归档与 npm 包结构，执行 `npm ci` 和可选构建。
 - 构建、推送和摘要固定 OCI 镜像，生成 CycloneDX SBOM，并通过 Trivy 扫描镜像。
 - 通过隔离 Docker 容器执行 Tool；Prompt 由 Gateway 直接校验参数并渲染。
+- 注册远端 MCP 上游并由网关代理：创建 `REMOTE_MCP` 服务并配置上游地址（Streamable HTTP / SSE）、鉴权 Token 与超时，网关透传上游 `tools/list`/`tools/call`，本地 Prompts 继续由网关渲染；上游 Token 只写不回显，版本内可修改、可一键测试连通性，已发布版本需分叉草稿再改。
 - 服务级运行环境变量：在「MCP → 服务 → 环境变量」为 Tool 配置 `TAVILY_API_KEY` 等变量。值只写不回显，保存后下一次调用生效，无需重新构建或发布。
 - 版本运行限制：代码包检查后可在预览面板调整超时、内存、CPU 和网络模式（`none` 禁网、`bridge` 联网）；已发布版本只读。
 - Studio Web 与管理 API 暂时匿名开放，任何访问者都以管理员权限操作。
@@ -38,7 +39,7 @@ open-agent-tools 是一个服务于企业内部的 AI 工具项目：把企业�
 - 提供 React 管理界面，覆盖服务、Tool、Prompt、构建、版本、客户端授权和审计。
 - 自定义 Function Tools：`packages/function-tools` 聚合可独立打包上传的 MCP 工具包，目前包含 `pinyin`（汉字转拼音，离线运行）和 `web-search`（Tavily 联网搜索，需要 `bridge` 网络和 `TAVILY_API_KEY`），并提供交互式打包脚本。
 
-当前托管运行时只支持 Node.js 20、ESM 和 npm。Python、Java、托管 MCP Resources，以及远程 MCP 代理尚未包含在当前可运行范围内。
+当前托管运行时只支持 Node.js 20、ESM 和 npm。Python、Java 和托管 MCP Resources 尚未包含在当前可运行范围内。
 
 ## 系统架构
 
@@ -501,7 +502,7 @@ Docker E2E 还需要本机 Docker daemon 和已构建的测试 Runner 镜像。
 ## 当前限制
 
 - 仅支持托管 Node.js 20 ESM/npm Tool；不支持 Python、Java、Yarn、pnpm Tool 包、Bun 或自定义 Dockerfile。
-- 不支持托管 MCP Resources，也未完成远程 MCP 服务代理。
+- 不支持托管 MCP Resources（远端 MCP 代理已支持，见上）。
 - 管理端已提供 Builds、Clients/Access 和 Audit 操作视图；独立 Executions 页面仍需补全。
 - Studio Web、Control Plane 与 Agent Server 当前没有身份认证或用户隔离，不适合直接暴露到公网。
 - 仓库未提供一键式 Docker Compose 或 Kubernetes 部署清单。
