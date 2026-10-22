@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getQualityReport,
   queryKnowledge,
+  recallOptions,
   submitQueryFeedback,
   updateDocument,
   uploadDocuments,
@@ -136,6 +137,35 @@ describe("RAG Studio API", () => {
       query: "部署",
       topK: 5,
       generate: false,
+    });
+  });
+});
+
+describe("recallOptions", () => {
+  it("开启图谱检索时不传任何通道开关，沿用服务端默认", () => {
+    expect(recallOptions(true)).toEqual({});
+  });
+
+  it("关闭图谱检索时同时关闭图谱与关键词，退化为仅向量召回", () => {
+    expect(recallOptions(false)).toEqual({ graph: false, keyword: false });
+  });
+
+  it("仅向量模式的请求体同时含 graph:false 与 keyword:false", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ queryId: "q4", chunks: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await queryKnowledge({ query: "部署", topK: 5, generate: false, ...recallOptions(false) });
+
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({
+      query: "部署",
+      topK: 5,
+      generate: false,
+      graph: false,
+      keyword: false,
     });
   });
 });

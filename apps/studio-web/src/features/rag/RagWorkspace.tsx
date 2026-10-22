@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   App,
   Badge,
   Button,
   Card,
+  Checkbox,
   Collapse,
   Descriptions,
   Drawer,
@@ -54,6 +55,7 @@ import {
   listChunks,
   listDocuments,
   queryKnowledge,
+  recallOptions,
   submitQueryFeedback,
   updateDocument,
   uploadDocuments,
@@ -83,7 +85,10 @@ interface RagSettings {
   topK: number;
   generate: boolean;
   restrictToSelected: boolean;
-  /** 图谱增强默认开启：图谱第三路参与 RRF，命中分块与向量/关键词同权融合。 */
+  /**
+   * 图谱检索（多路召回）开关，默认开启。
+   * 开启：向量 + 关键词 + 图谱三路召回；关闭：仅向量召回（图谱与关键词通道同时关闭）。
+   */
   graphEnhance: boolean;
 }
 
@@ -122,7 +127,7 @@ export function RagWorkspace({ initialView, initialSource }: RagWorkspaceProps) 
   const [highlightChunkIndex, setHighlightChunkIndex] = useState<number | null>(null);
   const [settings, setSettings] = useState<RagSettings>(defaultSettings);
   const [separatorText, setSeparatorText] = useState(() => separatorsToText(defaultSeparators));
-  const [query, setQuery] = useState("");
+  const queryDraftRef = useRef("");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [view, setView] = useState<RagView>(initialView ?? "documents");
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
@@ -272,28 +277,39 @@ export function RagWorkspace({ initialView, initialSource }: RagWorkspaceProps) 
     }
   };
 
-  const runQuery = async () => {
-    if (!query.trim()) return;
-    setBusy("query");
-    setNotice(null);
-    try {
-      setResult(
-        await queryKnowledge({
-          query: query.trim(),
-          topK: settings.topK,
-          generate: settings.generate,
-          ...(settings.restrictToSelected && selectedSource ? { sources: [selectedSource] } : {}),
-          // 只在关闭时显式传 false：开启时沿用服务端默认（含全局开关与可用性判断），
-          // 避免前端硬编码 true 覆盖掉服务端配置。
-          ...(settings.graphEnhance ? {} : { graph: false }),
-        }),
-      );
-    } catch (reason) {
-      setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
-    } finally {
-      setBusy(null);
-    }
-  };
+  const setGraphRecall = useCallback((checked: boolean) => {
+    setSettings((current) => ({ ...current, graphEnhance: checked }));
+  }, []);
+
+  const runQuery = useCallback(
+    async (text: string) => {
+      const value = text.trim();
+      if (!value) return;
+      setBusy("query");
+      setNotice(null);
+      try {
+        setResult(
+          await queryKnowledge({
+            query: value,
+            topK: settings.topK,
+            generate: settings.generate,
+            ...(settings.restrictToSelected && selectedSource ? { sources: [selectedSource] } : {}),
+            // 开启时沿用服务端默认（含全局开关与可用性判断），不硬编码 true；
+            // 关闭时由 recallOptions 同时关掉图谱与关键词，退化为「仅向量」召回。
+            ...recallOptions(settings.graphEnhance),
+          }),
+        );
+      } catch (reason) {
+        setNotice({
+          type: "error",
+          text: reason instanceof Error ? reason.message : String(reason),
+        });
+      } finally {
+        setBusy(null);
+      }
+    },
+    [settings, selectedSource],
+  );
 
   const saveDocumentMetadata = async (
     source: string,
@@ -489,7 +505,7 @@ export function RagWorkspace({ initialView, initialSource }: RagWorkspaceProps) 
     <StudioPage
       eyebrow="上下文工程 / RAG"
       title="知识库"
-      description="上传文档构建知识来源，检索时向量、关键词与知识图谱三路融合，并分析服务质量。"
+      description="上传文档构建知识来源，默认开启图谱检索做向量、关键词与图谱多路召回；关闭后仅走向量召回，并分析服务质量。"
       actions={
         <>
           <Segmented<RagView>
@@ -580,28 +596,15 @@ export function RagWorkspace({ initialView, initialSource }: RagWorkspaceProps) 
             }}
           >
             <Card size="small" title="检索预览" style={{ flex: "0 0 auto" }}>
-              <Flex gap={8} align="flex-start">
-                <Input.TextArea
-                  aria-label="检索问题"
-                  rows={2}
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runQuery();
-                  }}
-                  placeholder="输入问题，预览召回片段与生成结果"
-                  style={{ flex: 1 }}
-                />
-                <Button
-                  type="primary"
-                  icon={<SearchOutlined />}
-                  loading={busy === "query"}
-                  disabled={!query.trim() || busy === "query"}
-                  onClick={() => void runQuery()}
-                >
-                  {busy === "query" ? "检索中..." : "运行检索"}
-                </Button>
-              </Flex>
+              <QueryComposer
+                busy={busy === "query"}
+                draftRef={queryDraftRef}
+                graphRecall={settings.graphEnhance}
+                vectorRecallAvailable={Boolean(stats?.embeddingsEnabled)}
+                graphRecallAvailable={stats?.graphRetrieval !== false}
+                onGraphRecallChange={setGraphRecall}
+                onRun={runQuery}
+              />
             </Card>
             {result ? (
               <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
@@ -729,13 +732,6 @@ export function RagWorkspace({ initialView, initialSource }: RagWorkspaceProps) 
                   max={10}
                   value={settings.topK}
                   onChange={(value) => setSettings({ ...settings, topK: value })}
-                />
-              </Form.Item>
-              <Form.Item label="图谱增强" extra="用实体关系多路补充召回，命中分块参与 RRF。">
-                <Switch
-                  aria-label="图谱增强"
-                  checked={settings.graphEnhance}
-                  onChange={(checked) => setSettings({ ...settings, graphEnhance: checked })}
                 />
               </Form.Item>
               <Form.Item
@@ -1550,11 +1546,16 @@ function AuditTraceView({ detail }: { detail: QueryDetail }) {
               },
               {
                 key: "keyword",
-                status: "finish",
-                title: `关键词检索 · ${trace.keywordHits.length} 候选`,
+                status: trace.keywordEnabled === false ? "wait" : "finish",
+                title:
+                  trace.keywordEnabled === false
+                    ? "关键词检索 · 未启用"
+                    : `关键词检索 · ${trace.keywordHits.length} 候选`,
                 description: (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    BM25 先 AND 后 OR 降级，耗时 {trace.timingsMs.keywordMs} ms
+                    {trace.keywordEnabled === false
+                      ? "仅向量召回模式：本次请求关闭了 BM25 关键词通道"
+                      : `BM25 先 AND 后 OR 降级，耗时 ${trace.timingsMs.keywordMs} ms`}
                   </Typography.Text>
                 ),
               },
@@ -1563,12 +1564,14 @@ function AuditTraceView({ detail }: { detail: QueryDetail }) {
                 status: trace.graphEnabled === false ? "wait" : "finish",
                 title:
                   trace.graphEnabled === false
-                    ? "图谱增强 · 未启用"
+                    ? "图谱检索 · 未启用"
                     : `图谱检索 · ${trace.graphHits?.length ?? 0} 候选`,
                 description: (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     {trace.graphEnabled === false
-                      ? "本次请求显式关闭图谱第三路，仅融合向量与关键词"
+                      ? trace.keywordEnabled === false
+                        ? "本次请求关闭图谱检索，仅使用向量召回"
+                        : "本次请求关闭图谱检索，仅融合向量与关键词"
                       : `子图回溯真实分块后参与 RRF，耗时 ${trace.timingsMs.graphMs ?? 0} ms`}
                   </Typography.Text>
                 ),
@@ -1726,6 +1729,23 @@ function formatDateTime(value: string): string {
   }).format(date);
 }
 
+/**
+ * 检索链路摘要：把「本次实际用了哪几路」说清楚。
+ * keywordEnabled/graphEnabled 缺省（老服务端）时按启用处理，避免误报成仅向量。
+ */
+function retrievalLabel(retrieval: {
+  embeddingsEnabled: boolean;
+  keywordEnabled?: boolean;
+  graphEnabled?: boolean;
+}): string {
+  const channels = [
+    `向量${retrieval.embeddingsEnabled ? "开" : "关"}`,
+    retrieval.keywordEnabled === false ? "关键词关" : "关键词开",
+    retrieval.graphEnabled === false ? "图谱关" : "图谱开",
+  ];
+  return channels.join(" · ");
+}
+
 const previewCardStyle = {
   height: "100%",
   display: "flex",
@@ -1743,7 +1763,96 @@ const previewCardStyles = {
   },
 };
 
-function ChunkPreview({
+/**
+ * 检索问题输入框单独持有草稿状态。
+ *
+ * 之前 `query` 放在 RagWorkspace 顶层：每敲一个字都会重渲染整个知识库页面，
+ * 其中「分块预览」一次挂载上千条分块，单次按键的主线程耗时接近 1s。
+ * 把击键状态限制在这个小组件内，输入不再触发页面级重渲染。
+ */
+const QueryComposer = memo(function QueryComposer({
+  busy,
+  draftRef,
+  graphRecall,
+  vectorRecallAvailable,
+  graphRecallAvailable,
+  onGraphRecallChange,
+  onRun,
+}: {
+  busy: boolean;
+  /** 草稿只在 ref 中留存：切走视图再回来不丢输入，也不会触发父级重渲染。 */
+  draftRef: { current: string };
+  /** 图谱检索（多路召回）开关；关闭时退化为仅向量召回。 */
+  graphRecall: boolean;
+  /** 向量通道是否可用（Embeddings 是否配置）；关闭图谱检索时用于提示空召回风险。 */
+  vectorRecallAvailable: boolean;
+  /** 部署侧是否允许图谱检索（RAG_GRAPH_RETRIEVAL）；false 时勾选无效。 */
+  graphRecallAvailable: boolean;
+  onGraphRecallChange: (checked: boolean) => void;
+  onRun: (text: string) => void;
+}) {
+  const [text, setText] = useState(draftRef.current);
+  const canRun = text.trim().length > 0 && !busy;
+  return (
+    <Flex vertical gap={8}>
+      <Flex gap={8} align="flex-start">
+        <Input.TextArea
+          aria-label="检索问题"
+          rows={2}
+          value={text}
+          onChange={(event) => {
+            setText(event.target.value);
+            draftRef.current = event.target.value;
+          }}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && canRun) onRun(text);
+          }}
+          placeholder="输入问题，预览召回片段与生成结果"
+          style={{ flex: 1 }}
+        />
+        <Button
+          type="primary"
+          icon={<SearchOutlined />}
+          loading={busy}
+          disabled={!canRun}
+          onClick={() => onRun(text)}
+        >
+          {busy ? "检索中..." : "运行检索"}
+        </Button>
+      </Flex>
+      <Flex gap={8} align="center" wrap>
+        <Checkbox
+          aria-label="图谱检索多路召回"
+          checked={graphRecall && graphRecallAvailable}
+          disabled={!graphRecallAvailable}
+          onChange={(event) => onGraphRecallChange(event.target.checked)}
+        >
+          <Typography.Text strong style={{ fontSize: 12 }}>
+            图谱检索（多路召回）
+          </Typography.Text>
+        </Checkbox>
+        <Typography.Text
+          type={
+            (!graphRecall || !graphRecallAvailable) && !vectorRecallAvailable
+              ? "warning"
+              : "secondary"
+          }
+          style={{ fontSize: 12 }}
+        >
+          {!graphRecallAvailable
+            ? "服务端已通过 RAG_GRAPH_RETRIEVAL 全局关闭图谱检索：本次检索仅使用向量召回。"
+            : graphRecall
+              ? "向量 + 关键词 + 图谱三路并行召回，命中分块经 RRF 融合排序。"
+              : vectorRecallAvailable
+                ? "已关闭图谱召回：仅从向量检索召回实体分块。"
+                : "已关闭图谱召回，但当前未配置 Embeddings：仅向量模式将无法召回内容，请先配置向量模型。"}
+        </Typography.Text>
+      </Flex>
+    </Flex>
+  );
+});
+
+const ChunkPreview = memo(function ChunkPreview({
   source,
   chunks,
   highlightChunkIndex,
@@ -1810,7 +1919,7 @@ function ChunkPreview({
       )}
     </Card>
   );
-}
+});
 
 function QueryPreview({
   result,
@@ -1879,7 +1988,7 @@ function QueryPreview({
           items={[
             {
               key: "retrieval",
-              label: `检索链路 · ${retrieval.store} · 向量${retrieval.embeddingsEnabled ? "开" : "关"} · RRF k=${retrieval.rrfK}`,
+              label: `检索链路 · ${retrieval.store} · ${retrievalLabel(retrieval)} · RRF k=${retrieval.rrfK}`,
               children: (
                 <Flex vertical gap={8}>
                   <Descriptions size="small" column={2} bordered>
@@ -1911,8 +2020,12 @@ function QueryPreview({
                     <Alert
                       type="info"
                       showIcon
-                      message="图谱增强未启用"
-                      description="本次检索只融合向量与关键词两路；开启「图谱增强」后可额外召回实体关系关联的分块。"
+                      message={retrieval.keywordEnabled === false ? "仅向量召回" : "图谱检索未启用"}
+                      description={
+                        retrieval.keywordEnabled === false
+                          ? "本次检索关闭了图谱与关键词通道，只从向量检索召回；重新勾选「图谱检索（多路召回）」可恢复三路。"
+                          : "本次检索关闭了图谱通道，只融合向量与关键词两路。"
+                      }
                     />
                   ) : null}
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -2060,7 +2173,7 @@ function GraphAugmentationCard({
         message="知识图谱增强"
         description={
           inactive
-            ? "图谱增强未启用：本次检索仅使用向量与关键词两路。"
+            ? "图谱检索未启用：本次检索仅使用向量召回。"
             : "图谱增强已启用，但本次问题未命中任何图谱实体，未产生图谱候选分块。"
         }
       />

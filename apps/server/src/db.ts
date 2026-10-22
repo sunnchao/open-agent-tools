@@ -56,7 +56,15 @@ export function openDb(path = getDbPath()): DatabaseSync {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL DEFAULT 'New chat',
       updated_at INTEGER NOT NULL,
-      workspace_id TEXT NOT NULL DEFAULT 'default'
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      -- 来源：'web'（Web/App 聊天）或 'im'（IM 机器人）。
+      -- IM 会话统一标记为 'im'，平台信息放在 actor / channel_id 上，
+      -- 这样筛选时只需按 source 切分，不必为每个平台各建一列。
+      source TEXT NOT NULL DEFAULT 'web',
+      -- IM 来源的平台用户 id（私聊与群聊都记录），Web 会话为 NULL。
+      actor TEXT,
+      -- IM 来源的渠道 id，Web 会话为 NULL。
+      channel_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -95,9 +103,13 @@ export function openDb(path = getDbPath()): DatabaseSync {
       app_secret_enc TEXT,
       encrypt_key_enc TEXT,
       rag_sources_json TEXT NOT NULL DEFAULT '[]',
+      sql_sources_json TEXT NOT NULL DEFAULT '[]',
+      mcp_tools_json TEXT NOT NULL DEFAULT '[]',
       rag_top_k INTEGER NOT NULL DEFAULT 5,
       require_mention INTEGER NOT NULL DEFAULT 1,
       enabled INTEGER NOT NULL DEFAULT 1,
+      -- 渠道所属 workspace：IM 问答产生的会话与用量都归到该空间。
+      workspace_id TEXT NOT NULL DEFAULT 'default',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -295,7 +307,10 @@ export function openDb(path = getDbPath()): DatabaseSync {
   migrateMessagesTable(db);
   migrateProvidersTable(db);
   migrateSchemaSourcesTable(db);
+  migrateImChannelsTable(db);
+  // workspace 列先补齐（老库可能连 workspace_id 都没有），再补来源列。
   migrateWorkspaceColumns(db);
+  migrateSessionSourceColumns(db);
   migrateUsageColumns(db);
   ensureDefaultWorkspace(db);
 
@@ -437,6 +452,49 @@ function migrateSchemaSourcesTable(database: DatabaseSync): void {
   }
 }
 
+/**
+ * 为存量库补齐 im_channels.sql_sources_json / mcp_tools_json 列。
+ * 新建库由 CREATE TABLE 直接带上；老库必须 ALTER，否则 store 的 SELECT * 会缺列。
+ */
+function migrateImChannelsTable(database: DatabaseSync): void {
+  const rows = database.prepare(`PRAGMA table_info(im_channels)`).all() as Array<{ name: string }>;
+  if (rows.length === 0) return;
+  const columns = new Set(rows.map((row) => row.name));
+  const additions: Array<[string, string]> = [
+    ["sql_sources_json", "TEXT NOT NULL DEFAULT '[]'"],
+    ["mcp_tools_json", "TEXT NOT NULL DEFAULT '[]'"],
+    ["workspace_id", `TEXT NOT NULL DEFAULT '${DEFAULT_WORKSPACE_ID}'`],
+  ];
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) {
+      database.exec(`ALTER TABLE im_channels ADD COLUMN ${name} ${definition}`);
+    }
+  }
+}
+
+/**
+ * 为存量库补齐 sessions 的来源列（source / actor / channel_id）。
+ * 存量会话一律视为 Web 会话（source='web'），避免出现在 IM 审计里。
+ */
+function migrateSessionSourceColumns(database: DatabaseSync): void {
+  const rows = database.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>;
+  if (rows.length === 0) return;
+  const columns = new Set(rows.map((row) => row.name));
+  const additions: Array<[string, string]> = [
+    ["source", "TEXT NOT NULL DEFAULT 'web'"],
+    ["actor", "TEXT"],
+    ["channel_id", "TEXT"],
+  ];
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) {
+      database.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${definition}`);
+    }
+  }
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source, workspace_id, updated_at DESC)`,
+  );
+}
+
 /** Test helper: close and forget the singleton. */
 export function closeDb(): void {
   if (db) {
@@ -450,24 +508,52 @@ function autoTitle(content: string): string {
   return trimmed.length > 32 ? `${trimmed.slice(0, 32)}…` : trimmed || "New chat";
 }
 
-export function listSessions(workspaceId?: string): SessionSummary[] {
+/**
+ * 会话来源。
+ * - 'web'：Web / App 聊天；
+ * - 'im'：IM 机器人（飞书/钉钉）问答。
+ * IM 会话统一标 'im'，平台维度靠 actor / channel_id 表达，便于筛选与统计。
+ */
+export type SessionSource = "web" | "im";
+
+/**
+ * 会话来源筛选。
+ * - 'web'（默认）：Web / App 聊天会话；
+ * - 'im'：IM 机器人会话；
+ * - 'all'：不限来源。
+ */
+export type SessionSourceFilter = SessionSource | "all";
+
+export interface SessionListOptions {
+  /** 缺省只看 Web 会话，避免 IM 会话污染 Web 侧边栏。 */
+  source?: SessionSourceFilter;
+}
+
+export function listSessions(
+  workspaceId?: string,
+  options: SessionListOptions = {},
+): SessionSummary[] {
   const database = openDb();
-  const scoped = workspaceId
-    ? database
-        .prepare(
-          `SELECT id, title, updated_at AS updatedAt
-           FROM sessions
-           WHERE workspace_id = ?
-           ORDER BY updated_at DESC`,
-        )
-        .all(workspaceId)
-    : database
-        .prepare(
-          `SELECT id, title, updated_at AS updatedAt
-           FROM sessions
-           ORDER BY updated_at DESC`,
-        )
-        .all();
+  const source = options.source ?? "web";
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+  if (workspaceId) {
+    conditions.push("workspace_id = ?");
+    params.push(workspaceId);
+  }
+  if (source !== "all") {
+    conditions.push("source = ?");
+    params.push(source);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const scoped = database
+    .prepare(
+      `SELECT id, title, updated_at AS updatedAt
+       FROM sessions
+       ${where}
+       ORDER BY updated_at DESC`,
+    )
+    .all(...params);
   return scoped as Array<{ id: string; title: string; updatedAt: number }>;
 }
 
@@ -525,29 +611,44 @@ export function getSessionWorkspaceId(id: string): string | null {
   return row?.workspaceId ?? null;
 }
 
-export function listSessionsWithMessages(workspaceId?: string): Session[] {
+export function listSessionsWithMessages(
+  workspaceId?: string,
+  options: SessionListOptions = {},
+): Session[] {
   const startedAt = Date.now();
-  const summaries = listSessions(workspaceId);
+  const summaries = listSessions(workspaceId, options);
   const sessions = summaries.map((s) => getSession(s.id)).filter((s): s is Session => s !== null);
   // N+1 查询(每个会话单独取消息);会话数变大时耗时会明显上升,debug 下单独计时便于发现。
   logDebugDuration("db.list_sessions_with_messages", startedAt, { sessions: sessions.length });
   return sessions;
 }
 
-export function createSession(input?: {
+export interface SessionCreateOptions {
   id?: string;
   title?: string;
   workspaceId?: string;
-}): Session {
+  /** 来源：'web'（默认）或 'im'。 */
+  source?: SessionSource;
+  /** IM 来源的平台用户 id。 */
+  actor?: string | null;
+  /** IM 来源的渠道 id。 */
+  channelId?: string | null;
+}
+
+export function createSession(input?: SessionCreateOptions): Session {
   const database = openDb();
   const id = input?.id ?? randomUUID();
   const title = input?.title ?? "New chat";
   const workspaceId = input?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+  const source = input?.source ?? "web";
   const updatedAt = Date.now();
 
   database
-    .prepare(`INSERT INTO sessions (id, title, updated_at, workspace_id) VALUES (?, ?, ?, ?)`)
-    .run(id, title, updatedAt, workspaceId);
+    .prepare(
+      `INSERT INTO sessions (id, title, updated_at, workspace_id, source, actor, channel_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(id, title, updatedAt, workspaceId, source, input?.actor ?? null, input?.channelId ?? null);
 
   return { id, title, messages: [], updatedAt };
 }
@@ -727,8 +828,12 @@ export function deleteMessage(messageId: string): boolean {
   return true;
 }
 
-export function ensureSession(sessionId: string, workspaceId?: string): Session {
+export function ensureSession(
+  sessionId: string,
+  workspaceId?: string,
+  options: SessionCreateOptions = {},
+): Session {
   const existing = getSession(sessionId);
   if (existing) return existing;
-  return createSession({ id: sessionId, ...(workspaceId ? { workspaceId } : {}) });
+  return createSession({ id: sessionId, ...(workspaceId ? { workspaceId } : {}), ...options });
 }

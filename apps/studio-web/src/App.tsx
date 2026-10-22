@@ -2,15 +2,11 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { Input, Modal, Popover } from "antd";
 import { DEFAULT_BRANDING, type BrandingConfig } from "./features/branding/api.js";
 import { ragRouteState } from "./features/rag/ragRoute.js";
-import {
-  buildHashRoute,
-  parseHashRoute,
-  sameRoute,
-  type StudioRoute,
-} from "./lib/routing.js";
+import { buildHashRoute, parseHashRoute, sameRoute, type StudioRoute } from "./lib/routing.js";
 import {
   ApiOutlined,
   ApartmentOutlined,
+  AuditOutlined,
   BarChartOutlined,
   BellOutlined,
   BranchesOutlined,
@@ -60,6 +56,11 @@ const ConnectorsWorkspace = lazy(() =>
     default: module.ConnectorsWorkspace,
   })),
 );
+const AuditWorkspace = lazy(() =>
+  import("./features/audit/AuditWorkspace.js").then((module) => ({
+    default: module.AuditWorkspace,
+  })),
+);
 const ReportsWorkspace = lazy(() =>
   import("./features/reports/ReportsWorkspace.js").then((module) => ({
     default: module.ReportsWorkspace,
@@ -67,7 +68,15 @@ const ReportsWorkspace = lazy(() =>
 );
 
 type Workspace =
-  "chat" | "mcp" | "rag" | "connectors" | "observatory" | "reports" | "workflow" | "settings";
+  | "chat"
+  | "mcp"
+  | "rag"
+  | "connectors"
+  | "observatory"
+  | "audit"
+  | "reports"
+  | "workflow"
+  | "settings";
 
 const workspaces: Array<{
   id: Workspace;
@@ -87,6 +96,7 @@ const workspaces: Array<{
     icon: <BranchesOutlined />,
   },
   { id: "observatory", label: "问数", en: "Schema", badge: "SQL", icon: <TableOutlined /> },
+  { id: "audit", label: "审计", en: "Audit", badge: "LOG", icon: <AuditOutlined /> },
   { id: "reports", label: "报表", en: "Reports", badge: "CRON", icon: <BarChartOutlined /> },
   {
     id: "workflow",
@@ -206,9 +216,7 @@ export function App({ branding = DEFAULT_BRANDING }: { branding?: BrandingConfig
   const filteredWorkspaces = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return workspaces;
-    return workspaces.filter((item) =>
-      `${item.label} ${item.en}`.toLowerCase().includes(query),
-    );
+    return workspaces.filter((item) => `${item.label} ${item.en}`.toLowerCase().includes(query));
   }, [searchQuery]);
   const productFoot = branding.footerText || "企业内部 AI 工具平台";
   const operator = {
@@ -248,7 +256,11 @@ export function App({ branding = DEFAULT_BRANDING }: { branding?: BrandingConfig
         <span>运行环境</span>
         <strong>DEV · 本地开发</strong>
       </div>
-      <button type="button" className="studio-account-panel__link" onClick={() => navigate("settings")}>
+      <button
+        type="button"
+        className="studio-account-panel__link"
+        onClick={() => navigate("settings")}
+      >
         进入工作台设置
         <RightOutlined />
       </button>
@@ -437,6 +449,7 @@ export function App({ branding = DEFAULT_BRANDING }: { branding?: BrandingConfig
               ) : null}
               {workspace === "connectors" ? <ConnectorsWorkspace /> : null}
               {workspace === "observatory" ? <ObservatoryWorkspace /> : null}
+              {workspace === "audit" ? <AuditWorkspace /> : null}
               {workspace === "reports" ? <ReportsWorkspace /> : null}
               {workspace === "workflow" ? (
                 <WorkflowWorkspace

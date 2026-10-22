@@ -62,7 +62,7 @@ export function QueryExecution({
         </Typography.Paragraph>
       ) : null}
       <Steps
-        direction="vertical"
+        orientation="vertical"
         size="small"
         current={steps.findIndex((step) => step.status === "running")}
         items={steps.map((step) => {
@@ -94,7 +94,7 @@ export function QueryExecution({
                 ) : null}
               </Flex>
             ),
-            description: (
+            content: (
               <Flex vertical gap={4}>
                 {step.message ? (
                   <Typography.Paragraph type={step.status === "failed" ? "danger" : "secondary"} style={{ fontSize: 12, marginBottom: 0 }}>

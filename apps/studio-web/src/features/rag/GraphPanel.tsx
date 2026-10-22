@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Alert,
   App,
@@ -122,6 +131,53 @@ function GraphNodeView({ data }: NodeProps<GraphFlowNode>) {
 
 const nodeTypes: NodeTypes = { graphNode: GraphNodeView };
 const edgeTypes = { relation: RelationEdge };
+
+export interface GraphSearchBoxHandle {
+  setText: (value: string) => void;
+  clear: () => void;
+}
+
+/**
+ * 子图检索输入框单独持有草稿状态。
+ *
+ * 图谱视图一次会渲染上千个 React Flow 节点与边，若击键状态放在 GraphPanelContent，
+ * 每敲一个字都要重渲染整张图（实测单键约 800ms）。把状态收敛到这个小输入框，
+ * 只有提交检索时才向上抛查询词。
+ */
+const GraphSearchBox = memo(
+  forwardRef<
+    GraphSearchBoxHandle,
+    {
+      source: string | null;
+      busy: boolean;
+      disabled: boolean;
+      onSearch: (text: string) => void;
+    }
+  >(function GraphSearchBox({ source, busy, disabled, onSearch }, ref) {
+    const [text, setText] = useState("");
+    useImperativeHandle(ref, () => ({
+      setText: (value: string) => setText(value),
+      clear: () => setText(""),
+    }));
+    const submit = () => {
+      if (!text.trim() || disabled) return;
+      onSearch(text);
+    };
+    return (
+      <Input.Search
+        aria-label="子图检索"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onSearch={submit}
+        placeholder={source ? "在当前文档内搜索实体或问题" : "在全库图谱中搜索实体或问题"}
+        disabled={disabled}
+        loading={busy}
+        enterButton="子图检索"
+        style={{ flex: "1 1 240px" }}
+      />
+    );
+  }),
+);
 
 /** 简单环形布局：seed 居中，其余节点围绕排列。 */
 function layoutGraph(exportData: GraphExport): GraphFlowNode[] {
@@ -404,7 +460,7 @@ function GraphPanelContent({
   const [documentData, setDocumentData] = useState<DocumentGraph | null>(null);
   const [graphRevision, setGraphRevision] = useState(0);
   const requestId = useRef(0);
-  const [query, setQuery] = useState("");
+  const searchBoxRef = useRef<GraphSearchBoxHandle>(null);
   const [exportData, setExportData] = useState<GraphExport | null>(null);
   const [selected, setSelected] = useState<EntityInfo | null>(null);
   const [selectedRelation, setSelectedRelation] = useState<{
@@ -479,7 +535,7 @@ function GraphPanelContent({
     if (source && !documentsLoading && !documents.some((document) => document.source === source)) {
       requestId.current += 1;
       onSourceChange(null);
-      setQuery("");
+      searchBoxRef.current?.clear();
       setNotice({ type: "error", text: "所选文档已失效，请重新选择文档" });
     }
   }, [documents, documentsLoading, onSourceChange, source]);
@@ -508,7 +564,6 @@ function GraphPanelContent({
       setSync(result.status);
       setBuildUsage(result.usage);
       setGraphRevision((value) => value + 1);
-      await refreshSync();
       const parts: string[] = [];
       if (result.rebuilt.length > 0) parts.push(`重建 ${result.rebuilt.length} 篇`);
       if (result.removed.length > 0) parts.push(`清理 ${result.removed.length} 项残留`);
@@ -523,7 +578,7 @@ function GraphPanelContent({
     }
   };
 
-  const runSearch = async (searchQuery = query) => {
+  const runSearch = async (searchQuery: string) => {
     const trimmed = searchQuery.trim();
     if (!trimmed) return;
     const currentRequest = ++requestId.current;
@@ -581,7 +636,7 @@ function GraphPanelContent({
   const resetView = (nextSource: string | null) => {
     requestId.current += 1;
     onSourceChange(nextSource);
-    setQuery("");
+    searchBoxRef.current?.clear();
     setNotice(null);
     setDocumentData(null);
     setExportData(null);
@@ -647,22 +702,18 @@ function GraphPanelContent({
           />
         </Flex>
         <Flex gap={8} align="center" wrap>
-          <Input.Search
-            aria-label="子图检索"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onSearch={() => void runSearch()}
-            placeholder={source ? "在当前文档内搜索实体或问题" : "在全库图谱中搜索实体或问题"}
+          <GraphSearchBox
+            ref={searchBoxRef}
+            source={source}
+            busy={busy === "search"}
             disabled={busy !== null}
-            loading={busy === "search"}
-            enterButton="子图检索"
-            style={{ flex: "1 1 240px" }}
+            onSearch={(text) => void runSearch(text)}
           />
           <Button
             disabled={!documentData || busy !== null}
             onClick={() => {
               requestId.current += 1;
-              setQuery("");
+              searchBoxRef.current?.clear();
               setUsage(undefined);
               setSelected(null);
               setSelectedRelation(null);
@@ -715,7 +766,7 @@ function GraphPanelContent({
                 return (
                   <List.Item
                     onClick={() => {
-                      setQuery(entity.name);
+                      searchBoxRef.current?.setText(entity.name);
                       void runSearch(entity.name);
                     }}
                     style={{ cursor: "pointer", borderRadius: 8, padding: "6px 8px" }}

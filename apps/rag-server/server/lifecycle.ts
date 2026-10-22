@@ -99,13 +99,10 @@ export class GraphLifecycle {
 
   /** 知识库与图谱库的一致性快照（ES 后端下需 await）。 */
   async status(): Promise<SyncStatus> {
-    const sources = await this.rag.listSources();
-    const ragSources = await Promise.all(
-      sources.map(async (source) => ({
-        source,
-        chunks: (await this.rag.listChunks(source)).length,
-      })),
-    );
+    const documents = await this.rag.listDocuments();
+    const ragSources = documents
+      .map(({ source, chunks }) => ({ source, chunks }))
+      .sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
     const diff = this.graph.diff(ragSources);
     // 内存队列中的来源可能尚未落到 building 状态，补进去避免前端误判为缺失
     const building = [...new Set([...diff.building, ...(this.current ? [this.current] : [])])];
@@ -155,13 +152,7 @@ export class GraphLifecycle {
 
   /** 重建单个来源（先清后建，幂等）。知识库已无该来源时退化为清理。 */
   async rebuild(source: string): Promise<GraphSourceState | null> {
-    const listed = await this.rag.listChunks(source);
-    const chunks = listed.map((c) => ({
-      id: c.id,
-      source: c.source,
-      chunkIndex: c.chunkIndex,
-      content: c.content,
-    }));
+    const chunks = await this.rag.listChunks(source);
     if (chunks.length === 0) {
       this.graph.clearSource(source);
       return null;

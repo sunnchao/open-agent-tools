@@ -76,6 +76,116 @@ describe("askChat", () => {
     });
   });
 
+  it("passes bound SQL sources through resources.sqlSources", async () => {
+    await askChat({
+      baseUrl,
+      question: "上个月订单量",
+      sessionId: "dingtalk:cid_1",
+      sources: ["company-handbook"],
+      topK: 3,
+      sqlSources: ["source_a", "source_b"],
+    });
+    assert.deepEqual(received, {
+      messages: [{ role: "user", content: "上个月订单量" }],
+      sessionId: "dingtalk:cid_1",
+      resources: {
+        rag: { sources: ["company-handbook"], topK: 3 },
+        sqlSources: ["source_a", "source_b"],
+      },
+    });
+  });
+
+  it("omits resources.sqlSources when the list is empty", async () => {
+    await askChat({
+      baseUrl,
+      question: "hi",
+      sessionId: "feishu:oc_test",
+      sources: [],
+      topK: 5,
+      sqlSources: [],
+    });
+    assert.deepEqual(received, {
+      messages: [{ role: "user", content: "hi" }],
+      sessionId: "feishu:oc_test",
+      resources: { rag: { sources: [], topK: 5 } },
+    });
+  });
+
+  it("passes bound MCP tools through resources.mcpTools", async () => {
+    await askChat({
+      baseUrl,
+      question: "查一下文档",
+      sessionId: "dingtalk:cid_2",
+      sources: [],
+      topK: 5,
+      mcpTools: [
+        { serviceSlug: "docs", toolName: "search" },
+        { serviceSlug: "docs", toolName: "search" },
+      ],
+    });
+    assert.deepEqual(received, {
+      messages: [{ role: "user", content: "查一下文档" }],
+      sessionId: "dingtalk:cid_2",
+      resources: {
+        rag: { sources: [], topK: 5 },
+        mcpTools: [{ serviceSlug: "docs", toolName: "search" }],
+      },
+    });
+  });
+
+  it("degrades by dropping an unavailable MCP tool and retrying", async () => {
+    const bodies: unknown[] = [];
+    let call = 0;
+    const flaky = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        bodies.push(JSON.parse(body));
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        if (call === 0) {
+          call += 1;
+          res.write(
+            `data: ${JSON.stringify({ error: "MCP Tool is unavailable: docs/search" })}\n\n`,
+          );
+          res.end();
+          return;
+        }
+        res.write(`data: ${JSON.stringify({ delta: "降级回答" })}\n\n`);
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => flaky.listen(0, "127.0.0.1", resolve));
+    const addr = flaky.address();
+    assert.ok(addr && typeof addr === "object");
+    try {
+      const answer = await askChat({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        question: "查一下文档",
+        sessionId: "dingtalk:cid_3",
+        sources: [],
+        topK: 5,
+        mcpTools: [
+          { serviceSlug: "docs", toolName: "search" },
+          { serviceSlug: "other", toolName: "ping" },
+        ],
+      });
+      assert.equal(answer.content, "降级回答");
+      assert.equal(bodies.length, 2);
+      // 第二次请求已摘掉失效工具，只保留仍可用的绑定。
+      assert.deepEqual((bodies[0] as { resources: { mcpTools: unknown } }).resources.mcpTools, [
+        { serviceSlug: "docs", toolName: "search" },
+        { serviceSlug: "other", toolName: "ping" },
+      ]);
+      assert.deepEqual((bodies[1] as { resources: { mcpTools: unknown } }).resources.mcpTools, [
+        { serviceSlug: "other", toolName: "ping" },
+      ]);
+    } finally {
+      flaky.close();
+    }
+  });
+
   it("throws when the server returns an error frame", async () => {
     const failing = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
@@ -98,6 +208,98 @@ describe("askChat", () => {
       assert.match(String(error), /provider is unavailable/);
     } finally {
       failing.close();
+    }
+  });
+
+  it("sends the workspace and IM source headers", async () => {
+    const headers: Record<string, string | undefined> = {};
+    const headerServer = createServer((req, res) => {
+      headers["x-workspace-id"] = req.headers["x-workspace-id"] as string | undefined;
+      headers["x-im-channel"] = req.headers["x-im-channel"] as string | undefined;
+      headers["x-im-actor"] = req.headers["x-im-actor"] as string | undefined;
+      headers["x-im-chat-type"] = req.headers["x-im-chat-type"] as string | undefined;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ delta: "好" })}\n\n`);
+      res.end();
+    });
+    await new Promise<void>((resolve) => headerServer.listen(0, "127.0.0.1", resolve));
+    const addr = headerServer.address();
+    assert.ok(addr && typeof addr === "object");
+    try {
+      await askChat({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        question: "hi",
+        sessionId: "dingtalk:cid:u:staff_1",
+        sources: [],
+        topK: 5,
+        workspaceId: "ws_a",
+        im: { channelId: "chan_1", actor: "staff_1", chatType: "p2p" },
+      });
+      assert.equal(headers["x-workspace-id"], "ws_a");
+      assert.equal(headers["x-im-channel"], "chan_1");
+      assert.equal(headers["x-im-actor"], "staff_1");
+      assert.equal(headers["x-im-chat-type"], "p2p");
+    } finally {
+      headerServer.close();
+    }
+  });
+
+  it("omits the IM headers when the request is not an IM request", async () => {
+    const headers: Record<string, string | undefined> = {};
+    const headerServer = createServer((req, res) => {
+      headers["x-workspace-id"] = req.headers["x-workspace-id"] as string | undefined;
+      headers["x-im-channel"] = req.headers["x-im-channel"] as string | undefined;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end();
+    });
+    await new Promise<void>((resolve) => headerServer.listen(0, "127.0.0.1", resolve));
+    const addr = headerServer.address();
+    assert.ok(addr && typeof addr === "object");
+    try {
+      await askChat({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        question: "hi",
+        sessionId: "s1",
+        sources: [],
+        topK: 5,
+      });
+      assert.equal(headers["x-workspace-id"], undefined);
+      assert.equal(headers["x-im-channel"], undefined);
+    } finally {
+      headerServer.close();
+    }
+  });
+});
+
+describe("askChat tool and citation accounting", () => {
+  it("collects tool calls, tool results and citations from the SSE stream", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ tool_call: { id: "c1", name: "rag" } })}\n\n`);
+      res.write(`data: ${JSON.stringify({ tool_result: { id: "c1", name: "rag" } })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({ rag_citations: [{ source: "a" }, { source: "b" }] })}\n\n`,
+      );
+      res.write(`data: ${JSON.stringify({ delta: "答案" })}\n\n`);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address();
+    assert.ok(addr && typeof addr === "object");
+    try {
+      const answer = await askChat({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        question: "hi",
+        sessionId: "s1",
+        sources: [],
+        topK: 5,
+      });
+      assert.equal(answer.content, "答案");
+      assert.deepEqual(answer.toolCalls, ["rag"]);
+      assert.equal(answer.toolResultCount, 1);
+      assert.equal(answer.citations, 2);
+    } finally {
+      server.close();
     }
   });
 });

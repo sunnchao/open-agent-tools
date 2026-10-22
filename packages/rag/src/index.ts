@@ -48,6 +48,8 @@ export {
   buildKnnFilter,
   type ElasticsearchStoreOptions,
 } from "./store-elasticsearch.js";
+export { PgVectorStore, buildPgKeywordTerms, type PgVectorStoreOptions } from "./store-pgvector.js";
+export { HybridVectorStore, type HybridVectorStoreOptions } from "./store-hybrid.js";
 export {
   reciprocalRankFusion,
   reciprocalRankFusionWithDebug,

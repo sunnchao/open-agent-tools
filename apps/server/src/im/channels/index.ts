@@ -1,12 +1,9 @@
 import { port } from "../../config.js";
 import { logTrace } from "../../trace.js";
-import type { ImConfig } from "../types.js";
+import type { ImBotHandle, ImConfig, ImChannelStatus } from "../types.js";
 import { getChannel, listChannels, type ImChannelWithSecret } from "./store.js";
 
-export interface ImBotHandle {
-  stop: () => void;
-  status: () => { connected: boolean; error?: string };
-}
+export type { ImBotHandle };
 
 /** 运行中的机器人实例：channelId → handle。 */
 const running = new Map<string, ImBotHandle>();
@@ -14,14 +11,18 @@ const running = new Map<string, ImBotHandle>();
 export function channelToConfig(channel: ImChannelWithSecret): ImConfig {
   return {
     name: channel.name,
+    channelId: channel.id,
     platform: channel.platform,
     appId: channel.appId,
     appSecret: channel.appSecret ?? "",
     encryptKey: channel.encryptKey ?? undefined,
     ragSources: channel.ragSources,
     ragTopK: channel.ragTopK,
+    sqlSources: channel.sqlSources,
+    mcpTools: channel.mcpTools,
     requireMention: channel.requireMention,
     chatBaseUrl: `http://127.0.0.1:${port}`,
+    workspaceId: channel.workspaceId,
   };
 }
 
@@ -29,6 +30,10 @@ async function startBot(channel: ImChannelWithSecret): Promise<ImBotHandle> {
   if (channel.platform === "feishu") {
     const { startFeishuBot } = await import("../feishu/bot.js");
     return startFeishuBot(channelToConfig(channel));
+  }
+  if (channel.platform === "dingtalk") {
+    const { startDingTalkBot } = await import("../dingtalk/bot.js");
+    return startDingTalkBot(channelToConfig(channel));
   }
   throw new Error(`unsupported IM platform: ${channel.platform}`);
 }
@@ -91,21 +96,7 @@ export async function restartChannel(id: string): Promise<void> {
   }
 }
 
-export function getChannelStatuses(): Array<{
-  id: string;
-  name: string;
-  platform: string;
-  appId: string;
-  appSecretMasked: string | null;
-  ragSources: string[];
-  ragTopK: number;
-  requireMention: boolean;
-  enabled: boolean;
-  connected: boolean;
-  error?: string;
-  createdAt: string;
-  updatedAt: string;
-}> {
+export function getChannelStatuses(): ImChannelStatus[] {
   return listChannels({ includeDisabled: true }).map((channel) => {
     const status = running.get(channel.id)?.status();
     return {

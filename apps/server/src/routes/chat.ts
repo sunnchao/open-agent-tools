@@ -9,6 +9,7 @@ import { resolveWorkspace } from "../workspace.js";
 import { logDebugDuration, logTrace, truncate } from "../trace.js";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
 import { ChatTurnError, streamChatTurn, usageSnapshot, type ChatTurnUsage } from "./chatCore.js";
+import { IM_ACTOR_HEADER, IM_CHANNEL_HEADER, IM_CHAT_TYPE_HEADER } from "../im/types.js";
 
 export const chatRouter: ReturnType<typeof Router> = Router();
 
@@ -113,7 +114,21 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
   });
 
   if (resolvedSessionId) {
-    ensureSession(resolvedSessionId, workspaceId);
+    // IM 来源标注：请求头由本机 IM bot 注入。
+    // 信任边界：Agent Server 当前没有用户隔离（README 已知局限），这些头只用于
+    // **归属标注**（把会话标成 source='im' 并记录 actor/channel），不是强安全隔离。
+    const imChannel = req.header(IM_CHANNEL_HEADER)?.trim();
+    const imActor = req.header(IM_ACTOR_HEADER)?.trim();
+    const isImRequest = Boolean(imChannel);
+    ensureSession(resolvedSessionId, workspaceId, {
+      ...(isImRequest
+        ? {
+            source: "im" as const,
+            actor: imActor || null,
+            channelId: imChannel,
+          }
+        : {}),
+    });
 
     if (userMessage?.content) {
       addMessage(resolvedSessionId, {
@@ -186,7 +201,9 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
               send,
               span,
               schemaSources,
-              onUsage: (usage) => { turnUsage = usage; },
+              onUsage: (usage) => {
+                turnUsage = usage;
+              },
             });
             fullContent = result.fullContent;
             toolRounds = result.toolRounds;

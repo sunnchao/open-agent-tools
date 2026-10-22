@@ -38,7 +38,11 @@
     "@elastic/elasticsearch": "catalog:",
     "@langchain/community": "catalog:",
     "@langchain/core": "catalog:",
-    "@langchain/textsplitters": "catalog:"
+    "@langchain/textsplitters": "catalog:",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@types/pg": "catalog:"
   },
   "sideEffects": false,
   "files": [

@@ -418,3 +418,57 @@ test("fuseChannelHits 两路结果与 reciprocalRankFusionWithDebug 完全一致
     reciprocalRankFusionWithDebug(vector, keyword),
   );
 });
+
+test("keyword:false 只保留向量通道（仅向量召回）", async () => {
+  const { dbPath, cleanup } = tmpDir();
+  const rag = new Rag({ dbPath });
+  try {
+    await rag.ingestBuffers([
+      { name: "a.txt", data: enc("OpenAI 提供 GPT 模型与 API 服务") },
+      { name: "b.txt", data: enc("完全无关的运维手册") },
+    ]);
+    const result = await rag.retrieve("OpenAI", { topK: 5, keyword: false });
+    assert.equal(result.debug?.keywordEnabled, false, "应标记关键词通道已关闭");
+    assert.deepEqual(result.debug?.keywordHits, [], "关键词通道关闭后不应执行 BM25");
+    assert.ok(
+      result.chunks.every((chunk) => !chunk.debug?.channels.includes("keyword")),
+      "仅向量模式下 channels 不得出现 keyword",
+    );
+    // 无 embeddings 时向量路为空：这正是「仅向量」模式的边界——不能悄悄回落到关键词。
+    assert.deepEqual(result.chunks, []);
+  } finally {
+    await rag.close();
+    cleanup();
+  }
+});
+
+test("keyword:false + graph 开启时仍是向量与图谱两路", async () => {
+  const { dbPath, cleanup } = tmpDir();
+  const ref: { rag?: Rag } = {};
+  const channel: GraphChannelSource = {
+    retrieve: async () => ({
+      seeds: [{ id: "e-openai", name: "OpenAI", type: "org" }],
+      subgraph: {
+        entities: [{ id: "e-openai", name: "OpenAI", type: "org" }],
+        relations: [
+          { sourceChunk: chunkId("a.txt", 0), weight: 1, srcId: "e-openai", dstId: "e-openai" },
+        ],
+        formatted: () => "相关实体与关系:\n- (OpenAI) --related_to--> (OpenAI)",
+      },
+    }),
+    getChunksByIds: (ids, sources) => ref.rag!.getChunksByIds(ids, sources),
+  };
+  const rag = new Rag({ dbPath, graph: channel });
+  ref.rag = rag;
+  try {
+    await rag.ingestBuffers([{ name: "a.txt", data: enc("OpenAI 的模型与接口说明") }]);
+    const result = await rag.retrieve("OpenAI", { topK: 5, keyword: false });
+    assert.equal(result.debug?.keywordEnabled, false);
+    assert.equal(result.graph?.enabled, true, "关键词关闭不应影响图谱通道");
+    assert.ok(result.chunks.some((chunk) => chunk.debug?.channels.includes("graph")));
+    assert.ok(result.chunks.every((chunk) => !chunk.debug?.channels.includes("keyword")));
+  } finally {
+    await rag.close();
+    cleanup();
+  }
+});

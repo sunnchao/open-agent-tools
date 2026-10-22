@@ -69,6 +69,8 @@ export interface RetrievalDebug {
   embeddingsEnabled: boolean;
   candidates: number;
   rrfK: number;
+  /** 是否启用关键词（BM25）通道；仅显式关闭时写 false（保持旧 debug 形状）。 */
+  keywordEnabled?: boolean;
   /** 是否启用图谱通道；未注入 graph 时缺省（保持旧 debug 形状）。 */
   graphEnabled?: boolean;
   timingsMs: {

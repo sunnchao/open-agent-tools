@@ -8,6 +8,7 @@ import {
   listChunks,
   listDocuments,
   queryKnowledge,
+  recallOptions,
   submitQueryFeedback,
   updateDocument,
   uploadDocuments,
@@ -86,16 +87,16 @@ export function RagScreen() {
           <Field label="topK" value={topK} onChange={setTopK} placeholder="5" />
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 6 }}>
             <View style={{ flex: 1 }}>
-              <Text variant="titleSmall">图谱增强</Text>
+              <Text variant="titleSmall">图谱检索（多路召回）</Text>
               <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                用实体关系多路补充召回，命中分块参与 RRF 融合
+                向量 + 关键词 + 图谱三路并行召回，命中分块经 RRF 融合
               </Text>
             </View>
             <Switch value={graphEnabled} onValueChange={setGraphEnabled} />
           </View>
           {graphEnabled ? null : (
             <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-              已关闭图谱增强：本次检索仅使用向量与关键词两路。
+              已关闭图谱召回：仅从向量检索召回实体分块。
             </Text>
           )}
           <Btn
@@ -107,8 +108,8 @@ export function RagScreen() {
                   query,
                   topK: Number(topK) || 5,
                   generate: true,
-                  // 关闭时显式传 false，让后端跳过图谱通道。
-                  ...(graphEnabled ? {} : { graph: false }),
+                  // 关闭时同时关掉图谱与关键词通道，退化为仅向量召回。
+                  ...recallOptions(graphEnabled),
                 });
                 setAnswer(r.answer ?? "(无生成答案)");
                 setChunks(r.chunks ?? []);

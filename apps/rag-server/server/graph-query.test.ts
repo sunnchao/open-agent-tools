@@ -11,7 +11,6 @@ import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
 import { RagAnalyticsStore } from "./analytics.js";
 import { resolveRagAuth } from "./auth.js";
 import { buildCragController } from "./graph.js";
-import { createGraphChannel } from "./graph-channel.js";
 import { healthRouter } from "./health.js";
 import { GraphLifecycle } from "./lifecycle.js";
 import {
@@ -61,8 +60,10 @@ interface QueryResponse {
   chunks: QueryChunk[];
   retrieval: {
     graphEnabled: boolean;
+    keywordEnabled?: boolean;
     graphHits?: Array<{ id: string; source: string; seeds: string[] }>;
-    timingsMs: { graphMs?: number | null };
+    keywordHits?: Array<{ id: string }>;
+    timingsMs: { graphMs?: number | null; keywordMs?: number };
   };
   answer: string | null;
 }
@@ -80,12 +81,16 @@ async function postQuery(body: Record<string, unknown>): Promise<QueryResponse> 
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), "rag-graph-query-"));
   const dbPath = join(dir, "rag.db");
-  // 图谱通道在 Rag 构造时注入，但图谱实例随后才创建：闭包 late-bind，与生产入口一致。
-  const graphChannel = createGraphChannel({ rag: () => rag, graph: () => graph });
-  rag = new Rag({ dbPath, graph: graphChannel });
+  graph = new KnowledgeGraph({ dbPath: join(dir, "graph.db") });
+  rag = new Rag({
+    dbPath,
+    graph: {
+      retrieve: (query, options) => graph.retrieve(query, options),
+      getChunksByIds: (ids, sources) => rag.getChunksByIds(ids, sources),
+    },
+  });
   // 对照实例：不注入图谱通道，用来证明 graph:false 与旧两路检索结果一致。
   plainRag = new Rag({ dbPath });
-  graph = new KnowledgeGraph({ dbPath: join(dir, "graph.db") });
   analytics = new RagAnalyticsStore(dbPath);
 
   await rag.ingestBuffers([
@@ -328,6 +333,38 @@ describe("POST /api/query 图谱第三路", () => {
     assert.equal(high.graph.enabled, true);
     const low = await postQuery({ query: "腾讯云", graphHops: -3 });
     assert.equal(low.graph.enabled, true);
+  });
+
+  it("graph:false + keyword:false 退化为仅向量召回", async () => {
+    const body = await postQuery({ query: "腾讯云", graph: false, keyword: false });
+    assert.equal(body.graph.enabled, false);
+    assert.equal(body.retrieval.graphEnabled, false);
+    assert.equal(body.retrieval.keywordEnabled, false);
+    assert.deepEqual(body.retrieval.keywordHits, [], "关键词通道关闭后不应有 BM25 候选");
+    assert.ok(
+      body.chunks.every((chunk) => !chunk.debug?.channels.includes("graph")),
+      "关闭图谱后 channels 不得出现 graph",
+    );
+    assert.ok(
+      body.chunks.every((chunk) => !chunk.debug?.channels.includes("keyword")),
+      "仅向量模式下 channels 不得出现 keyword",
+    );
+  });
+
+  it("默认（不传 keyword）保持三路召回，响应不写 keywordEnabled", async () => {
+    const body = await postQuery({ query: "腾讯云" });
+    assert.equal(body.retrieval.graphEnabled, true);
+    assert.ok(body.retrieval.keywordHits && body.retrieval.keywordHits.length > 0);
+    assert.equal(body.retrieval.keywordEnabled, undefined, "默认模式不应写 keywordEnabled");
+    assert.ok(body.chunks.some((chunk) => chunk.debug?.channels.includes("keyword")));
+  });
+
+  it("仅关闭图谱（不关关键词）仍是向量 + 关键词两路", async () => {
+    const body = await postQuery({ query: "腾讯云", graph: false });
+    assert.equal(body.retrieval.graphEnabled, false);
+    assert.equal(body.retrieval.keywordEnabled, undefined, "只关图谱不应影响关键词通道");
+    assert.ok((body.retrieval.keywordHits?.length ?? 0) > 0);
+    assert.ok(body.chunks.some((chunk) => chunk.debug?.channels.includes("keyword")));
   });
 
   it("审计链路记录图谱第三路", async () => {

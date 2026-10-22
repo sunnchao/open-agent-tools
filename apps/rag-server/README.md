@@ -40,6 +40,8 @@ pnpm --filter @open-agent-tools/rag-server dev
 
 环境变量见 `.env.example`。默认数据库为 `apps/rag-server/rag.db`。图谱库默认 `apps/rag-server/rag-graph.db`；`RAG_GRAPH_RETRIEVAL=false` 可全局关闭图谱检索通道，`RAG_AUTO_EXTRACT=false` 则上传后不自动建图、改由对账触发。
 
+`POST /api/query` 的通道开关：默认三路召回（向量 + 关键词 + 图谱）；`graph: false` 关闭图谱通道，`keyword: false` 关闭 BM25 关键词通道，两者同时传即为**仅向量召回**。响应 `retrieval.keywordEnabled` 仅在关键词通道关闭时出现 `false`，`retrieval.graphEnabled` 反映图谱通道是否参与本次检索；审计 trace 同样记录 `keywordEnabled`，用于回放「仅向量」请求。
+
 ## 存储后端：SQLite / Elasticsearch
 
 默认 `RAG_STORE=sqlite`，零运维单文件跑通；切 ES 只需先起本地集群再切开关：

@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { closeDb } from "../../db.js";
+import { closeDb, openDb } from "../../db.js";
 import { createChannel, deleteChannel, getChannel, listChannels, updateChannel } from "./store.js";
 
 let dir: string;
@@ -102,6 +103,119 @@ describe("IM channel store", () => {
     assert.equal(deleteChannel(channel.id), true);
     assert.equal(deleteChannel(channel.id), false);
     assert.equal(listChannels({ includeDisabled: true }).length, 0);
+  });
+
+  it("round-trips sqlSources and normalizes duplicates", () => {
+    const channel = createChannel({
+      name: "问数机器人",
+      platform: "dingtalk",
+      appId: "ding_client",
+      sqlSources: [" source_a ", "source_b", "source_a", ""],
+    });
+    assert.deepEqual(channel.sqlSources, ["source_a", "source_b"]);
+    assert.deepEqual(getChannel(channel.id, { includeDisabled: true })?.sqlSources, [
+      "source_a",
+      "source_b",
+    ]);
+
+    const updated = updateChannel(channel.id, { sqlSources: ["source_c"] });
+    assert.deepEqual(updated?.sqlSources, ["source_c"]);
+
+    // 未提供 sqlSources 时保留已存值。
+    const kept = updateChannel(channel.id, { name: "改名" });
+    assert.deepEqual(kept?.sqlSources, ["source_c"]);
+  });
+
+  it("defaults sqlSources to an empty array", () => {
+    const channel = createChannel({ name: "空", platform: "feishu", appId: "cli_empty" });
+    assert.deepEqual(channel.sqlSources, []);
+    assert.deepEqual(listChannels()[0]?.sqlSources, []);
+  });
+
+  it("migrates a legacy im_channels table without sql_sources_json", () => {
+    closeDb();
+    const legacyPath = join(dir, "legacy.sqlite");
+    const legacy = new DatabaseSync(legacyPath);
+    legacy.exec(`
+      CREATE TABLE im_channels (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        app_secret_enc TEXT,
+        encrypt_key_enc TEXT,
+        rag_sources_json TEXT NOT NULL DEFAULT '[]',
+        rag_top_k INTEGER NOT NULL DEFAULT 5,
+        require_mention INTEGER NOT NULL DEFAULT 1,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO im_channels (id, name, platform, app_id, rag_sources_json, rag_top_k, require_mention, enabled, created_at, updated_at)
+      VALUES ('legacy-1', '旧渠道', 'feishu', 'cli_legacy', '["handbook"]', 5, 1, 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+    `);
+    legacy.close();
+
+    process.env.SQLITE_PATH = legacyPath;
+    const columns = openDb().prepare("PRAGMA table_info(im_channels)").all() as Array<{
+      name: string;
+    }>;
+    assert.ok(columns.some((column) => column.name === "sql_sources_json"));
+    assert.ok(columns.some((column) => column.name === "mcp_tools_json"));
+    const migrated = getChannel("legacy-1", { includeDisabled: true });
+    assert.deepEqual(migrated?.ragSources, ["handbook"]);
+    assert.deepEqual(migrated?.sqlSources, []);
+    assert.deepEqual(migrated?.mcpTools, []);
+  });
+
+  it("round-trips mcpTools and normalizes duplicates", () => {
+    const channel = createChannel({
+      name: "工具机器人",
+      platform: "dingtalk",
+      appId: "ding_client",
+      mcpTools: [
+        { serviceSlug: " docs ", toolName: " search " },
+        { serviceSlug: "docs", toolName: "search" },
+      ],
+    });
+    assert.deepEqual(channel.mcpTools, [{ serviceSlug: "docs", toolName: "search" }]);
+    assert.deepEqual(getChannel(channel.id, { includeDisabled: true })?.mcpTools, [
+      { serviceSlug: "docs", toolName: "search" },
+    ]);
+
+    const updated = updateChannel(channel.id, {
+      mcpTools: [{ serviceSlug: "crm", toolName: "lead" }],
+    });
+    assert.deepEqual(updated?.mcpTools, [{ serviceSlug: "crm", toolName: "lead" }]);
+
+    // 未提供 mcpTools 时保留已存值。
+    const kept = updateChannel(channel.id, { name: "改名" });
+    assert.deepEqual(kept?.mcpTools, [{ serviceSlug: "crm", toolName: "lead" }]);
+  });
+
+  it("rejects invalid mcpTools entries", () => {
+    assert.throws(() =>
+      createChannel({
+        name: "坏工具",
+        platform: "dingtalk",
+        appId: "ding_client",
+        mcpTools: [{ serviceSlug: "", toolName: "search" }],
+      }),
+    );
+    assert.throws(() =>
+      createChannel({
+        name: "坏工具",
+        platform: "dingtalk",
+        appId: "ding_client",
+        mcpTools: [{ serviceSlug: "docs" } as never],
+      }),
+    );
+  });
+
+  it("defaults mcpTools to an empty array", () => {
+    const channel = createChannel({ name: "空", platform: "feishu", appId: "cli_empty" });
+    assert.deepEqual(channel.mcpTools, []);
+    assert.deepEqual(listChannels()[0]?.mcpTools, []);
   });
 });
 

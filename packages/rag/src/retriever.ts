@@ -34,6 +34,11 @@ export interface RetrieveOptions {
   graph?: GraphChannelSource | false;
   /** 图谱子图扩展跳数，默认 2。 */
   graphHops?: number;
+  /**
+   * 关键词（BM25）通道开关，默认 `true`。
+   * 传 `false` 时只保留向量召回，用于「仅向量」检索模式。
+   */
+  keyword?: boolean;
 }
 
 /**
@@ -128,6 +133,7 @@ export async function retrieve(
 ): Promise<RetrievalResult> {
   const { topK = 5, candidates = 30, rrfK = 60, sources, graphHops = 2 } = opts;
   const graphSource = opts.graph === false ? undefined : opts.graph;
+  const keywordEnabled = opts.keyword !== false;
   if (sources?.length === 0) {
     return {
       query,
@@ -144,9 +150,13 @@ export async function retrieve(
     vectorList = await store.vectorSearch(qv, candidates, sources);
     vectorMs = Date.now() - started;
   }
-  const keywordStarted = Date.now();
-  const keywordList = await store.keywordSearch(query, candidates, sources); // store 内部做 CJK 切分 + AND→OR 降级
-  const keywordMs = Date.now() - keywordStarted;
+  let keywordList: ScoredChunk[] = [];
+  let keywordMs = 0;
+  if (keywordEnabled) {
+    const keywordStarted = Date.now();
+    keywordList = await store.keywordSearch(query, candidates, sources); // store 内部做 CJK 切分 + AND→OR 降级
+    keywordMs = Date.now() - keywordStarted;
+  }
 
   // 图谱通道独立计时与降级：图数据库故障不应把整次知识库检索拖垮。
   let graphList: GraphChannelHit[] = [];
@@ -199,8 +209,8 @@ export async function retrieve(
   const fusionStarted = Date.now();
   const channelsToFuse: Array<{ channel: RetrievalChannel; hits: ScoredChunk[] }> = [
     { channel: "vector", hits: vectorList },
-    { channel: "keyword", hits: keywordList },
   ];
+  if (keywordEnabled) channelsToFuse.push({ channel: "keyword", hits: keywordList });
   if (graphSource) channelsToFuse.push({ channel: "graph", hits: graphList });
   const chunks = fuseChannelHits(channelsToFuse, rrfK).slice(0, topK);
   const fusionMs = Date.now() - fusionStarted;
@@ -208,6 +218,8 @@ export async function retrieve(
     embeddingsEnabled: Boolean(embeddings),
     candidates,
     rrfK,
+    // 仅在关闭时写字段：默认两路/三路调用的 debug 形状与改造前逐字段一致。
+    ...(keywordEnabled ? {} : { keywordEnabled: false }),
     ...(graphSource ? { graphEnabled: true } : {}),
     timingsMs: {
       vectorMs,

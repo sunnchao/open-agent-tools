@@ -6,6 +6,7 @@ import {
   listChunks,
   listDocuments,
   queryKnowledge,
+  recallOptions,
   submitQueryFeedback,
   updateDocument,
   uploadDocuments,
@@ -71,5 +72,10 @@ describe("rag api", () => {
     );
     expect(bodies[0]).toMatchObject({ query: "q", graph: false });
     expect(bodies[1]).toMatchObject({ query: "q", graphHops: 3 });
+  });
+
+  it("关闭图谱检索时同时关闭关键词通道，退化为仅向量召回", () => {
+    expect(recallOptions(true)).toEqual({});
+    expect(recallOptions(false)).toEqual({ graph: false, keyword: false });
   });
 });

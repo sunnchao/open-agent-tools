@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import type { ChatOpenAI } from "@langchain/openai";
-import type { Rag } from "@open-agent-tools/rag";
+import type { ChannelHit, GraphAugmentation, Rag } from "@open-agent-tools/rag";
 import type { CragController } from "@open-agent-tools/rag/crag";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
 import { RagAnalyticsStore, type QueryEventInput, type RetrievalTrace } from "./analytics.js";
+import type { StoreKind } from "./health.js";
 import { querySources } from "./query-settings.js";
 import { accessGroups } from "./request-validation.js";
 import { trackRagLlm } from "./usage.js";
@@ -25,20 +26,13 @@ export interface QueryRouterOptions {
   /** 有 Key 时用于生成回答；缺省时 generate 请求返回 answer=null。 */
   llm?: ChatOpenAI;
   embeddingsEnabled: boolean;
-  storeKind: "sqlite" | "elasticsearch";
+  storeKind: StoreKind;
   /** 全局图谱开关（RAG_GRAPH_RETRIEVAL !== "false"）。请求可再单独关闭。 */
   graphRetrieval: boolean;
 }
 
 /** 图谱增强结果：未启用/未命中时也返回稳定结构，前端无需判空。 */
-export interface GraphPayload {
-  enabled: boolean;
-  seeds: Array<{ id: string; name: string; type: string }>;
-  entities: number;
-  relations: number;
-  chunkHits: number;
-  context: string;
-}
+export type GraphPayload = GraphAugmentation;
 
 /** 未启用时的稳定结构；每次返回新对象，避免调用方误改共享常量。 */
 function emptyGraphPayload(): GraphPayload {
@@ -63,16 +57,7 @@ export function buildAnswerSystemPrompt(formatted: string, graphContext?: string
 }
 
 export function graphPayload(result: RetrieveResultLike): GraphPayload {
-  const graph = result.graph;
-  if (!graph) return emptyGraphPayload();
-  return {
-    enabled: graph.enabled,
-    seeds: graph.seeds.map((seed) => ({ id: seed.id, name: seed.name, type: seed.type })),
-    entities: graph.entities,
-    relations: graph.relations,
-    chunkHits: graph.chunkHits,
-    context: graph.context,
-  };
+  return result.graph ?? emptyGraphPayload();
 }
 
 export function toRetrievalPayload(
@@ -86,33 +71,13 @@ export function toRetrievalPayload(
     embeddingsEnabled: debug?.embeddingsEnabled ?? context.embeddingsEnabled,
     candidates: debug?.candidates ?? 30,
     rrfK: debug?.rrfK ?? 60,
+    // 仅「仅向量」模式显式写 false；默认两路/三路请求不写该键，保持旧响应形状。
+    ...(debug?.keywordEnabled === false ? { keywordEnabled: false } : {}),
     graphEnabled: result.graph?.enabled ?? debug?.graphEnabled ?? false,
     timingsMs: { ...timings, graphMs: timings.graphMs ?? null },
-    vectorHits: (debug?.vectorHits ?? []).map((h) => ({
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: h.content,
-      score: h.score,
-      rank: h.rank,
-    })),
-    keywordHits: (debug?.keywordHits ?? []).map((h) => ({
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: h.content,
-      score: h.score,
-      rank: h.rank,
-    })),
-    graphHits: (debug?.graphHits ?? []).map((h) => ({
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: h.content,
-      score: h.score,
-      rank: h.rank,
-      seeds: h.seeds,
-    })),
+    vectorHits: debug?.vectorHits ?? [],
+    keywordHits: debug?.keywordHits ?? [],
+    graphHits: debug?.graphHits ?? [],
   };
 }
 
@@ -127,43 +92,19 @@ export function buildRetrievalTrace(input: {
 }): RetrievalTrace {
   const debug = input.result.debug;
   let truncated = false;
-  const vectorHits = (debug?.vectorHits ?? []).map((h) => {
-    const t = truncateContent(h.content);
-    truncated = truncated || t.truncated;
-    return {
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: t.content,
-      score: h.score,
-      rank: h.rank,
-    };
-  });
-  const keywordHits = (debug?.keywordHits ?? []).map((h) => {
-    const t = truncateContent(h.content);
-    truncated = truncated || t.truncated;
-    return {
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: t.content,
-      score: h.score,
-      rank: h.rank,
-    };
-  });
-  // 第三路审计与双路同构：审计详情按 queryId 回放时能看到图谱候选的原始分/排名。
-  const graphHits = (debug?.graphHits ?? []).map((h) => {
-    const t = truncateContent(h.content);
-    truncated = truncated || t.truncated;
-    return {
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: t.content,
-      score: h.score,
-      rank: h.rank,
-    };
-  });
+  const traceHits = (hits: ChannelHit[] = []) =>
+    hits.map((hit) => {
+      const content = truncateContent(hit.content);
+      truncated = truncated || content.truncated;
+      return {
+        id: hit.id,
+        source: hit.source,
+        chunkIndex: hit.chunkIndex,
+        content: content.content,
+        score: hit.score,
+        rank: hit.rank,
+      };
+    });
   const rawGraphContext = input.result.graph?.context ?? "";
   const graphContextTruncated = rawGraphContext.length > MAX_TRACE_GRAPH_CONTEXT;
   truncated = truncated || graphContextTruncated;
@@ -199,9 +140,10 @@ export function buildRetrievalTrace(input: {
     },
     visibleSources: input.visibleSources,
     viewerGroups: input.viewerGroups,
-    vectorHits,
-    keywordHits,
-    graphHits,
+    vectorHits: traceHits(debug?.vectorHits),
+    keywordHits: traceHits(debug?.keywordHits),
+    graphHits: traceHits(debug?.graphHits),
+    ...(debug?.keywordEnabled === false ? { keywordEnabled: false } : {}),
     graphEnabled: input.result.graph?.enabled ?? debug?.graphEnabled ?? false,
     graphContext,
     fused,
@@ -242,6 +184,8 @@ export function queryRouter(options: QueryRouterOptions): Router {
       crag?: unknown;
       graph?: unknown;
       graphHops?: unknown;
+      /** 关键词通道开关；false 时只保留向量召回（「仅向量」模式）。 */
+      keyword?: unknown;
     };
     const query = typeof body.query === "string" ? body.query.trim() : "";
     if (!query) {
@@ -255,6 +199,8 @@ export function queryRouter(options: QueryRouterOptions): Router {
     // 请求体只能在此基础上关闭，不能推翻部署配置强行开启。
     const useGraph = graphRetrieval && body.graph !== false;
     const graphHops = clampGraphHops(body.graphHops);
+    // 关键词通道默认开启；只有显式传 keyword:false 才退化为「仅向量」模式。
+    const useKeyword = body.keyword !== false;
     const queryId = randomUUID();
     const queryStartedAt = Date.now();
     let analyticsRecorded = false;
@@ -288,6 +234,7 @@ export function queryRouter(options: QueryRouterOptions): Router {
             crag: useCrag,
             graph: useGraph,
             graphHops: useGraph ? graphHops : null,
+            keyword: useKeyword,
           },
           metadata: {
             sources: (sources ?? []).join(","),
@@ -366,11 +313,13 @@ export function queryRouter(options: QueryRouterOptions): Router {
                 return;
               }
 
-              // graph: false 显式回退到两路检索；开启时用构造期注入的图谱通道并透传跳数。
+              // graph: false 关闭图谱第三路；keyword: false 关闭关键词通道。
+              // 两者都关闭时即为「仅向量」检索模式。
               const result = await rag.retrieve(query, {
                 topK,
                 sources: visibleSources,
                 ...(useGraph ? { graphHops } : { graph: false }),
+                ...(useKeyword ? {} : { keyword: false }),
               });
               let answer: string | null = null;
               if (generate && llm && result.chunks.length > 0) {

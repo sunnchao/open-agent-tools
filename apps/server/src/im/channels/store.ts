@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { openDb } from "../../db.js";
 import { decryptProviderKey, encryptProviderKey, maskProviderKey } from "../../providers/crypto.js";
-import { isImPlatform, type ImPlatform } from "../types.js";
+import { isImPlatform, type ImMcpToolBinding, type ImPlatform } from "../types.js";
+import { DEFAULT_WORKSPACE_ID } from "../../db.js";
 
 export { isImPlatform, type ImPlatform };
+export type { ImMcpToolBinding };
+
+/** 单个 IM 渠道允许绑定的 MCP 工具上限（与 /api/chat 的 30 上限保持一致）。 */
+export const MAX_IM_MCP_TOOLS = 30;
 
 export interface ImChannel {
   id: string;
@@ -13,9 +18,13 @@ export interface ImChannel {
   appSecretMasked: string | null;
   encryptKeyMasked: string | null;
   ragSources: string[];
+  sqlSources: string[];
+  mcpTools: ImMcpToolBinding[];
   ragTopK: number;
   requireMention: boolean;
   enabled: boolean;
+  /** 渠道所属 workspace：IM 问答产生的会话与用量都归到该空间。 */
+  workspaceId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -33,9 +42,13 @@ export interface ImChannelInput {
   appSecret?: string;
   encryptKey?: string;
   ragSources?: string[];
+  sqlSources?: string[];
+  mcpTools?: ImMcpToolBinding[];
   ragTopK?: number;
   requireMention?: boolean;
   enabled?: boolean;
+  /** 渠道所属 workspace；缺省为 default。 */
+  workspaceId?: string;
 }
 
 interface ImChannelRow {
@@ -46,9 +59,12 @@ interface ImChannelRow {
   app_secret_enc: string | null;
   encrypt_key_enc: string | null;
   rag_sources_json: string;
+  sql_sources_json: string;
+  mcp_tools_json: string;
   rag_top_k: number;
   require_mention: number;
   enabled: number;
+  workspace_id: string;
   created_at: string;
   updated_at: string;
 }
@@ -57,9 +73,9 @@ function now(): string {
   return new Date().toISOString();
 }
 
-function normalizeSources(value: unknown): string[] {
+function normalizeSources(value: unknown, field = "ragSources"): string[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value)) throw new Error("ragSources must be an array");
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
   return [
     ...new Set(
       value
@@ -77,9 +93,12 @@ function normalizeInput(input: ImChannelInput): {
   appSecret: string | undefined;
   encryptKey: string | undefined;
   ragSources: string[];
+  sqlSources: string[];
+  mcpTools: ImMcpToolBinding[];
   ragTopK: number;
   requireMention: boolean;
   enabled: boolean;
+  workspaceId: string;
 } {
   const name = input.name?.trim();
   const appId = input.appId?.trim();
@@ -97,14 +116,69 @@ function normalizeInput(input: ImChannelInput): {
     appSecret: input.appSecret === undefined ? undefined : input.appSecret.trim() || undefined,
     encryptKey: input.encryptKey === undefined ? undefined : input.encryptKey.trim() || undefined,
     ragSources: normalizeSources(input.ragSources),
+    sqlSources: normalizeSources(input.sqlSources, "sqlSources"),
+    mcpTools: normalizeMcpTools(input.mcpTools),
     ragTopK,
     requireMention: input.requireMention !== false,
     enabled: input.enabled !== false,
+    workspaceId: input.workspaceId?.trim() || DEFAULT_WORKSPACE_ID,
   };
 }
 
+/** 校验并去重 MCP 工具绑定；非法项直接报错，避免把脏数据写进渠道。 */
+function normalizeMcpTools(value: unknown): ImMcpToolBinding[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("mcpTools must be an array");
+  if (value.length > MAX_IM_MCP_TOOLS) {
+    throw new Error(`mcpTools must contain at most ${MAX_IM_MCP_TOOLS} bindings`);
+  }
+  const unique = new Map<string, ImMcpToolBinding>();
+  for (const item of value) {
+    const record = (item ?? {}) as Partial<ImMcpToolBinding>;
+    const serviceSlug = typeof record.serviceSlug === "string" ? record.serviceSlug.trim() : "";
+    const toolName = typeof record.toolName === "string" ? record.toolName.trim() : "";
+    if (!serviceSlug || !toolName) {
+      throw new Error("mcpTools entries require serviceSlug and toolName");
+    }
+    unique.set(`${serviceSlug}:${toolName}`, { serviceSlug, toolName });
+  }
+  return [...unique.values()];
+}
+
+/** 解析 JSON 数组列；脏数据回退为空数组，避免单条坏记录拖垮整个渠道列表。 */
+function parseStringArray(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 解析 MCP 工具列；脏数据回退为空数组（缺列的存量库同样安全）。 */
+function parseMcpTools(value: unknown): ImMcpToolBinding[] {
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const unique = new Map<string, ImMcpToolBinding>();
+    for (const item of parsed) {
+      const record = (item ?? {}) as Partial<ImMcpToolBinding>;
+      const serviceSlug = typeof record.serviceSlug === "string" ? record.serviceSlug.trim() : "";
+      const toolName = typeof record.toolName === "string" ? record.toolName.trim() : "";
+      if (!serviceSlug || !toolName) continue;
+      unique.set(`${serviceSlug}:${toolName}`, { serviceSlug, toolName });
+    }
+    return [...unique.values()];
+  } catch {
+    return [];
+  }
+}
+
 function rowToChannel(row: ImChannelRow, includeSecret = false): ImChannel | ImChannelWithSecret {
-  const parsed = JSON.parse(row.rag_sources_json) as unknown;
   const base = {
     id: row.id,
     name: row.name,
@@ -116,12 +190,13 @@ function rowToChannel(row: ImChannelRow, includeSecret = false): ImChannel | ImC
     encryptKeyMasked: row.encrypt_key_enc
       ? maskProviderKey(decryptProviderKey(row.encrypt_key_enc))
       : null,
-    ragSources: Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === "string")
-      : [],
+    ragSources: parseStringArray(row.rag_sources_json),
+    sqlSources: parseStringArray(row.sql_sources_json),
+    mcpTools: parseMcpTools(row.mcp_tools_json),
     ragTopK: row.rag_top_k,
     requireMention: row.require_mention === 1,
     enabled: row.enabled === 1,
+    workspaceId: row.workspace_id || DEFAULT_WORKSPACE_ID,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   } satisfies ImChannel;
@@ -165,8 +240,8 @@ export function createChannel(input: ImChannelInput): ImChannel {
   const encryptKeyEnc = normalized.encryptKey ? encryptProviderKey(normalized.encryptKey) : null;
   openDb()
     .prepare(
-      `INSERT INTO im_channels (id, name, platform, app_id, app_secret_enc, encrypt_key_enc, rag_sources_json, rag_top_k, require_mention, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO im_channels (id, name, platform, app_id, app_secret_enc, encrypt_key_enc, rag_sources_json, sql_sources_json, mcp_tools_json, rag_top_k, require_mention, enabled, workspace_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -176,9 +251,12 @@ export function createChannel(input: ImChannelInput): ImChannel {
       appSecretEnc,
       encryptKeyEnc,
       JSON.stringify(normalized.ragSources),
+      JSON.stringify(normalized.sqlSources),
+      JSON.stringify(normalized.mcpTools),
       normalized.ragTopK,
       normalized.requireMention ? 1 : 0,
       normalized.enabled ? 1 : 0,
+      normalized.workspaceId,
       timestamp,
       timestamp,
     );
@@ -195,9 +273,12 @@ function toPublic(channel: ImChannelWithSecret): ImChannel {
     appSecretMasked: channel.appSecretMasked,
     encryptKeyMasked: channel.encryptKeyMasked,
     ragSources: channel.ragSources,
+    sqlSources: channel.sqlSources,
+    mcpTools: channel.mcpTools,
     ragTopK: channel.ragTopK,
     requireMention: channel.requireMention,
     enabled: channel.enabled,
+    workspaceId: channel.workspaceId,
     createdAt: channel.createdAt,
     updatedAt: channel.updatedAt,
   };
@@ -209,17 +290,19 @@ export function updateChannel(
 ): ImChannel | null {
   const current = getRow(id);
   if (!current) return null;
-  const parsedSources = JSON.parse(current.rag_sources_json) as unknown;
   const normalized = normalizeInput({
     name: input.name ?? current.name,
     platform: input.platform ?? (isImPlatform(current.platform) ? current.platform : "feishu"),
     appId: input.appId ?? current.app_id,
     appSecret: input.appSecret,
     encryptKey: input.encryptKey,
-    ragSources: input.ragSources ?? (Array.isArray(parsedSources) ? parsedSources : []),
+    ragSources: input.ragSources ?? parseStringArray(current.rag_sources_json),
+    sqlSources: input.sqlSources ?? parseStringArray(current.sql_sources_json),
+    mcpTools: input.mcpTools ?? parseMcpTools(current.mcp_tools_json),
     ragTopK: input.ragTopK ?? current.rag_top_k,
     requireMention: input.requireMention ?? current.require_mention === 1,
     enabled: input.enabled ?? current.enabled === 1,
+    workspaceId: input.workspaceId ?? current.workspace_id ?? DEFAULT_WORKSPACE_ID,
   });
   const appSecretEnc =
     normalized.appSecret === undefined
@@ -235,7 +318,7 @@ export function updateChannel(
         : null;
   openDb()
     .prepare(
-      `UPDATE im_channels SET name = ?, platform = ?, app_id = ?, app_secret_enc = ?, encrypt_key_enc = ?, rag_sources_json = ?, rag_top_k = ?, require_mention = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE im_channels SET name = ?, platform = ?, app_id = ?, app_secret_enc = ?, encrypt_key_enc = ?, rag_sources_json = ?, sql_sources_json = ?, mcp_tools_json = ?, rag_top_k = ?, require_mention = ?, enabled = ?, workspace_id = ?, updated_at = ? WHERE id = ?`,
     )
     .run(
       normalized.name,
@@ -244,9 +327,12 @@ export function updateChannel(
       appSecretEnc,
       encryptKeyEnc,
       JSON.stringify(normalized.ragSources),
+      JSON.stringify(normalized.sqlSources),
+      JSON.stringify(normalized.mcpTools),
       normalized.ragTopK,
       normalized.requireMention ? 1 : 0,
       normalized.enabled ? 1 : 0,
+      normalized.workspaceId,
       now(),
       id,
     );

@@ -24,9 +24,26 @@ function channelPayload(body: unknown): Partial<Omit<ImChannelInput, "id">> {
     ...(Array.isArray(value?.ragSources)
       ? { ragSources: value.ragSources.filter((item): item is string => typeof item === "string") }
       : {}),
+    ...(Array.isArray(value?.sqlSources)
+      ? { sqlSources: value.sqlSources.filter((item): item is string => typeof item === "string") }
+      : {}),
+    ...(Array.isArray(value?.mcpTools)
+      ? {
+          mcpTools: value.mcpTools
+            .filter(
+              (item): item is { serviceSlug: string; toolName: string } =>
+                typeof item === "object" &&
+                item !== null &&
+                typeof (item as { serviceSlug?: unknown }).serviceSlug === "string" &&
+                typeof (item as { toolName?: unknown }).toolName === "string",
+            )
+            .map((item) => ({ serviceSlug: item.serviceSlug, toolName: item.toolName })),
+        }
+      : {}),
     ...(typeof value?.ragTopK === "number" ? { ragTopK: value.ragTopK } : {}),
     ...(typeof value?.requireMention === "boolean" ? { requireMention: value.requireMention } : {}),
     ...(typeof value?.enabled === "boolean" ? { enabled: value.enabled } : {}),
+    ...(typeof value?.workspaceId === "string" ? { workspaceId: value.workspaceId } : {}),
   };
 }
 

@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { KnowledgeGraph, GraphVisualizer, type Entity } from "@open-agent-tools/rag/graph";
+import type { KnowledgeGraph, Entity } from "@open-agent-tools/rag/graph";
 import {
   CragController,
   createBlockDomain,
@@ -34,7 +34,7 @@ function decodeSource(raw: unknown): string {
 export function graphRouter(opts: GraphRouterDeps): Router {
   const { rag, graph, lifecycle } = opts;
   const router: Router = Router();
-  const visualizer = new GraphVisualizer(graph.store);
+  const { visualizer } = graph;
 
   /** 触发抽取：对指定 source（或全库）重建图谱。先清后建，可重复调用。 */
   router.post("/extract", async (req: Request, res: Response) => {
@@ -194,33 +194,21 @@ export function graphRouter(opts: GraphRouterDeps): Router {
 export function buildCragController(opts: GraphRouterOptions): CragController {
   const { rag, graph } = opts;
   const block = createBlockDomain({
-    retrieve: async (query, rOpts = {}) => {
-      const result = await rag.retrieve(query, {
+    retrieve: (query, rOpts = {}) =>
+      rag.retrieve(query, {
         topK: rOpts.topK ?? 5,
         sources: rOpts.sources,
         // CRAG 自己注册了独立的 graph 域；block 域必须关闭图谱第三路，
         // 否则同一份子图证据会被两路重复计入，改变既有 CRAG 的评估口径。
         graph: false,
-      });
-      return {
-        chunks: result.chunks.map((c) => ({
-          source: c.source,
-          chunkIndex: c.chunkIndex,
-          content: c.content,
-          ...(typeof c.score === "number" ? { score: c.score } : {}),
-        })),
-      };
-    },
+      }),
   });
   const graphDomain = createGraphDomain({
-    retrieve: async (query, opts = {}) => {
-      if (opts.sources?.length === 0) return { query, seeds: [], subgraph: null };
-      const result = await graph.retrieve(query, {
+    retrieve: (query, opts = {}) =>
+      graph.retrieve(query, {
         maxHops: 2,
-        ...(opts.sources ? { sources: opts.sources } : {}),
-      });
-      return result;
-    },
+        sources: opts.sources,
+      }),
   });
   return new CragController({
     evaluator: new HeuristicRetrievalEvaluator(),

@@ -48,13 +48,8 @@ export interface ExtractResult {
   relations: Relation[];
 }
 
-/** 抽取输入：与 packages/rag 的 Chunk 形状兼容的最小接口。 */
-export interface ChunkLike {
-  id: string;
-  source: string;
-  chunkIndex: number;
-  content: string;
-}
+/** 图谱抽取直接使用知识库分块，保留原类型导出名。 */
+export type { Chunk as ChunkLike } from "../types.js";
 
 /** 单个文档来源的建图状态（图谱库与知识库对账依据）。 */
 export interface GraphSourceState {

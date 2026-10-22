@@ -28,6 +28,7 @@ import { connectorsRouter } from "./routes/connectors.js";
 import { reportsRouter } from "./routes/reports.js";
 import { brandingRouter } from "./routes/branding.js";
 import { identityRouter } from "./routes/identity.js";
+import { auditRouter } from "./routes/audit.js";
 
 export interface CreateAppOptions {
   studioAuth?: StudioAuthOptions;
@@ -95,6 +96,7 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   app.use(reportsRouter);
   app.use(brandingRouter);
   app.use(identityRouter);
+  app.use(auditRouter);
 
   return app;
 }

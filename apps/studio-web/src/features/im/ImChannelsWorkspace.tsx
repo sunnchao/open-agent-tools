@@ -30,14 +30,20 @@ import {
 import { StudioNotice, type StudioNoticeValue } from "../../components/studio/StudioNotice.js";
 import {
   fetchImChannels,
+  fetchImSqlSourceOptions,
+  mcpToolKey,
+  parseMcpToolKey,
   removeImChannel,
   restartImChannel,
   saveImChannel,
   IM_PLATFORM_LABELS,
   IM_PLATFORMS,
   type ImChannelMetadata,
+  type ImMcpToolBinding,
   type ImPlatform,
+  type ImSqlSourceOption,
 } from "./api.js";
+import { fetchResourceCatalog, type McpServiceResource } from "../resources/api.js";
 
 type Draft = {
   id?: string;
@@ -47,6 +53,8 @@ type Draft = {
   appSecret: string;
   encryptKey: string;
   ragSources: string[];
+  sqlSources: string[];
+  mcpTools: ImMcpToolBinding[];
   ragTopK: number;
   requireMention: boolean;
   enabled: boolean;
@@ -59,6 +67,8 @@ const emptyDraft = (): Draft => ({
   appSecret: "",
   encryptKey: "",
   ragSources: [],
+  sqlSources: [],
+  mcpTools: [],
   ragTopK: 5,
   requireMention: true,
   enabled: true,
@@ -73,6 +83,12 @@ export function ImChannelsSection() {
   const [restartingId, setRestartingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<StudioNoticeValue | null>(null);
+  const [sqlSourceOptions, setSqlSourceOptions] = useState<ImSqlSourceOption[]>([]);
+  const [sqlSourceOptionsLoading, setSqlSourceOptionsLoading] = useState(false);
+  const [sqlSourceOptionsError, setSqlSourceOptionsError] = useState<string | null>(null);
+  const [mcpServices, setMcpServices] = useState<McpServiceResource[]>([]);
+  const [mcpCatalogLoading, setMcpCatalogLoading] = useState(false);
+  const [mcpCatalogError, setMcpCatalogError] = useState<string | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -86,8 +102,35 @@ export function ImChannelsSection() {
     }
   };
 
+  const loadSqlSourceOptions = async () => {
+    setSqlSourceOptionsLoading(true);
+    setSqlSourceOptionsError(null);
+    try {
+      setSqlSourceOptions(await fetchImSqlSourceOptions());
+    } catch (reason) {
+      setSqlSourceOptionsError(reason instanceof Error ? reason.message : "问数数据源加载失败");
+    } finally {
+      setSqlSourceOptionsLoading(false);
+    }
+  };
+
+  const loadMcpCatalog = async () => {
+    setMcpCatalogLoading(true);
+    setMcpCatalogError(null);
+    try {
+      const catalog = await fetchResourceCatalog();
+      setMcpServices(catalog.mcp?.services ?? []);
+    } catch (reason) {
+      setMcpCatalogError(reason instanceof Error ? reason.message : "MCP 工具目录加载失败");
+    } finally {
+      setMcpCatalogLoading(false);
+    }
+  };
+
   useEffect(() => {
     void refresh();
+    void loadSqlSourceOptions();
+    void loadMcpCatalog();
   }, []);
 
   const submit = async () => {
@@ -124,6 +167,8 @@ export function ImChannelsSection() {
       appSecret: "",
       encryptKey: "",
       ragSources: channel.ragSources,
+      sqlSources: channel.sqlSources ?? [],
+      mcpTools: channel.mcpTools ?? [],
       ragTopK: channel.ragTopK,
       requireMention: channel.requireMention,
       enabled: channel.enabled,
@@ -195,11 +240,66 @@ export function ImChannelsSection() {
         render: (value: string[]) => (
           <Flex gap={4} align="center" wrap>
             <Tag>{value.length}</Tag>
-            <Typography.Text type="secondary" ellipsis style={{ maxWidth: 180 }} title={value.join(", ")}>
+            <Typography.Text
+              type="secondary"
+              ellipsis
+              style={{ maxWidth: 180 }}
+              title={value.join(", ")}
+            >
               {value.length > 0 ? value.join(", ") : "未绑定"}
             </Typography.Text>
           </Flex>
         ),
+      },
+      {
+        title: "问数",
+        dataIndex: "sqlSources",
+        key: "sqlSources",
+        render: (value: string[] | undefined) => {
+          const ids = value ?? [];
+          return (
+            <Flex gap={4} align="center" wrap>
+              <Tag color={ids.length > 0 ? "blue" : undefined}>{ids.length}</Tag>
+              {ids.length > 0 ? (
+                <Typography.Text
+                  type="secondary"
+                  ellipsis
+                  style={{ maxWidth: 180 }}
+                  title={formatSqlSourceNames(ids, sqlSourceOptions)}
+                >
+                  {formatSqlSourceNames(ids, sqlSourceOptions)}
+                </Typography.Text>
+              ) : (
+                <Typography.Text type="secondary">未绑定</Typography.Text>
+              )}
+            </Flex>
+          );
+        },
+      },
+      {
+        title: "MCP 工具",
+        dataIndex: "mcpTools",
+        key: "mcpTools",
+        render: (value: ImMcpToolBinding[] | undefined) => {
+          const tools = value ?? [];
+          return (
+            <Flex gap={4} align="center" wrap>
+              <Tag color={tools.length > 0 ? "purple" : undefined}>{tools.length}</Tag>
+              {tools.length > 0 ? (
+                <Typography.Text
+                  type="secondary"
+                  ellipsis
+                  style={{ maxWidth: 180 }}
+                  title={formatMcpToolNames(tools)}
+                >
+                  {formatMcpToolNames(tools)}
+                </Typography.Text>
+              ) : (
+                <Typography.Text type="secondary">未绑定</Typography.Text>
+              )}
+            </Flex>
+          );
+        },
       },
       {
         title: "状态",
@@ -265,7 +365,7 @@ export function ImChannelsSection() {
         ),
       },
     ],
-    [restartingId],
+    [restartingId, sqlSourceOptions],
   );
 
   return (
@@ -274,7 +374,10 @@ export function ImChannelsSection() {
       <StudioNotice notice={notice} />
       <Flex align="flex-start" justify="space-between" gap={12}>
         <Flex vertical gap={2}>
-          <Typography.Text type="secondary" style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2 }}>
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2 }}
+          >
             COLLABORATION ENTRY
           </Typography.Text>
           <Typography.Title level={5} style={{ margin: 0 }}>
@@ -282,7 +385,11 @@ export function ImChannelsSection() {
           </Typography.Title>
         </Flex>
         <Flex gap={8}>
-          <Button icon={<ReloadOutlined spin={loading} />} disabled={loading} onClick={() => void refresh()}>
+          <Button
+            icon={<ReloadOutlined spin={loading} />}
+            disabled={loading}
+            onClick={() => void refresh()}
+          >
             刷新
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setDraft(emptyDraft())}>
@@ -299,13 +406,23 @@ export function ImChannelsSection() {
           loading={loading}
           pagination={channels.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
           scroll={{ x: "max-content" }}
-          locale={{ emptyText: <Empty description={loading ? "正在加载 IM 渠道..." : "还没有 IM 渠道"} /> }}
+          locale={{
+            emptyText: <Empty description={loading ? "正在加载 IM 渠道..." : "还没有 IM 渠道"} />,
+          }}
         />
       </Card>
       <ImChannelModal
         draft={draft}
         setDraft={setDraft}
         saving={saving}
+        sqlSourceOptions={sqlSourceOptions}
+        sqlSourceOptionsLoading={sqlSourceOptionsLoading}
+        sqlSourceOptionsError={sqlSourceOptionsError}
+        onReloadSqlSourceOptions={() => void loadSqlSourceOptions()}
+        mcpServices={mcpServices}
+        mcpCatalogLoading={mcpCatalogLoading}
+        mcpCatalogError={mcpCatalogError}
+        onReloadMcpCatalog={() => void loadMcpCatalog()}
         onCancel={() => setDraft(null)}
         onSubmit={() => void submit()}
       />
@@ -313,20 +430,67 @@ export function ImChannelsSection() {
   );
 }
 
+function formatSqlSourceNames(ids: string[], options: ImSqlSourceOption[]): string {
+  const names = new Map(options.map((option) => [option.id, option.name]));
+  return ids.map((id) => names.get(id) ?? id).join(", ");
+}
+
+function formatMcpToolNames(tools: ImMcpToolBinding[]): string {
+  return tools.map((tool) => `${tool.serviceSlug}/${tool.toolName}`).join(", ");
+}
+
 function ImChannelModal({
   draft,
   setDraft,
   saving,
+  sqlSourceOptions,
+  sqlSourceOptionsLoading,
+  sqlSourceOptionsError,
+  onReloadSqlSourceOptions,
+  mcpServices,
+  mcpCatalogLoading,
+  mcpCatalogError,
+  onReloadMcpCatalog,
   onCancel,
   onSubmit,
 }: {
   draft: Draft | null;
   setDraft: (draft: Draft) => void;
   saving: boolean;
+  sqlSourceOptions: ImSqlSourceOption[];
+  sqlSourceOptionsLoading: boolean;
+  sqlSourceOptionsError: string | null;
+  onReloadSqlSourceOptions: () => void;
+  mcpServices: McpServiceResource[];
+  mcpCatalogLoading: boolean;
+  mcpCatalogError: string | null;
+  onReloadMcpCatalog: () => void;
   onCancel: () => void;
   onSubmit: () => void;
 }) {
   const [sourceInput, setSourceInput] = useState("");
+  const mcpToolOptions = useMemo(
+    () =>
+      mcpServices.map((service) => ({
+        label: service.serviceSlug,
+        options: service.tools.map((tool) => ({
+          value: mcpToolKey({ serviceSlug: service.serviceSlug, toolName: tool.name }),
+          label: tool.name,
+        })),
+      })),
+    [mcpServices],
+  );
+  const availableToolKeys = useMemo(
+    () =>
+      new Set(
+        mcpServices.flatMap((service) =>
+          service.tools.map((tool) =>
+            mcpToolKey({ serviceSlug: service.serviceSlug, toolName: tool.name }),
+          ),
+        ),
+      ),
+    [mcpServices],
+  );
   if (!draft) return null;
   const patch = (value: Partial<Draft>) => setDraft({ ...draft, ...value });
   const addSource = () => {
@@ -335,6 +499,9 @@ function ImChannelModal({
       patch({ ragSources: [...draft.ragSources, source] });
     setSourceInput("");
   };
+  const missingMcpTools = (draft.mcpTools ?? []).filter(
+    (tool) => !availableToolKeys.has(mcpToolKey(tool)),
+  );
 
   return (
     <Modal
@@ -377,12 +544,20 @@ function ImChannelModal({
             aria-label="App ID"
             value={draft.appId}
             onChange={(event) => patch({ appId: event.target.value })}
-            placeholder="cli_xxxxxxxx"
+            placeholder={draft.platform === "dingtalk" ? "钉钉 ClientID（AppKey）" : "cli_xxxxxxxx"}
           />
         </Form.Item>
         <Form.Item
           label="App Secret"
-          extra={draft.id ? "留空保持不变" : "必填"}
+          extra={
+            draft.platform === "dingtalk"
+              ? draft.id
+                ? "钉钉 ClientSecret（AppSecret）；留空保持不变"
+                : "钉钉 ClientSecret（AppSecret）"
+              : draft.id
+                ? "留空保持不变"
+                : "必填"
+          }
         >
           <Input.Password
             aria-label="App Secret"
@@ -391,12 +566,99 @@ function ImChannelModal({
             autoComplete="new-password"
           />
         </Form.Item>
-        <Form.Item label="事件解密密钥" extra="可选，飞书 Encrypt Key / 钉钉加解密">
+        <Form.Item
+          label="事件解密密钥"
+          extra={
+            draft.platform === "dingtalk"
+              ? "钉钉 Stream 模式无需配置，可留空"
+              : "可选，飞书 Encrypt Key"
+          }
+        >
           <Input.Password
             aria-label="事件解密密钥"
             value={draft.encryptKey}
             onChange={(event) => patch({ encryptKey: event.target.value })}
             autoComplete="new-password"
+          />
+        </Form.Item>
+        <Form.Item
+          label="问数数据源"
+          extra="绑定后机器人可调用对应数据源的 SQL 问数（自然语言查询，只读、带审计）"
+        >
+          {sqlSourceOptionsError ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 8 }}
+              message={`问数数据源加载失败：${sqlSourceOptionsError}`}
+              action={
+                <Button size="small" onClick={onReloadSqlSourceOptions}>
+                  重试
+                </Button>
+              }
+            />
+          ) : null}
+          <Select
+            aria-label="问数数据源"
+            mode="multiple"
+            allowClear
+            value={draft.sqlSources}
+            onChange={(value: string[]) => patch({ sqlSources: value })}
+            loading={sqlSourceOptionsLoading}
+            placeholder="选择允许机器人查询的数据源（可多选）"
+            options={sqlSourceOptions.map((source) => ({
+              value: source.id,
+              label: `${source.name}${source.isDefault ? "（默认）" : ""} · ${
+                source.connector === "postgresql" ? "PostgreSQL" : "MySQL"
+              }`,
+            }))}
+            optionFilterProp="label"
+          />
+        </Form.Item>
+        <Form.Item
+          label="MCP 工具"
+          extra="绑定后机器人可在对话中调用已发布 MCP 服务的工具（查文档、查 CRM 等）"
+        >
+          {mcpCatalogError ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 8 }}
+              message={`MCP 工具目录加载失败：${mcpCatalogError}`}
+              action={
+                <Button size="small" onClick={onReloadMcpCatalog}>
+                  重试
+                </Button>
+              }
+            />
+          ) : null}
+          {missingMcpTools.length > 0 ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 8 }}
+              message={`${missingMcpTools.length} 个已绑定工具当前不可用：${formatMcpToolNames(
+                missingMcpTools,
+              )}（保存后仍保留，问数时自动降级跳过）`}
+            />
+          ) : null}
+          <Select
+            aria-label="MCP 工具"
+            mode="multiple"
+            allowClear
+            value={draft.mcpTools.map(mcpToolKey)}
+            onChange={(value: string[]) =>
+              patch({
+                mcpTools: value
+                  .map(parseMcpToolKey)
+                  .filter((tool): tool is ImMcpToolBinding => tool !== null),
+              })
+            }
+            loading={mcpCatalogLoading}
+            placeholder="选择机器人可调用的 MCP 工具（可多选）"
+            options={mcpToolOptions}
+            optionFilterProp="label"
+            maxTagCount="responsive"
           />
         </Form.Item>
         <Form.Item label="知识库绑定" extra="留空则机器人退化为纯 LLM 问答">
@@ -461,4 +723,3 @@ function ImChannelModal({
     </Modal>
   );
 }
-

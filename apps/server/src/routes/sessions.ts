@@ -6,11 +6,18 @@ import {
   getSession,
   listSessionsWithMessages,
   renameSession,
+  type SessionSourceFilter,
 } from "../db.js";
 import { logTrace } from "../trace.js";
 import { resolveWorkspace } from "../workspace.js";
 
 export const sessionsRouter: ReturnType<typeof Router> = Router();
+
+/** 解析 source 查询参数；缺省只看 Web 会话（IM 会话不污染 Web 侧边栏）。 */
+function parseSourceFilter(value: unknown): SessionSourceFilter {
+  if (value === "im" || value === "all" || value === "web") return value;
+  return "web";
+}
 
 sessionsRouter.get("/api/sessions", (req: Request, res: Response) => {
   const workspace = resolveWorkspace(req);
@@ -18,8 +25,13 @@ sessionsRouter.get("/api/sessions", (req: Request, res: Response) => {
     res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
     return;
   }
-  const sessions = listSessionsWithMessages(workspace.workspaceId);
-  logTrace("sessions.list", { workspaceId: workspace.workspaceId, count: sessions.length });
+  const source = parseSourceFilter(req.query.source);
+  const sessions = listSessionsWithMessages(workspace.workspaceId, { source });
+  logTrace("sessions.list", {
+    workspaceId: workspace.workspaceId,
+    source,
+    count: sessions.length,
+  });
   res.json({ sessions });
 });
 

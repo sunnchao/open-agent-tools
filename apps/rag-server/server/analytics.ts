@@ -50,6 +50,8 @@ export interface RetrievalTrace {
   viewerGroups?: string[];
   vectorHits: RetrievalTraceHit[];
   keywordHits: RetrievalTraceHit[];
+  /** 关键词通道是否启用；仅「仅向量」模式写 false，旧 trace 缺省视为启用。 */
+  keywordEnabled?: boolean;
   /** 图谱通道候选（融合前）；未启用/旧 trace 缺省。 */
   graphHits?: RetrievalTraceHit[];
   graphEnabled?: boolean;

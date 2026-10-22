@@ -33,6 +33,8 @@ export interface DocumentStats {
   embeddingsEnabled: boolean;
   llmAvailable: boolean;
   ocrEnabled: boolean;
+  /** 部署级图谱检索总开关（RAG_GRAPH_RETRIEVAL）；旧服务端缺省按可用处理。 */
+  graphRetrieval?: boolean;
   ocrMinCharsPerPage: number;
   ocrMaxPagesSync: number;
   chunkSize: number;
@@ -108,6 +110,8 @@ export interface RetrievalPayload {
   };
   vectorHits: RetrievalChannelHit[];
   keywordHits: RetrievalChannelHit[];
+  /** 关键词通道是否参与本次检索；false 表示「仅向量」模式，旧服务端缺省按启用处理。 */
+  keywordEnabled?: boolean;
   /** 图谱通道是否参与本次检索；旧服务端缺省时前端按未知处理。 */
   graphEnabled?: boolean;
   /** 融合前的图谱候选（含种子实体名），用于解释第三路召回。 */
@@ -175,6 +179,8 @@ export interface QueryDetail {
     viewerGroups?: string[];
     vectorHits: QueryDetailTraceHit[];
     keywordHits: QueryDetailTraceHit[];
+    /** 关键词通道是否启用；仅「仅向量」模式写 false，旧 trace 缺省视为启用。 */
+    keywordEnabled?: boolean;
     /** 图谱候选与序列化上下文；旧 trace 没有该字段。 */
     graphEnabled?: boolean;
     graphHits?: QueryDetailTraceHit[];
@@ -305,6 +311,16 @@ export function uploadDocuments(
   return request("/documents", { method: "POST", body: form });
 }
 
+/**
+ * 检索模式 → 请求参数。
+ *
+ * 关闭「图谱检索」时同时关闭图谱与关键词通道，退化为仅向量召回；
+ * 开启时一律省略参数，沿用服务端默认（含部署侧全局开关）。
+ */
+export function recallOptions(graphRecall: boolean): { graph?: false; keyword?: false } {
+  return graphRecall ? {} : { graph: false, keyword: false };
+}
+
 export function queryKnowledge(input: {
   query: string;
   topK: number;
@@ -313,6 +329,8 @@ export function queryKnowledge(input: {
   /** false 显式关闭图谱第三路；缺省时由服务端按配置决定。 */
   graph?: boolean;
   graphHops?: number;
+  /** false 显式关闭关键词通道；与 graph:false 同时使用即为「仅向量」召回。 */
+  keyword?: boolean;
 }): Promise<QueryResult> {
   return request("/query", {
     method: "POST",

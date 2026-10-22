@@ -5,14 +5,20 @@ import express, { type Request, type Response } from "express";
 import multer from "multer";
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { CallbackHandler } from "@langfuse/langchain";
-import { DEFAULT_SEPARATORS, normalizeOcrDecision, Rag } from "@open-agent-tools/rag";
-import { ElasticsearchVectorStore } from "@open-agent-tools/rag";
-import { TesseractOcrProvider } from "@open-agent-tools/rag";
+import {
+  DEFAULT_SEPARATORS,
+  ElasticsearchVectorStore,
+  HybridVectorStore,
+  normalizeOcrDecision,
+  PgVectorStore,
+  Rag,
+  TesseractOcrProvider,
+  type VectorStore,
+} from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
 import { parseChunkStrategy, parseSemanticThreshold, parseSeparators } from "./chunk-settings.js";
 import { buildCragController, graphRouter } from "./graph.js";
-import { createGraphChannel } from "./graph-channel.js";
-import { healthRouter } from "./health.js";
+import { healthRouter, type StoreKind } from "./health.js";
 import { queryRouter } from "./query-api.js";
 import { GraphLifecycle } from "./lifecycle.js";
 import { RagAnalyticsStore } from "./analytics.js";
@@ -88,27 +94,106 @@ const llm = apiKey
   : undefined;
 if (llm) llm.callbacks = [langfuseHandler];
 
-const ragStoreKind = (process.env.RAG_STORE ?? "sqlite").trim().toLowerCase();
-const ragStore =
-  ragStoreKind === "elasticsearch" || ragStoreKind === "es"
-    ? new ElasticsearchVectorStore({
-        node: process.env.RAG_ES_NODE?.trim() || "http://localhost:9200",
-        indexPrefix: process.env.RAG_ES_INDEX_PREFIX?.trim() || "rag",
-        dims: Number(process.env.RAG_ES_DIMS) || 1536,
-      })
-    : undefined;
-if (ragStore) {
-  console.log(
-    `[rag-server] store=elasticsearch node=${process.env.RAG_ES_NODE?.trim() || "http://localhost:9200"} prefix=${process.env.RAG_ES_INDEX_PREFIX?.trim() || "rag"}`,
+// 知识库存储：默认 PostgreSQL + pgvector 存向量与目录，同时把内容同步到 Elasticsearch
+// 提供 BM25 关键词通道；SQLite 不再作为知识库默认后端（仅保留给离线/测试显式指定）。
+const ragStoreKind = (process.env.RAG_STORE ?? "pgvector").trim().toLowerCase();
+const esNode = process.env.RAG_ES_NODE?.trim();
+const esIndexPrefix = process.env.RAG_ES_INDEX_PREFIX?.trim() || "rag";
+const esDims = Number(process.env.RAG_ES_DIMS) || 1536;
+
+// ES 只在显式配置节点时启用；ragStoreKind=elasticsearch 时它是主存，pgvector 时是关键词索引。
+// 超时必须压短：ES 不可用时关键词通道要快速降级，不能把每次查询拖成等待重试。
+const esRequestTimeoutMs = Number(process.env.RAG_ES_REQUEST_TIMEOUT_MS) || 3000;
+const esMaxRetries = Number.isFinite(Number(process.env.RAG_ES_MAX_RETRIES))
+  ? Number(process.env.RAG_ES_MAX_RETRIES)
+  : 0;
+const elasticsearchStore = esNode
+  ? new ElasticsearchVectorStore({
+      node: esNode,
+      indexPrefix: esIndexPrefix,
+      dims: esDims,
+      clientOptions: { requestTimeout: esRequestTimeoutMs, maxRetries: esMaxRetries },
+    })
+  : undefined;
+
+const isPgStore =
+  ragStoreKind === "pgvector" || ragStoreKind === "pg" || ragStoreKind === "postgres";
+
+const pgUrl = process.env.RAG_PG_URL?.trim() || process.env.DATABASE_URL?.trim();
+if (isPgStore && !pgUrl) {
+  throw new Error(
+    "RAG_STORE=pgvector requires RAG_PG_URL (e.g. postgresql://postgres:postgres@localhost:5432/mcp_management)",
   );
 }
 
-// 图谱实例在 Rag 之后构造，但 Rag 构造时就要注入图谱第三路通道；
-// 用可变引用 + 闭包延迟解析，打破「Rag 依赖 graph、graph 又依赖 Rag 分块」的构造顺序循环。
-const graphRef: { current?: KnowledgeGraph } = {};
-const graphChannel = createGraphChannel({ rag: () => rag, graph: () => graphRef.current });
+const pgStore = isPgStore
+  ? new PgVectorStore({
+      connectionString: pgUrl,
+      tablePrefix: process.env.RAG_PG_TABLE_PREFIX?.trim() || "rag",
+      dims: Number(process.env.RAG_PG_DIMS) || 1536,
+      metric:
+        process.env.RAG_PG_METRIC?.trim() === "l2"
+          ? "l2"
+          : process.env.RAG_PG_METRIC?.trim() === "inner_product"
+            ? "inner_product"
+            : "cosine",
+    })
+  : undefined;
 
-const rag = new Rag({
+// 对外统一的存储标识：以实际装配到的后端为准，避免「配置写了 ES 但没节点」时误报。
+const storeKind: StoreKind = pgStore
+  ? "pgvector"
+  : elasticsearchStore
+    ? "elasticsearch"
+    : "sqlite";
+const keywordStoreKind: StoreKind | undefined =
+  pgStore && elasticsearchStore ? "elasticsearch" : undefined;
+
+const ragStore: VectorStore | undefined = pgStore
+  ? elasticsearchStore
+    ? new HybridVectorStore({
+        vectorStore: pgStore,
+        keywordStore: elasticsearchStore,
+        // PG 是唯一主存：ES 同步失败只告警，不阻断入库（可用 resync 重建）。
+        syncMode: process.env.RAG_ES_SYNC_MODE?.trim() === "strict" ? "strict" : "lenient",
+        // ES 查询失败默认降级为空候选，向量通道照常返回，避免整个检索 500。
+        keywordFailureMode:
+          process.env.RAG_ES_QUERY_MODE?.trim() === "strict" ? "strict" : "degrade",
+      })
+    : pgStore
+  : elasticsearchStore;
+if (pgStore) {
+  console.log(
+    `[rag-server] store=pgvector tables=${pgStore.tables.chunks}/${pgStore.tables.documents}` +
+      (elasticsearchStore
+        ? ` keywordStore=elasticsearch node=${esNode} prefix=${esIndexPrefix}`
+        : " keywordStore=pg(ILIKE fallback)"),
+  );
+} else if (elasticsearchStore) {
+  console.log(`[rag-server] store=elasticsearch node=${esNode} prefix=${esIndexPrefix}`);
+} else {
+  console.log("[rag-server] store=sqlite (legacy knowledge base backend)");
+}
+
+// 知识图谱：独立 SQLite 邻接表存储（与 rag 共用文档源，抽取输入为 rag 分块）。
+// 有 Key 时接入 LLM 抽取器（语义三元组）+ 实体名向量兜底；无 Key 自动回退规则抽取（句内共现）。
+const graph = new KnowledgeGraph({
+  dbPath: graphDbPath,
+  embeddings,
+  llmChat: llm
+    ? async (system, user) => {
+        const resp = await trackRagLlm("rag_graph", llm.model, () =>
+          llm.invoke([
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ]),
+        );
+        return typeof resp.content === "string" ? resp.content : JSON.stringify(resp.content);
+      }
+    : undefined,
+});
+
+const rag: Rag = new Rag({
   embeddings,
   dbPath,
   ...(ragStore ? { store: ragStore } : {}),
@@ -119,7 +204,10 @@ const rag = new Rag({
   semanticThreshold: defaultSemanticThreshold,
   ocr: ocrProvider,
   ocrDecision,
-  graph: graphChannel,
+  graph: {
+    retrieve: (query, options) => graph.retrieve(query, options),
+    getChunksByIds: (ids, sources) => rag.getChunksByIds(ids, sources),
+  },
 });
 const analytics = new RagAnalyticsStore(dbPath, Number(process.env.RAG_QUERY_RETENTION_DAYS) || 90);
 const usageStore = new RagUsageStore(dbPath);
@@ -133,34 +221,6 @@ const evalRunner = new EvalRunner({
     return result.chunks.map((chunk) => ({ source: chunk.source, content: chunk.content }));
   },
 });
-
-// 知识图谱：独立 SQLite 邻接表存储（与 rag 共用文档源，抽取输入为 rag 分块）。
-// 有 Key 时接入 LLM 抽取器（语义三元组）+ 实体名向量兜底；无 Key 自动回退规则抽取（句内共现）。
-const graph = new KnowledgeGraph({
-  dbPath: graphDbPath,
-  ...(llm
-    ? {
-        llmChat: (async (system: string, user: string) => {
-          const resp = await trackRagLlm("rag_graph", llm.model, () =>
-            llm.invoke([
-              { role: "system", content: system },
-              { role: "user", content: user },
-            ]),
-          );
-          return typeof resp.content === "string" ? resp.content : JSON.stringify(resp.content);
-        }) as (system: string, user: string) => Promise<string>,
-      }
-    : {}),
-  ...(embeddings
-    ? {
-        embeddings: {
-          embedDocuments: (texts: string[]) => embeddings.embedDocuments(texts),
-        },
-      }
-    : {}),
-});
-// Rag 已持有 graphChannel，此后图谱检索即可解析到真实实例。
-graphRef.current = graph;
 const crag = buildCragController({ rag, graph });
 
 // 知识库与图谱库的唯一联动入口：上传重建、删除级联、状态对账都必须经由此处，
@@ -225,7 +285,8 @@ function uploadChunkSettings(body: Record<string, unknown>): {
 app.use(
   "/api",
   healthRouter({
-    storeKind: ragStore ? "elasticsearch" : "sqlite",
+    storeKind,
+    ...(keywordStoreKind ? { keywordStore: keywordStoreKind } : {}),
     embeddingsEnabled: Boolean(embeddings),
     llmAvailable: Boolean(llm),
     ocrEnabled: ocrDecision.enabled,
@@ -318,6 +379,8 @@ app.get("/api/documents", async (_req: Request, res: Response) => {
     ocrEnabled: ocrDecision.enabled,
     ocrMinCharsPerPage: ocrDecision.minCharsPerPage,
     ocrMaxPagesSync: ocrDecision.maxPagesSync,
+    // 部署级图谱总开关：前端据此禁用「图谱检索」勾选并提示，避免默认开启造成误导。
+    graphRetrieval,
     chunkSize: defaultChunkSize,
     chunkOverlap: defaultChunkOverlap,
     chunkStrategy: defaultChunkStrategy,
@@ -400,7 +463,8 @@ app.use(
     crag,
     ...(llm ? { llm } : {}),
     embeddingsEnabled: Boolean(embeddings),
-    storeKind: ragStore ? "elasticsearch" : "sqlite",
+    storeKind,
+    ...(keywordStoreKind ? { keywordStore: keywordStoreKind } : {}),
     graphRetrieval,
   }),
 );

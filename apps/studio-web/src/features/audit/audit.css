@@ -1,0 +1,115 @@
+.audit-workspace,
+.audit-panel,
+.audit-tabs {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.audit-workspace {
+  display: flex;
+  padding: 16px;
+}
+
+.audit-tabs > .ant-tabs-nav,
+.audit-filters,
+.audit-panel > .ant-alert,
+.audit-pagination,
+.audit-table-card .ant-table-header {
+  flex-shrink: 0;
+}
+
+/* 标签页和表格的中间容器都需要传递剩余高度，避免撑开整页。 */
+.audit-tabs > .ant-tabs-body-holder,
+.audit-tabs > .ant-tabs-body-holder > .ant-tabs-body,
+.audit-tabs > .ant-tabs-body-holder > .ant-tabs-body > .ant-tabs-content-active,
+.audit-table-card,
+.audit-table-card > .ant-card-body,
+.audit-table-card .ant-table-wrapper,
+.audit-table-card .ant-table-wrapper > .ant-spin,
+.audit-table-card .ant-spin-container,
+.audit-table-card .ant-table,
+.audit-table-card .ant-table-container {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 只让表格数据区滚动，表头、筛选条件和分页保留在可视区。 */
+.audit-table-card .ant-table-body {
+  min-height: 0;
+  flex: 1;
+  overscroll-behavior: contain;
+}
+
+.audit-log-row {
+  cursor: pointer;
+}
+
+.audit-detail-body {
+  overflow-wrap: anywhere;
+}
+
+.audit-detail .ant-descriptions-item-label {
+  width: 112px;
+}
+
+.audit-detail .ant-descriptions-item-content,
+.audit-detail .ant-typography {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.audit-detail__text,
+.audit-detail__code {
+  margin-bottom: 0;
+  white-space: pre-wrap;
+}
+
+.audit-detail__code {
+  padding: 12px;
+  font-family: var(--studio-mono);
+  font-size: 12px;
+  background: var(--studio-surface-subtle);
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+}
+
+/* 窄屏或低矮窗口横向浏览筛选项，保留表格的可用高度。 */
+@media (max-width: 600px), (max-height: 800px) {
+  .audit-filters > .ant-card-body {
+    overflow-x: auto;
+  }
+
+  .audit-filters .ant-form,
+  .audit-filters .ant-flex {
+    flex-wrap: nowrap !important;
+  }
+
+  .audit-filters .ant-form-item,
+  .audit-filters .ant-flex > * {
+    flex-shrink: 0 !important;
+  }
+}
+
+@media (max-height: 800px) {
+  .studio-workspace--audit .studio-page-header {
+    padding-block: 16px;
+  }
+
+  .studio-workspace--audit .studio-page-header__eyebrow {
+    display: none;
+  }
+
+  .audit-workspace {
+    padding-block: 8px;
+  }
+
+  .audit-tabs > .ant-tabs-nav {
+    margin-bottom: 8px;
+  }
+}

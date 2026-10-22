@@ -23,7 +23,7 @@ export function deserializeF32(bytes: Uint8Array): Float32Array {
 }
 
 /** 余弦相似度，返回 [-1, 1]。 */
-export function cosine(a: Float32Array, b: Float32Array): number {
+export function cosine(a: ArrayLike<number>, b: ArrayLike<number>): number {
   let dot = 0;
   let na = 0;
   let nb = 0;

@@ -37,23 +37,6 @@ export interface GraphRetrieveResult {
   seeds: Array<{ id: string; name: string; type: string }>;
   formatted: string;
   subgraph: GraphExport | null;
-  /** 图谱通道摘要（部分服务端版本回传），与知识库检索的 graph 字段同构的可选子集。 */
-  graph?: {
-    enabled?: boolean;
-    entities?: number;
-    relations?: number;
-    chunkHits?: number;
-  };
-}
-
-export interface EntityListResult {
-  entities: EntityInfo[];
-  stats: { entities: number; relations: number };
-}
-
-export interface RelationTypeStat {
-  relType: string;
-  count: number;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -88,26 +71,6 @@ export function neighborsOf(entityId: string, hops = 2, source?: string): Promis
   const params = new URLSearchParams({ hops: String(hops) });
   if (source !== undefined) params.set("source", source);
   return request(`/graph/neighbors/${encodeURIComponent(entityId)}?${params.toString()}`);
-}
-
-/** 实体列表（分页 + 类型 + 搜索）。 */
-export function listEntities(
-  opts: {
-    limit?: number;
-    type?: string;
-    search?: string;
-  } = {},
-): Promise<EntityListResult> {
-  const params = new URLSearchParams();
-  if (opts.limit) params.set("limit", String(opts.limit));
-  if (opts.type) params.set("type", opts.type);
-  if (opts.search) params.set("search", opts.search);
-  return request(`/graph/entities?${params.toString()}`);
-}
-
-/** 关系类型分布（图例）。 */
-export function relationTypes(): Promise<{ types: RelationTypeStat[] }> {
-  return request("/graph/relations/types");
 }
 
 /** 单个文档来源的建图状态。 */
