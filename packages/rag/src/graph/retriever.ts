@@ -1,5 +1,5 @@
 import type { Entity, GraphQueryResult, GraphStore, Relation, Subgraph } from "./types.js";
-import { cosine } from "./utils.js";
+import { cosine, makeSubgraph } from "./utils.js";
 
 /** 轻量 embeddings 接口（避免强依赖 langchain，调用方可注入任意实现）。 */
 export interface EmbeddingsLike {
@@ -163,7 +163,7 @@ export class GraphRetriever {
     const maxNodes = opts.maxNodes ?? 64;
     const minWeight = opts.minWeight ?? 1;
     const sources = opts.sources;
-    if (sources?.length === 0) return { entities: [], relations: [], formatted: () => "" };
+    if (sources?.length === 0) return makeSubgraph([], []);
     const sourceSet = sources ? new Set(sources) : null;
     const isAllowedEntity = (entityId: string): boolean =>
       sourceSet === null ||
@@ -212,11 +212,7 @@ export class GraphRetriever {
     const relations = [...relationMap.values()].filter(
       (relation) => entityMap.has(relation.srcId) && entityMap.has(relation.dstId),
     );
-    return {
-      entities: [...entityMap.values()],
-      relations,
-      formatted: () => serializeSubgraphEntities([...entityMap.values()], relations),
-    };
+    return makeSubgraph([...entityMap.values()], relations);
   }
 
   /** 检索门面：定位种子 → 扩展子图。 */
@@ -234,39 +230,4 @@ export class GraphRetriever {
     );
     return { query, seeds, subgraph };
   }
-}
-
-function serializeSubgraphEntities(entities: Entity[], relations: Relation[]): string {
-  const lines: string[] = [];
-  if (relations.length > 0) {
-    lines.push("相关实体与关系:");
-    for (const r of relations) {
-      const src = entities.find((e) => e.id === r.srcId)?.name ?? r.srcId;
-      const dst = entities.find((e) => e.id === r.dstId)?.name ?? r.dstId;
-      lines.push(`- (${src}) --${r.relType}--> (${dst}) 来源: ${r.sourceChunk}`);
-    }
-  }
-  if (entities.length > 0) {
-    lines.push(`涉及实体: ${entities.map((e) => `${e.name}(${e.type})`).join("、")}`);
-  }
-  // 实体属性是抽取阶段花 LLM 成本换来的事实（称号/英文名/类别…）。
-  // 只给名字和关系等于把它们丢掉，问「XX 有哪些技能」这类问题就永远答不出来。
-  const described = entities.filter((entity) => entityProps(entity).length > 0);
-  if (described.length > 0) {
-    lines.push("实体属性:");
-    for (const entity of described) {
-      lines.push(`- ${entity.name}: ${entityProps(entity).join("；")}`);
-    }
-  }
-  return lines.join("\n");
-}
-
-/** 实体的非空字符串属性，按 key 排序保证输出稳定可比对。 */
-function entityProps(entity: Entity): string[] {
-  const props = entity.props;
-  if (!props || typeof props !== "object") return [];
-  return Object.entries(props)
-    .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => `${key}: ${String(value).trim()}`);
 }

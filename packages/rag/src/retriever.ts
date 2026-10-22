@@ -182,13 +182,13 @@ export async function retrieve(
         };
         const graphCandidates = rankGraphChunkCandidates(subgraph.relations, seeds, candidates);
         try {
+          const ids = graphCandidates.map((candidate) => candidate.chunkId);
           const chunks =
-            graphCandidates.length > 0
-              ? await graphSource.getChunksByIds(
-                  graphCandidates.map((candidate) => candidate.chunkId),
-                  sources,
-                )
-              : [];
+            ids.length === 0
+              ? []
+              : graphSource.getChunksByIds
+                ? await graphSource.getChunksByIds(ids, sources)
+                : ((await store.getChunksByIds?.(ids, sources)) ?? []);
           graphList = toGraphChannelHits(graphCandidates, chunks, seedSummary, sources);
           graphAugmentation = { ...graphAugmentation, chunkHits: graphList.length };
         } catch {

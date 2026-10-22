@@ -4,11 +4,10 @@ import type { ChatOpenAI } from "@langchain/openai";
 import type { ChannelHit, GraphAugmentation, Rag } from "@open-agent-tools/rag";
 import type { CragController } from "@open-agent-tools/rag/crag";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
-import { RagAnalyticsStore, type QueryEventInput, type RetrievalTrace } from "./analytics.js";
-import type { StoreKind } from "./health.js";
-import { querySources } from "./query-settings.js";
-import { accessGroups } from "./request-validation.js";
-import { trackRagLlm } from "./usage.js";
+import { RagAnalyticsStore, type QueryEventInput, type RetrievalTrace } from "../analytics.js";
+import type { StoreKind } from "../config.js";
+import { clampInt, queryFeedback, retrievalScope, routeParam } from "../request-validation.js";
+import { trackRagLlm } from "../usage.js";
 
 const DEFAULT_GRAPH_HOPS = 2;
 const MAX_GRAPH_HOPS = 4;
@@ -40,9 +39,7 @@ function emptyGraphPayload(): GraphPayload {
 }
 
 export function clampGraphHops(value: unknown): number {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return DEFAULT_GRAPH_HOPS;
-  return Math.max(MIN_GRAPH_HOPS, Math.min(MAX_GRAPH_HOPS, Math.floor(n)));
+  return clampInt(value, DEFAULT_GRAPH_HOPS, MIN_GRAPH_HOPS, MAX_GRAPH_HOPS);
 }
 
 /**
@@ -209,14 +206,7 @@ export function queryRouter(options: QueryRouterOptions): Router {
     let visibleSources: string[] | undefined;
     let sourceCount = 0;
     try {
-      sources = querySources(body.sources);
-      if (res.locals.ragScope === "runtime") {
-        // runtime 调用不传分组时只能看公开文档，绝不继承管理侧的全量语义。
-        viewerGroups =
-          body.viewerGroups === undefined ? [] : accessGroups(body.viewerGroups, "viewerGroups");
-      } else if (body.viewerGroups !== undefined) {
-        viewerGroups = accessGroups(body.viewerGroups, "viewerGroups");
-      }
+      ({ sources, viewerGroups } = retrievalScope(body, res.locals.ragScope));
       visibleSources = await rag.resolveVisibleSources(sources, viewerGroups);
       sourceCount = visibleSources?.length ?? (await rag.listSources()).length;
     } catch (error) {
@@ -408,13 +398,39 @@ export function queryRouter(options: QueryRouterOptions): Router {
     }
   });
 
+  router.get("/query/:queryId", (req: Request, res: Response) => {
+    const queryId = routeParam(req.params.queryId);
+    const detail = analytics.getQueryDetail(queryId);
+    if (!detail) {
+      res.status(404).json({ error: "query not found" });
+      return;
+    }
+    res.json({ detail });
+  });
+
+  router.put("/query/:queryId/feedback", (req: Request, res: Response) => {
+    try {
+      const feedback = queryFeedback(req.body);
+      const saved = analytics.saveFeedback(
+        routeParam(req.params.queryId),
+        feedback.rating,
+        feedback.comment,
+      );
+      if (!saved) {
+        res.status(404).json({ error: "query not found" });
+        return;
+      }
+      res.json({ feedback: saved });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   return router;
 }
 
 function clampTopK(value: unknown): number {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return 5;
-  return Math.max(1, Math.min(20, Math.floor(n)));
+  return clampInt(value, 5, 1, 20);
 }
 
 /** 候选 content 截断存 trace（防单次查询 trace 膨胀）；融合块存全量。 */

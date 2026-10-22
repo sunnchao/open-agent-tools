@@ -22,7 +22,7 @@ const metadata: DocumentWriteMetadata = {
   semanticThreshold: null,
 };
 
-function documentOf(source: string, content: string): DocumentInfo {
+function documentOf(source: string): DocumentInfo {
   return {
     source,
     title: source,
@@ -73,7 +73,7 @@ class MemoryStore implements VectorStore {
       this.embeddingLengths.push(embedding.length);
     }
     this.documents.set(source, {
-      ...documentOf(source, rows[0]?.chunk.content ?? ""),
+      ...documentOf(source),
       contentHash: writeMetadata.contentHash,
       chunks: rows.length,
     });
@@ -147,7 +147,10 @@ test("双写：向量侧收向量，关键词侧只收文本（不重复存 dens
   await store.replaceSource(
     "a.txt",
     [
-      { chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU 内存" }, embedding: Float32Array.from([1, 2, 3]) },
+      {
+        chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU 内存" },
+        embedding: Float32Array.from([1, 2, 3]),
+      },
     ],
     metadata,
   );
@@ -160,7 +163,12 @@ test("查询路由：向量查主存、关键词查 ES、目录以后者为主�
   const { store } = makeHybrid();
   await store.replaceSource(
     "a.txt",
-    [{ chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU 内存" }, embedding: Float32Array.from([1, 2, 3]) }],
+    [
+      {
+        chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU 内存" },
+        embedding: Float32Array.from([1, 2, 3]),
+      },
+    ],
     metadata,
   );
   const vector = await store.vectorSearch([1, 2, 3], 5);
@@ -178,7 +186,12 @@ test("关键词写入失败默认只告警，PG 侧数据不丢", async () => {
   keyword.failReplaceSource = true;
   await store.replaceSource(
     "a.txt",
-    [{ chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU" }, embedding: Float32Array.from([1]) }],
+    [
+      {
+        chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU" },
+        embedding: Float32Array.from([1]),
+      },
+    ],
     metadata,
   );
   assert.equal(await vector.countChunks(), 1, "主存仍写入成功");
@@ -190,7 +203,12 @@ test("关键词查询失败：默认降级为空候选，strict 模式抛出", a
   lenient.keyword.failKeywordSearch = true;
   await lenient.store.replaceSource(
     "a.txt",
-    [{ chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU" }, embedding: Float32Array.from([1]) }],
+    [
+      {
+        chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU" },
+        embedding: Float32Array.from([1]),
+      },
+    ],
     metadata,
   );
   assert.deepEqual(await lenient.store.keywordSearch("CPU", 5), []);
@@ -206,7 +224,12 @@ test("resync：从主存全量重建关键词索引", async () => {
   const { store, vector, keyword } = makeHybrid();
   await store.replaceSource(
     "a.txt",
-    [{ chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU" }, embedding: Float32Array.from([1]) }],
+    [
+      {
+        chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU" },
+        embedding: Float32Array.from([1]),
+      },
+    ],
     metadata,
   );
   keyword.chunks.clear();
@@ -222,7 +245,12 @@ test("删除：主存与关键词索引同时清理", async () => {
   const { store, vector, keyword } = makeHybrid();
   await store.replaceSource(
     "a.txt",
-    [{ chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU" }, embedding: Float32Array.from([1]) }],
+    [
+      {
+        chunk: { id: "a:0", source: "a.txt", chunkIndex: 0, content: "CPU" },
+        embedding: Float32Array.from([1]),
+      },
+    ],
     metadata,
   );
   await store.removeBySource("a.txt");

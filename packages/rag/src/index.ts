@@ -78,7 +78,7 @@ export interface RagOptions {
   embeddings?: EmbeddingsInterface;
   /** SQLite 数据库文件路径，默认 ./rag.db。传入 `store` 时忽略。 */
   dbPath?: string;
-  /** 注入存储后端：缺省为 SQLite；传 `ElasticsearchVectorStore` 即切换到 ES。 */
+  /** 注入知识主存：支持 SQLite、pgvector、Elasticsearch 或 PG + ES 混合存储；缺省为 SQLite。 */
   store?: VectorStore;
   chunkSize?: number;
   chunkOverlap?: number;
@@ -89,7 +89,7 @@ export interface RagOptions {
   /** PDF OCR 兜底提供方；缺省为诊断模式（检出疑似扫描但不识别）。 */
   ocr?: import("./ocr.js").OcrProvider;
   ocrDecision?: Partial<import("./ocr.js").OcrDecision>;
-  /** 知识图谱通道数据源；缺省不启用图谱召回（两路行为不变）。 */
+  /** 可直接注入 KnowledgeGraph，图谱引用的原文由当前知识主存回取；缺省不启用。 */
   graph?: GraphChannelSource;
   /** 图谱子图扩展跳数，默认 2。 */
   graphHops?: number;
@@ -104,7 +104,7 @@ export type RagRetrieveOptions = Omit<RetrieveOptions, "graph"> & {
   graph?: GraphChannelSource | boolean;
 };
 
-/** RAG 引擎门面：入库 + 混合检索 + 知识库管理。存储后端可为同步（SQLite）或异步（ES），门面一律 async。 */
+/** RAG 引擎门面：入库、混合检索与知识库管理；统一同步和异步存储接口。 */
 export class Rag {
   private store: VectorStore;
   private ingestOpts: IngestOptions;

@@ -86,6 +86,7 @@ test("子图 formatted 输出三元组与来源", async () => {
   const text = result.subgraph!.formatted();
   assert.match(text, /openai.*supplies.*azure/i);
   assert.match(text, /来源: c:0/);
+  assert.equal(store.neighbors(result.seeds[0]!.id, 2).formatted(), text);
   cleanup();
 });
 
@@ -257,5 +258,6 @@ test("formatted 携带实体属性，便于回答属性类问题", async () => {
   assert.match(text, /实体属性:/);
   assert.match(text, /虚空之女/);
   assert.match(text, /Kaisa/);
+  assert.equal(store.neighbors(kaisa, 2).formatted(), text);
   cleanup();
 });

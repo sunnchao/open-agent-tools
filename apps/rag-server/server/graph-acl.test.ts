@@ -8,8 +8,8 @@ import { after, before, describe, it } from "node:test";
 import express from "express";
 import { Rag } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
-import { graphRouter } from "./graph.js";
-import { GraphLifecycle } from "./lifecycle.js";
+import { graphRouter } from "./routes/graph.js";
+import { KnowledgeBase } from "./knowledge.js";
 import { resolveRagAuth } from "./auth.js";
 
 let server: Server;
@@ -24,9 +24,9 @@ before(async () => {
   dir = mkdtempSync(join(tmpdir(), "rag-graph-acl-"));
   rag = new Rag({ dbPath: join(dir, "rag.db") });
   graph = new KnowledgeGraph({ dbPath: join(dir, "graph.db") });
-  const lifecycle = new GraphLifecycle({ rag, graph, logger: silent });
+  const lifecycle = new KnowledgeBase({ rag, graph, logger: silent });
 
-  await rag.ingestBuffers([
+  await lifecycle.ingestBuffers([
     {
       name: "public.md",
       data: new TextEncoder().encode("腾讯云，微信支付，小程序生态。"),
@@ -37,13 +37,12 @@ before(async () => {
     },
   ]);
   await rag.updateDocument("hr.md", { allowedGroups: ["hr"] });
-  await lifecycle.onDocumentsIngested(["public.md", "hr.md"]);
   await lifecycle.waitIdle();
 
   const app = express();
   app.use(resolveRagAuth({ runtimeToken: "runtime-token", adminToken: "admin-token" }).middleware);
   app.use(express.json());
-  app.use("/api/graph", graphRouter({ rag, graph, lifecycle }));
+  app.use("/api/graph", graphRouter(lifecycle));
   server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -119,9 +118,11 @@ describe("document-scoped graph browsing", () => {
   const adminHeaders = { authorization: "Bearer admin-token" };
 
   it("exports only the selected document's entities and relationships", async () => {
-    const response = await fetch(`${origin}/api/graph/documents/public.md`, { headers: adminHeaders });
+    const response = await fetch(`${origin}/api/graph/documents/public.md`, {
+      headers: adminHeaders,
+    });
     assert.equal(response.status, 200);
-    const body = await response.json() as {
+    const body = (await response.json()) as {
       nodes: Array<{ id: string; name: string; props: Record<string, string> }>;
       edges: Array<{ source: string; target: string }>;
       stats: { entities: number; relations: number };
@@ -138,21 +139,31 @@ describe("document-scoped graph browsing", () => {
   it("does not let a shared entity expand into another document", async () => {
     const seed = graph.listEntities({ search: "腾讯云" })[0];
     assert.ok(seed);
-    const response = await fetch(`${origin}/api/graph/neighbors/${seed.id}?hops=2&source=public.md`, {
-      headers: adminHeaders,
-    });
+    const response = await fetch(
+      `${origin}/api/graph/neighbors/${seed.id}?hops=2&source=public.md`,
+      {
+        headers: adminHeaders,
+      },
+    );
     assert.equal(response.status, 200);
-    const body = await response.json() as { nodes: Array<{ name: string }> };
+    const body = (await response.json()) as { nodes: Array<{ name: string }> };
     assert.ok(body.nodes.some((node) => node.name === "微信支付"));
     assert.ok(!body.nodes.some((node) => node.name === "薪酬带宽"));
   });
 
   it("rejects a missing document or an empty neighbor scope", async () => {
-    const missing = await fetch(`${origin}/api/graph/documents/missing.md`, { headers: adminHeaders });
+    const missing = await fetch(`${origin}/api/graph/documents/missing.md`, {
+      headers: adminHeaders,
+    });
     assert.equal(missing.status, 404);
-    const empty = await fetch(`${origin}/api/graph/neighbors/unknown?source=`, { headers: adminHeaders });
+    const empty = await fetch(`${origin}/api/graph/neighbors/unknown?source=`, {
+      headers: adminHeaders,
+    });
     assert.equal(empty.status, 400);
-    const array = await fetch(`${origin}/api/graph/neighbors/unknown?source=public.md&source=hr.md`, { headers: adminHeaders });
+    const array = await fetch(
+      `${origin}/api/graph/neighbors/unknown?source=public.md&source=hr.md`,
+      { headers: adminHeaders },
+    );
     // An invalid selected source must never turn into a full-library lookup.
     assert.equal(array.status, 400);
   });

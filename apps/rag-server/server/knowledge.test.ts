@@ -5,20 +5,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Rag } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
-import { GraphLifecycle } from "./lifecycle.js";
+import { KnowledgeBase } from "./knowledge.js";
 
 const silent = { log: () => {}, error: () => {} };
 
 function setup(): {
   rag: Rag;
   graph: KnowledgeGraph;
-  lifecycle: GraphLifecycle;
+  lifecycle: KnowledgeBase;
   cleanup: () => Promise<void>;
 } {
   const dir = mkdtempSync(join(tmpdir(), "lifecycle-test-"));
   const rag = new Rag({ dbPath: join(dir, "rag.db"), chunkSize: 200, chunkOverlap: 0 });
   const graph = new KnowledgeGraph({ dbPath: join(dir, "graph.db") });
-  const lifecycle = new GraphLifecycle({ rag, graph, logger: silent });
+  const lifecycle = new KnowledgeBase({ rag, graph, logger: silent });
   return {
     rag,
     graph,
@@ -40,11 +40,10 @@ const DOC_A = "腾讯云，微信支付，小程序生态。腾讯云，云服�
 const DOC_B = "阿里云，支付宝，电商平台。阿里云，弹性计算，负载均衡。";
 
 test("上传后自动建图并登记来源状态", async () => {
-  const { rag, lifecycle, cleanup } = setup();
-  const result = await rag.ingestBuffers([file("a.md", DOC_A)]);
+  const { lifecycle, cleanup } = setup();
+  const result = await lifecycle.ingestBuffers([file("a.md", DOC_A)]);
   assert.deepEqual(result.sources, ["a.md"], "只返回本次上传的来源");
 
-  await lifecycle.onDocumentsIngested(result.sources);
   await lifecycle.waitIdle();
 
   const status = await lifecycle.status();
@@ -57,15 +56,13 @@ test("上传后自动建图并登记来源状态", async () => {
 });
 
 test("删除文档级联清空对应图谱数据", async () => {
-  const { rag, lifecycle, cleanup } = setup();
-  await rag.ingestBuffers([file("a.md", DOC_A), file("b.md", DOC_B)]);
-  await lifecycle.onDocumentsIngested(["a.md", "b.md"]);
+  const { lifecycle, cleanup } = setup();
+  await lifecycle.ingestBuffers([file("a.md", DOC_A), file("b.md", DOC_B)]);
   await lifecycle.waitIdle();
   const before = await lifecycle.status();
   assert.equal(before.stats.entities > 0, true);
 
-  await rag.clearSource("a.md");
-  const removed = lifecycle.onDocumentRemoved("a.md");
+  const removed = await lifecycle.clearSource("a.md");
   assert.ok(removed.entities > 0, "应回收 a.md 独有的实体");
 
   const after = await lifecycle.status();
@@ -80,14 +77,12 @@ test("删除文档级联清空对应图谱数据", async () => {
 });
 
 test("全部删除后图谱清空不留残留", async () => {
-  const { rag, lifecycle, cleanup } = setup();
-  await rag.ingestBuffers([file("a.md", DOC_A), file("b.md", DOC_B)]);
-  await lifecycle.onDocumentsIngested(["a.md", "b.md"]);
+  const { lifecycle, cleanup } = setup();
+  await lifecycle.ingestBuffers([file("a.md", DOC_A), file("b.md", DOC_B)]);
   await lifecycle.waitIdle();
 
   for (const source of ["a.md", "b.md"]) {
-    await rag.clearSource(source);
-    lifecycle.onDocumentRemoved(source);
+    await lifecycle.clearSource(source);
   }
   const status = await lifecycle.status();
   assert.deepEqual(status.stats, { entities: 0, relations: 0 });
@@ -113,8 +108,7 @@ test("绕过编排直接入库会被对账识别为 missing 并可修复", async
 
 test("知识库已删但图谱残留时被识别为 orphan 并清理", async () => {
   const { rag, graph, lifecycle, cleanup } = setup();
-  await rag.ingestBuffers([file("a.md", DOC_A)]);
-  await lifecycle.onDocumentsIngested(["a.md"]);
+  await lifecycle.ingestBuffers([file("a.md", DOC_A)]);
   await lifecycle.waitIdle();
 
   // 绕过编排器直接删知识库，制造不一致
@@ -132,8 +126,7 @@ test("知识库已删但图谱残留时被识别为 orphan 并清理", async () 
 
 test("文档重传后分块数变化被识别为 stale", async () => {
   const { rag, lifecycle, cleanup } = setup();
-  await rag.ingestBuffers([file("a.md", DOC_A)]);
-  await lifecycle.onDocumentsIngested(["a.md"]);
+  await lifecycle.ingestBuffers([file("a.md", DOC_A)]);
   await lifecycle.waitIdle();
   assert.equal((await lifecycle.status()).inSync, true);
 
@@ -150,8 +143,7 @@ test("文档重传后分块数变化被识别为 stale", async () => {
 
 test("重建为先清后建，改动文档不残留旧实体", async () => {
   const { rag, graph, lifecycle, cleanup } = setup();
-  await rag.ingestBuffers([file("a.md", "诺基亚，塞班系统，深度绑定。")]);
-  await lifecycle.onDocumentsIngested(["a.md"]);
+  await lifecycle.ingestBuffers([file("a.md", "诺基亚，塞班系统，深度绑定。")]);
   await lifecycle.waitIdle();
   assert.ok(graph.listEntities({ search: "诺基亚" }).length > 0, "首次建图应含原始实体");
 
@@ -171,10 +163,9 @@ test("autoExtract 关闭时只登记 pending 不自动抽取", async () => {
   const dir = mkdtempSync(join(tmpdir(), "lifecycle-test-"));
   const rag = new Rag({ dbPath: join(dir, "rag.db") });
   const graph = new KnowledgeGraph({ dbPath: join(dir, "graph.db") });
-  const lifecycle = new GraphLifecycle({ rag, graph, autoExtract: false, logger: silent });
+  const lifecycle = new KnowledgeBase({ rag, graph, autoExtract: false, logger: silent });
 
-  await rag.ingestBuffers([file("a.md", DOC_A)]);
-  await lifecycle.onDocumentsIngested(["a.md"]);
+  await lifecycle.ingestBuffers([file("a.md", DOC_A)]);
   await lifecycle.waitIdle();
 
   const status = await lifecycle.status();

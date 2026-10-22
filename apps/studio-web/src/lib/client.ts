@@ -66,3 +66,12 @@ export async function studioFetch(input: string, init?: RequestInit): Promise<Re
   if (workspaceId && !headers.has(WORKSPACE_HEADER)) headers.set(WORKSPACE_HEADER, workspaceId);
   return fetch(input, { ...init, headers });
 }
+
+/** 知识库与图谱共用管理 BFF；服务 token 由 Agent Server 携带。 */
+export async function ragRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await studioFetch(`/api/admin/rag${path}`, init);
+  if (!response.ok) {
+    throw new Error((await response.text()) || `RAG request failed (${response.status})`);
+  }
+  return (await response.json()) as T;
+}

@@ -30,6 +30,10 @@ import {
   HybridVectorStore,
   PgVectorStore,
 } from "../packages/rag/dist/index.js";
+import { loadRagEnv } from "./lib/rag-env.mjs";
+
+// 未显式提供环境变量时读取 apps/rag-server/.env（命令行内联变量优先）。
+const envFile = loadRagEnv();
 
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
@@ -63,9 +67,7 @@ function toStringArray(json, fallback = []) {
 }
 
 const db = new DatabaseSync(sqlitePath, { readOnly: true });
-const documents = db
-  .prepare(`SELECT * FROM documents ORDER BY source`)
-  .all();
+const documents = db.prepare(`SELECT * FROM documents ORDER BY source`).all();
 
 const chunksBySource = new Map();
 const chunkStmt = db.prepare(
@@ -102,7 +104,7 @@ for (const document of documents) {
 }
 
 console.log(
-  `[migrate] sqlite=${sqlitePath} documents=${documents.length} chunks=${totalChunks} dims=${detectedDims || "none"}`,
+  `[migrate] env=${envFile ?? "(process.env)"} sqlite=${sqlitePath} documents=${documents.length} chunks=${totalChunks} dims=${detectedDims || "none"}`,
 );
 for (const document of documents) {
   console.log(
@@ -171,11 +173,7 @@ try {
     // replaceSource 会把 title 置为 source、清空 tags/ACL，这里补回人工运营数据。
     const tags = toStringArray(document.tags_json ?? "[]");
     const allowedGroups = toStringArray(document.allowed_groups_json ?? "[]");
-    if (
-      document.title !== document.source ||
-      tags.length > 0 ||
-      allowedGroups.length > 0
-    ) {
+    if (document.title !== document.source || tags.length > 0 || allowedGroups.length > 0) {
       await store.updateDocument(document.source, {
         title: document.title,
         tags,

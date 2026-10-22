@@ -1,4 +1,4 @@
-import { studioFetch } from "../../lib/client.js";
+import { ragRequest as request } from "../../lib/client.js";
 import type { MessageUsage } from "../../types.js";
 
 /** 图谱节点（与后端 GraphExport.GraphNode 对齐）。 */
@@ -37,16 +37,6 @@ export interface GraphRetrieveResult {
   seeds: Array<{ id: string; name: string; type: string }>;
   formatted: string;
   subgraph: GraphExport | null;
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  // 图谱管理/检索全部经 Studio 管理 BFF，不直接暴露 rag-server。
-  const response = await studioFetch(`/api/admin/rag${path}`, init);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Graph request failed (${response.status})`);
-  }
-  return (await response.json()) as T;
 }
 
 /** 子图检索：种子定位 + 多跳扩展。 */

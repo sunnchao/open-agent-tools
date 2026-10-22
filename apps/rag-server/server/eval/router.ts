@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { routeParam } from "../request-validation.js";
 import type { EvalRunner } from "./runner.js";
 import type { EvalStore } from "./store.js";
 import { parseDatasetInput, parseRunOptions } from "./validation.js";
@@ -6,11 +7,6 @@ import { parseDatasetInput, parseRunOptions } from "./validation.js";
 export interface EvalRouterOptions {
   store: EvalStore;
   runner: EvalRunner;
-}
-
-function decodeId(raw: unknown): string {
-  const value = Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? "");
-  return decodeURIComponent(String(value));
 }
 
 function positiveInt(value: unknown): number | undefined {
@@ -37,7 +33,7 @@ export function evalRouter(options: EvalRouterOptions): Router {
   });
 
   router.get("/datasets/:id", (req: Request, res: Response) => {
-    const dataset = store.getDataset(decodeId(req.params.id));
+    const dataset = store.getDataset(routeParam(req.params.id));
     if (!dataset) {
       res.status(404).json({ error: "dataset not found" });
       return;
@@ -46,7 +42,7 @@ export function evalRouter(options: EvalRouterOptions): Router {
   });
 
   router.put("/datasets/:id", (req: Request, res: Response) => {
-    const id = decodeId(req.params.id);
+    const id = routeParam(req.params.id);
     let input;
     try {
       input = parseDatasetInput(req.body);
@@ -63,7 +59,7 @@ export function evalRouter(options: EvalRouterOptions): Router {
   });
 
   router.delete("/datasets/:id", (req: Request, res: Response) => {
-    if (!store.deleteDataset(decodeId(req.params.id))) {
+    if (!store.deleteDataset(routeParam(req.params.id))) {
       res.status(404).json({ error: "dataset not found" });
       return;
     }
@@ -71,7 +67,7 @@ export function evalRouter(options: EvalRouterOptions): Router {
   });
 
   router.post("/datasets/:id/run", async (req: Request, res: Response) => {
-    const id = decodeId(req.params.id);
+    const id = routeParam(req.params.id);
     let runOptions;
     try {
       runOptions = parseRunOptions(req.body);

@@ -1,4 +1,4 @@
-import { studioFetch } from "../../lib/client.js";
+import { ragRequest as request } from "../../lib/client.js";
 import type { MessageUsage } from "../../types.js";
 
 export interface DocumentSource {
@@ -253,16 +253,6 @@ export interface AnalyticsOverview {
     attribution: QueryAttribution;
     createdAt: string;
   }>;
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  // 经 Agent Server 管理 BFF 转发；浏览器永远不持有 RAG_ADMIN_TOKEN。
-  const response = await studioFetch(`/api/admin/rag${path}`, init);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `RAG request failed (${response.status})`);
-  }
-  return (await response.json()) as T;
 }
 
 export function listDocuments(): Promise<DocumentStats> {

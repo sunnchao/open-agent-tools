@@ -155,8 +155,8 @@ export interface RetrievalResult {
 }
 
 /**
- * 图谱通道数据源（由调用方注入，通常包装 KnowledgeGraph）。
- * 只暴露检索所需的最小面：子图检索 + 按 id 回取真实分块。
+ * 图谱通道数据源（由调用方注入）。
+ * 可直接传入 KnowledgeGraph；真实分块默认从当前知识库存储回取。
  */
 export interface GraphChannelSource {
   retrieve(
@@ -170,7 +170,8 @@ export interface GraphChannelSource {
       formatted(): string;
     } | null;
   }>;
-  getChunksByIds(ids: readonly string[], sources?: readonly string[]): Promise<Chunk[]>;
+  /** 可选覆盖分块回取；省略时复用当前 VectorStore，并保持 sources 白名单。 */
+  getChunksByIds?(ids: readonly string[], sources?: readonly string[]): Promise<Chunk[]>;
 }
 
 export interface IngestResult {

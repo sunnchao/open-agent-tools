@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from "express";
-import type { RagAnalyticsStore } from "./analytics.js";
+import type { RagAnalyticsStore } from "../analytics.js";
 
-export interface QualityReportRouterOptions {
-  analytics: Pick<RagAnalyticsStore, "qualityReport">;
+export interface AnalyticsRouterOptions {
+  analytics: Pick<RagAnalyticsStore, "overview" | "qualityReport">;
 }
 
 export function parseQualityReportDays(value: unknown): 7 | 30 {
@@ -12,8 +12,11 @@ export function parseQualityReportDays(value: unknown): 7 | 30 {
 }
 
 /** 问答质量周报：只接受产品约定的 7/30 天窗口。 */
-export function qualityReportRouter(opts: QualityReportRouterOptions): Router {
+export function analyticsRouter(opts: AnalyticsRouterOptions): Router {
   const router = Router();
+  router.get("/overview", (req: Request, res: Response) => {
+    res.json(opts.analytics.overview(Number(req.query.days) || 14));
+  });
   router.get("/quality-report", (req: Request, res: Response) => {
     try {
       res.json(opts.analytics.qualityReport(parseQualityReportDays(req.query.days)));

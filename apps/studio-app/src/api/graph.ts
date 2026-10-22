@@ -1,4 +1,4 @@
-import { agentFetch } from "../lib/http";
+import { ragRequest as request } from "../lib/http";
 export interface GraphNode {
   id: string;
   name: string;
@@ -58,12 +58,6 @@ export interface ReconcileResult {
   removed: string[];
   failed: Array<{ source: string; error: string }>;
   status: SyncStatus;
-}
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await agentFetch(`/api/admin/rag${path}`, init);
-  if (!response.ok)
-    throw new Error((await response.text()) || `Graph request failed (${response.status})`);
-  return (await response.json()) as T;
 }
 export function retrieveGraph(query: string, maxHops = 2): Promise<GraphRetrieveResult> {
   return request("/graph/retrieve", {

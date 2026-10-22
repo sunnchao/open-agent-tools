@@ -8,7 +8,7 @@ import { after, before, describe, it } from "node:test";
 import express from "express";
 import { Rag } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
-import { GraphLifecycle } from "./lifecycle.js";
+import { KnowledgeBase } from "./knowledge.js";
 import { RagUsageStore, ragUsageMiddleware, trackRagLlm } from "./usage.js";
 
 let dir: string;
@@ -17,7 +17,7 @@ let origin: string;
 let store: RagUsageStore;
 let rag: Rag;
 let graph: KnowledgeGraph;
-let lifecycle: GraphLifecycle;
+let lifecycle: KnowledgeBase;
 let releaseGraph!: () => void;
 const graphGate = new Promise<void>((resolve) => {
   releaseGraph = resolve;
@@ -37,11 +37,7 @@ before(async () => {
       return '{"entities":[],"relations":[]}';
     },
   });
-  lifecycle = new GraphLifecycle({ rag, graph, logger: { log() {}, error() {} } });
-  await rag.ingestBuffers([
-    { name: "a.md", data: new TextEncoder().encode("Alpha graph source") },
-    { name: "b.md", data: new TextEncoder().encode("Beta graph source") },
-  ]);
+  lifecycle = new KnowledgeBase({ rag, graph, logger: { log() {}, error() {} } });
   const app = express();
   app.use(express.json());
   app.use(ragUsageMiddleware(store));
@@ -63,7 +59,9 @@ before(async () => {
     }
   });
   app.post("/api/documents", async (req, res) => {
-    await lifecycle.onDocumentsIngested([req.body.source]);
+    await lifecycle.ingestBuffers([
+      { name: req.body.source, data: new TextEncoder().encode("Graph source") },
+    ]);
     res.status(201).json({ ok: true });
   });
   app.get("/api/graph/sync-status", async (_req, res) => res.json(await lifecycle.status()));

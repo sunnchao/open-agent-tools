@@ -3,6 +3,39 @@ import type { ChunkStrategy } from "@open-agent-tools/rag";
 export const MAX_SEPARATORS = 20;
 export const MAX_SEPARATOR_LENGTH = 32;
 
+export interface ChunkSettings {
+  chunkSize: number;
+  chunkOverlap: number;
+  chunkStrategy: ChunkStrategy;
+  separators: string[];
+  semanticThreshold: number;
+}
+
+export function uploadChunkSettings(
+  body: Record<string, unknown>,
+  defaults: ChunkSettings,
+): ChunkSettings {
+  const requestedSize = Number(body.chunkSize);
+  const requestedOverlap = Number(body.chunkOverlap);
+  const chunkSize = Math.max(
+    100,
+    Math.min(4000, Number.isFinite(requestedSize) ? requestedSize : defaults.chunkSize),
+  );
+  return {
+    chunkSize,
+    chunkOverlap: Math.max(
+      0,
+      Math.min(
+        chunkSize - 1,
+        Number.isFinite(requestedOverlap) ? requestedOverlap : defaults.chunkOverlap,
+      ),
+    ),
+    chunkStrategy: parseChunkStrategy(body.chunkStrategy, defaults.chunkStrategy),
+    separators: parseSeparators(body.separators, defaults.separators),
+    semanticThreshold: parseSemanticThreshold(body.semanticThreshold, defaults.semanticThreshold),
+  };
+}
+
 export function parseSeparators(value: unknown, fallback: readonly string[]): string[] {
   if (value === undefined || value === null) return [...fallback];
 

@@ -96,6 +96,9 @@ async function main() {
     env: {
       ...process.env,
       RAG_API_PORT: String(PORT),
+      RAG_STORE: "sqlite", // 临时库验证保持离线，不继承生产 PG/ES 配置
+      RAG_RUNTIME_TOKEN: "",
+      RAG_ADMIN_TOKEN: "",
       RAG_DB_PATH: join(dir, "rag.db"),
       RAG_GRAPH_DB_PATH: join(dir, "rag-graph.db"),
       OPENAI_API_KEY: "", // 强制离线：BM25 检索 + 规则抽取，避免计费与限流

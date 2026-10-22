@@ -1,4 +1,4 @@
-import { agentFetch } from "../lib/http";
+import { ragRequest as request } from "../lib/http";
 export type ChunkStrategy = "fixed" | "semantic";
 export interface DocumentSource {
   source: string;
@@ -176,12 +176,6 @@ export interface AnalyticsOverview {
   }>;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await agentFetch(`/api/admin/rag${path}`, init);
-  if (!response.ok)
-    throw new Error((await response.text()) || `RAG request failed (${response.status})`);
-  return (await response.json()) as T;
-}
 export function listDocuments(): Promise<DocumentStats> {
   return request("/documents");
 }

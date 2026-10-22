@@ -1,8 +1,14 @@
 import type { Rag } from "@open-agent-tools/rag";
 import type { GraphSourceState, KnowledgeGraph } from "@open-agent-tools/rag/graph";
+import {
+  CragController,
+  createBlockDomain,
+  createGraphDomain,
+  HeuristicRetrievalEvaluator,
+} from "@open-agent-tools/rag/crag";
 import { AsyncResource } from "node:async_hooks";
 
-export interface GraphLifecycleOptions {
+export interface KnowledgeBaseOptions {
   rag: Rag;
   graph: KnowledgeGraph;
   /** 关闭后上传不再自动建图，只登记 pending，由手动对账触发（RAG_AUTO_EXTRACT=false）。 */
@@ -36,19 +42,13 @@ export interface ReconcileResult {
 }
 
 /**
- * 知识库与图谱库的生命周期编排器。
- *
- * 存在的理由：图谱数据完全派生自知识库文档，两者必须同生共死。
- * 此前上传只增不清、删除毫无联动，图谱会持续累积失效实体。
- * 这里把「写入 / 删除 / 对账 / 修复」四个动作收敛到唯一入口，
- * 任何绕过它直接操作 graph.store 的写法都会重新引入不一致。
- *
- * 抽取串行执行：LLM 抽取按分块逐个调用，多文档并发会瞬间打满速率限制，
- * 且 SQLite 单写者模型下并发写入并无收益。
+ * 知识库服务：统一文档入库、图谱派生、CRAG 检索与对账。
+ * 图谱按来源串行重建；任务绑定上传时的异步上下文，保留工作区用量归属。
  */
-export class GraphLifecycle {
-  private rag: Rag;
-  private graph: KnowledgeGraph;
+export class KnowledgeBase {
+  readonly rag: Rag;
+  readonly graph: KnowledgeGraph;
+  readonly crag: CragController;
   private autoExtract: boolean;
   private logger: Pick<Console, "log" | "error">;
   /** 待抽取队列（去重），配合 running 标志实现串行消费。 */
@@ -58,36 +58,46 @@ export class GraphLifecycle {
   /** 当前正在抽取的来源，对账时归入 building。 */
   private current: string | null = null;
 
-  constructor(opts: GraphLifecycleOptions) {
+  constructor(opts: KnowledgeBaseOptions) {
     this.rag = opts.rag;
     this.graph = opts.graph;
     this.autoExtract = opts.autoExtract ?? true;
     this.logger = opts.logger ?? console;
+    this.crag = new CragController({
+      evaluator: new HeuristicRetrievalEvaluator(),
+      domains: [
+        createBlockDomain({
+          // 图谱由独立 CRAG 域补充，block 域关闭图谱以免重复计入证据。
+          retrieve: (query, options) => this.rag.retrieve(query, { ...options, graph: false }),
+        }),
+        createGraphDomain({ retrieve: (query, options) => this.graph.retrieve(query, options) }),
+      ],
+      maxRetries: 1,
+    });
   }
 
-  /**
-   * 文档入库后调用：登记来源并排队重建图谱。
-   * 不 await 抽取过程，上传接口需立即响应；进度通过 sync-status 查询。
-   * ES 后端下 `listChunks` 是异步，这里必须 `await` 登记完成再排队。
-   */
-  async onDocumentsIngested(sources: string[]): Promise<void> {
-    for (const source of sources) {
-      const chunks = await this.rag.listChunks(source);
+  /** 入库成功后登记图谱状态并异步排队；上传无需等待抽取完成。 */
+  async ingestBuffers(...args: Parameters<Rag["ingestBuffers"]>): ReturnType<Rag["ingestBuffers"]> {
+    const result = await this.rag.ingestBuffers(...args);
+    const counts = new Map(
+      (await this.rag.listDocuments()).map((document) => [document.source, document.chunks]),
+    );
+    for (const source of result.sources) {
       this.graph.store.markSource(source, {
         status: "pending",
-        chunks: chunks.length,
+        chunks: counts.get(source) ?? 0,
       });
     }
-    if (!this.autoExtract) return;
-    for (const source of sources) this.enqueue(source);
-    void this.drain();
+    if (this.autoExtract) {
+      for (const source of result.sources) this.enqueue(source);
+      void this.drain();
+    }
+    return result;
   }
 
-  /**
-   * 文档删除后调用：同步清空该来源的图谱数据。
-   * 同步执行而非排队——删除必须立刻生效，否则查询会命中已删文档的实体。
-   */
-  onDocumentRemoved(source: string): { relations: number; entities: number } {
+  /** 删除知识文档时立即清理图谱及待处理任务，避免继续检索已删内容。 */
+  async clearSource(source: string): Promise<{ relations: number; entities: number }> {
+    await this.rag.clearSource(source);
     this.queue = this.queue.filter((s) => s !== source);
     this.jobs.delete(source);
     const removed = this.graph.clearSource(source);

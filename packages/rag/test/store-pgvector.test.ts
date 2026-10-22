@@ -46,11 +46,21 @@ test(
         "guide.txt",
         [
           {
-            chunk: { id: "guide:0", source: "guide.txt", chunkIndex: 0, content: "部署说明 CPU 内存" },
+            chunk: {
+              id: "guide:0",
+              source: "guide.txt",
+              chunkIndex: 0,
+              content: "部署说明 CPU 内存",
+            },
             embedding: emb(1),
           },
           {
-            chunk: { id: "guide:1", source: "guide.txt", chunkIndex: 1, content: "无关内容 环境变量" },
+            chunk: {
+              id: "guide:1",
+              source: "guide.txt",
+              chunkIndex: 1,
+              content: "无关内容 环境变量",
+            },
             embedding: emb(2),
           },
         ],

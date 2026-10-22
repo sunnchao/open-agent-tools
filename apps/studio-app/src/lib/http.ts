@@ -61,6 +61,15 @@ export async function agentFetch(path: string, init?: RequestInit): Promise<Resp
   return fetch(joinUrl(s.agentUrl, path), { ...init, headers });
 }
 
+/** 知识库与图谱统一经 Agent Server 转发，复用 token 和工作区配置。 */
+export async function ragRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await agentFetch(`/api/admin/rag${path}`, init);
+  if (!response.ok) {
+    throw new Error((await response.text()) || `RAG request failed (${response.status})`);
+  }
+  return (await response.json()) as T;
+}
+
 /** Control Plane 管理请求（对应 Web 的 /mcp-api/*）。 */
 export async function mcpFetch(path: string, init?: RequestInit): Promise<Response> {
   const s = await getSettings();

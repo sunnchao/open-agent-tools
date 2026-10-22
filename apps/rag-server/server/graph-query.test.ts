@@ -10,16 +10,15 @@ import { Rag } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
 import { RagAnalyticsStore } from "./analytics.js";
 import { resolveRagAuth } from "./auth.js";
-import { buildCragController } from "./graph.js";
-import { healthRouter } from "./health.js";
-import { GraphLifecycle } from "./lifecycle.js";
+import { healthRouter } from "./routes/health.js";
+import { KnowledgeBase } from "./knowledge.js";
 import {
   buildAnswerSystemPrompt,
   buildRetrievalTrace,
   clampGraphHops,
   queryRouter,
   toRetrievalPayload,
-} from "./query-api.js";
+} from "./routes/query.js";
 
 let server: Server;
 let origin: string;
@@ -84,25 +83,21 @@ before(async () => {
   graph = new KnowledgeGraph({ dbPath: join(dir, "graph.db") });
   rag = new Rag({
     dbPath,
-    graph: {
-      retrieve: (query, options) => graph.retrieve(query, options),
-      getChunksByIds: (ids, sources) => rag.getChunksByIds(ids, sources),
-    },
+    graph,
   });
   // 对照实例：不注入图谱通道，用来证明 graph:false 与旧两路检索结果一致。
   plainRag = new Rag({ dbPath });
   analytics = new RagAnalyticsStore(dbPath);
 
-  await rag.ingestBuffers([
+  const lifecycle = new KnowledgeBase({ rag, graph, logger: silent });
+  await lifecycle.ingestBuffers([
     { name: "public.md", data: new TextEncoder().encode(DOC_PUBLIC) },
     { name: "hr.md", data: new TextEncoder().encode(DOC_HR) },
   ]);
   await rag.updateDocument("hr.md", { allowedGroups: ["hr"] });
-  const lifecycle = new GraphLifecycle({ rag, graph, logger: silent });
-  await lifecycle.onDocumentsIngested(["public.md", "hr.md"]);
   await lifecycle.waitIdle();
 
-  const crag = buildCragController({ rag, graph });
+  const crag = lifecycle.crag;
   const app = express();
   app.use(resolveRagAuth({ runtimeToken: "runtime-token", adminToken: "admin-token" }).middleware);
   app.use(express.json());

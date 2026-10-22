@@ -22,8 +22,6 @@ function tmpDir(): { dbPath: string; cleanup: () => void } {
 test("图谱通道命中真实分块并与关键词路按 id 合并", async () => {
   const { dbPath, cleanup } = tmpDir();
   const seen: { query?: string; opts?: { maxHops?: number; sources?: readonly string[] } } = {};
-  // 图谱通道与 Rag 相互引用：先用 late-bind 持有器打破初始化顺序。
-  const ref: { rag?: Rag } = {};
   const channel: GraphChannelSource = {
     retrieve: async (query, opts = {}) => {
       seen.query = query;
@@ -42,10 +40,8 @@ test("图谱通道命中真实分块并与关键词路按 id 合并", async () =
         },
       };
     },
-    getChunksByIds: (ids, sources) => ref.rag!.getChunksByIds(ids, sources),
   };
   const rag = new Rag({ dbPath, graph: channel, graphHops: 3 });
-  ref.rag = rag;
   try {
     await rag.ingestBuffers([
       { name: "guide.txt", data: enc("OpenAI 提供 GPT 模型与 API 服务") },

@@ -216,7 +216,10 @@ export class PgVectorStore implements VectorStore {
       if (!opts.connectionString) {
         throw new Error("PgVectorStore requires either `connectionString` or an injected `pool`");
       }
-      this.pool = new Pool({ connectionString: opts.connectionString, ...(opts.poolOptions ?? {}) });
+      this.pool = new Pool({
+        connectionString: opts.connectionString,
+        ...(opts.poolOptions ?? {}),
+      });
       this.owned = true;
     }
   }
@@ -394,7 +397,9 @@ export class PgVectorStore implements VectorStore {
         const placeholders: string[] = [];
         batch.forEach(({ chunk, embedding }, index) => {
           const base = index * 5;
-          placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}::vector)`);
+          placeholders.push(
+            `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}::vector)`,
+          );
           values.push(
             chunk.id,
             chunk.source,
@@ -479,7 +484,8 @@ export class PgVectorStore implements VectorStore {
     }
     await this.ensure();
     const operator = this.metric.operator;
-    const similarity = this.metric.name === "inner_product" ? null : `1 - (embedding ${operator} $1::vector)`;
+    const similarity =
+      this.metric.name === "inner_product" ? null : `1 - (embedding ${operator} $1::vector)`;
     const scoreExpr =
       similarity ?? `-(embedding ${operator} $1::vector)`; /* inner_product：距离取负即相似度 */
     const params: unknown[] = [toVectorLiteral(embedding), k];

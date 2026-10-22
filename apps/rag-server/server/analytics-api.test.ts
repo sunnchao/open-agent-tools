@@ -3,15 +3,16 @@ import { once } from "node:events";
 import type { Server } from "node:http";
 import test from "node:test";
 import express from "express";
-import { parseQualityReportDays, qualityReportRouter } from "./quality-api.js";
+import { parseQualityReportDays, analyticsRouter } from "./routes/analytics.js";
 
 async function startServer(report: (days: 7 | 30) => unknown) {
   const app = express();
   app.use(
     "/api/analytics",
-    qualityReportRouter({
+    analyticsRouter({
       analytics: {
         qualityReport: report as never,
+        overview: () => ({}) as never,
       },
     }),
   );

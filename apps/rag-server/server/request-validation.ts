@@ -1,6 +1,43 @@
 import type { DocumentMetadataPatch } from "@open-agent-tools/rag";
 import type { QueryFeedbackRating } from "./analytics.js";
 
+/** Express 已解码路径参数；再次 decodeURIComponent 会破坏含 % 的来源名。 */
+export function routeParam(raw: unknown): string {
+  return String(Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? ""));
+}
+
+export function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
+}
+
+export function querySources(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length > 50 ||
+    value.some((item) => typeof item !== "string")
+  ) {
+    throw new Error("sources must be a string array with at most 50 items");
+  }
+  return [...new Set(value.map((source) => source.trim()).filter(Boolean))];
+}
+
+/** RAG 与图谱使用同一份来源/分组约束；runtime 缺省只允许公开文档。 */
+export function retrievalScope(
+  body: { sources?: unknown; viewerGroups?: unknown },
+  scope: unknown,
+): { sources: string[] | undefined; viewerGroups: string[] | undefined } {
+  const sources = querySources(body.sources);
+  const viewerGroups =
+    body.viewerGroups !== undefined
+      ? accessGroups(body.viewerGroups, "viewerGroups")
+      : scope === "runtime"
+        ? []
+        : undefined;
+  return { sources, viewerGroups };
+}
+
 export function documentMetadataPatch(value: unknown): DocumentMetadataPatch {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("document metadata must be an object");

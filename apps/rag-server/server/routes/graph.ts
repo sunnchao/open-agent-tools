@@ -1,38 +1,9 @@
 import { Router, type Request, type Response } from "express";
-import type { KnowledgeGraph, Entity } from "@open-agent-tools/rag/graph";
-import {
-  CragController,
-  createBlockDomain,
-  createGraphDomain,
-  HeuristicRetrievalEvaluator,
-} from "@open-agent-tools/rag/crag";
-import type { Rag } from "@open-agent-tools/rag";
-import type { GraphLifecycle } from "./lifecycle.js";
-import { querySources } from "./query-settings.js";
-import { accessGroups } from "./request-validation.js";
+import type { KnowledgeBase } from "../knowledge.js";
+import { clampInt, retrievalScope, routeParam } from "../request-validation.js";
 
-export interface GraphRouterOptions {
-  rag: Rag;
-  graph: KnowledgeGraph;
-}
-
-export interface GraphRouterDeps extends GraphRouterOptions {
-  lifecycle: GraphLifecycle;
-}
-
-function clampInt(value: unknown, fallback: number, min: number, max: number): number {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, Math.floor(n)));
-}
-
-function decodeSource(raw: unknown): string {
-  const s = Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? "");
-  return decodeURIComponent(String(s));
-}
-
-export function graphRouter(opts: GraphRouterDeps): Router {
-  const { rag, graph, lifecycle } = opts;
+export function graphRouter(knowledge: KnowledgeBase): Router {
+  const { rag, graph } = knowledge;
   const router: Router = Router();
   const { visualizer } = graph;
 
@@ -40,7 +11,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
   router.post("/extract", async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as { source?: unknown };
     try {
-      const sources = body.source ? [decodeSource(body.source)] : await rag.listSources();
+      const sources = body.source ? [routeParam(body.source)] : await rag.listSources();
       if (sources.length === 0) {
         res
           .status(200)
@@ -50,7 +21,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
       let entities = 0;
       let relations = 0;
       for (const source of sources) {
-        const state = await lifecycle.rebuild(source);
+        const state = await knowledge.rebuild(source);
         entities += state?.entities ?? 0;
         relations += state?.relations ?? 0;
       }
@@ -62,7 +33,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
 
   /** 知识库与图谱库一致性快照（缺失 / 过期 / 孤儿 / 构建中）。 */
   router.get("/sync-status", async (_req: Request, res: Response) => {
-    res.json(await lifecycle.status());
+    res.json(await knowledge.status());
   });
 
   /** 各来源的建图状态明细。 */
@@ -73,8 +44,8 @@ export function graphRouter(opts: GraphRouterDeps): Router {
   /** 一键对账：清理孤儿来源 + 重建缺失/过期来源。 */
   router.post("/reconcile", async (_req: Request, res: Response) => {
     try {
-      const result = await lifecycle.reconcile();
-      res.json({ ...result, status: await lifecycle.status() });
+      const result = await knowledge.reconcile();
+      res.json({ ...result, status: await knowledge.status() });
     } catch (e) {
       res.status(500).json({ error: String(e) });
     }
@@ -82,7 +53,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
 
   /** 单独清理某来源的图谱数据（保留知识库文档，用于重建前的手动干预）。 */
   router.delete("/sources/:source", (req: Request, res: Response) => {
-    const source = decodeSource(req.params.source);
+    const source = routeParam(req.params.source);
     if (!source) {
       res.status(400).json({ error: "source is required" });
       return;
@@ -121,8 +92,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
 
   /** 单实体 1-2 跳邻居子图（面板展开）。 */
   router.get("/neighbors/:id", (req: Request, res: Response) => {
-    const raw = req.params.id;
-    const id = Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? "");
+    const id = routeParam(req.params.id);
     const hops = clampInt(req.query.hops, 2, 1, 3);
     const source = req.query.source;
     if (source !== undefined && (typeof source !== "string" || !source.trim())) {
@@ -152,14 +122,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
     let sources: string[] | undefined;
     let viewerGroups: string[] | undefined;
     try {
-      sources = querySources(body.sources);
-      if (res.locals.ragScope === "runtime") {
-        // runtime 调用默认只查公开文档，即使直接访问 graph 端点也不能退化为管理全量。
-        viewerGroups =
-          body.viewerGroups === undefined ? [] : accessGroups(body.viewerGroups, "viewerGroups");
-      } else if (body.viewerGroups !== undefined) {
-        viewerGroups = accessGroups(body.viewerGroups, "viewerGroups");
-      }
+      ({ sources, viewerGroups } = retrievalScope(body, res.locals.ragScope));
     } catch (error) {
       res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
       return;
@@ -173,7 +136,7 @@ export function graphRouter(opts: GraphRouterDeps): Router {
       });
       res.json({
         query,
-        seeds: result.seeds.map((s: Entity) => ({ id: s.id, name: s.name, type: s.type })),
+        seeds: result.seeds.map((s) => ({ id: s.id, name: s.name, type: s.type })),
         formatted: result.subgraph ? result.subgraph.formatted() : "",
         subgraph: result.subgraph ? visualizer.exportSubgraph(result.subgraph) : null,
       });
@@ -188,31 +151,4 @@ export function graphRouter(opts: GraphRouterDeps): Router {
   });
 
   return router;
-}
-
-/** 组装 CRAG 控制器（启发式评估，离线可用）。 */
-export function buildCragController(opts: GraphRouterOptions): CragController {
-  const { rag, graph } = opts;
-  const block = createBlockDomain({
-    retrieve: (query, rOpts = {}) =>
-      rag.retrieve(query, {
-        topK: rOpts.topK ?? 5,
-        sources: rOpts.sources,
-        // CRAG 自己注册了独立的 graph 域；block 域必须关闭图谱第三路，
-        // 否则同一份子图证据会被两路重复计入，改变既有 CRAG 的评估口径。
-        graph: false,
-      }),
-  });
-  const graphDomain = createGraphDomain({
-    retrieve: (query, opts = {}) =>
-      graph.retrieve(query, {
-        maxHops: 2,
-        sources: opts.sources,
-      }),
-  });
-  return new CragController({
-    evaluator: new HeuristicRetrievalEvaluator(),
-    domains: [block, graphDomain],
-    maxRetries: 1,
-  });
 }

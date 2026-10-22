@@ -205,9 +205,7 @@ export class HybridVectorStore implements VectorStore {
    * 返回实际重建的来源数与分块数，便于运维确认。
    */
   async resync(sources?: readonly string[]): Promise<{ sources: number; chunks: number }> {
-    const targets = sources?.length
-      ? [...new Set(sources)]
-      : await this.vectorStore.listSources();
+    const targets = sources?.length ? [...new Set(sources)] : await this.vectorStore.listSources();
     let chunkTotal = 0;
     for (const source of targets) {
       const chunks = (await this.vectorStore.listChunksBySource?.(source)) ?? [];
