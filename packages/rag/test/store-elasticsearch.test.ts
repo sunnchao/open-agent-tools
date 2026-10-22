@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "@elastic/elasticsearch";
 import {
+  buildChunksByIdsQuery,
   buildKeywordQuery,
   buildKnnFilter,
   ElasticsearchVectorStore,
@@ -30,6 +31,16 @@ test("查询构造器：AND/OR 与来源过滤（纯单测，无需 ES）", () =
   });
   assert.equal(buildKnnFilter(undefined), undefined);
   assert.deepEqual(buildKnnFilter(["a.txt", "b.txt"]), { terms: { source: ["a.txt", "b.txt"] } });
+  // 图谱回溯按 id 批量取块：来源白名单必须固化在查询里，不能取回后再过滤
+  assert.deepEqual(buildChunksByIdsQuery(["c1", "c2"], undefined), {
+    bool: { must: [{ terms: { id: ["c1", "c2"] } }] },
+  });
+  assert.deepEqual(buildChunksByIdsQuery(["c1"], ["a.txt"]), {
+    bool: {
+      must: [{ terms: { id: ["c1"] } }],
+      filter: [{ terms: { source: ["a.txt"] } }],
+    },
+  });
 });
 
 // 集成测试：需要本地 ES（docker compose -f scripts/docker-compose.elasticsearch.yml up -d）。
@@ -103,6 +114,15 @@ test(
       // 空来源白名单不检索（与 SQLite 语义对齐，防 ACL 泄漏）
       assert.deepEqual(await store.keywordSearch("CPU", 10, []), []);
       assert.deepEqual(await store.vectorSearch([1, 2, 3, 4], 2, []), []);
+      assert.deepEqual(await store.getChunksByIds(["guide:0"], []), []);
+
+      // 图谱回溯：id 批量取块 + 来源白名单
+      const byIds = await store.getChunksByIds(["guide:0", "guide:missing"]);
+      assert.deepEqual(
+        byIds.map((chunk) => chunk.id),
+        ["guide:0"],
+      );
+      assert.deepEqual(await store.getChunksByIds(["guide:0"], ["other.txt"]), []);
 
       // ACL 保留：人工策略不被重传覆盖
       await store.updateDocument("guide.txt", { allowedGroups: ["ops"] });

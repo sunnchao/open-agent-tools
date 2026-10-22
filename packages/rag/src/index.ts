@@ -9,10 +9,12 @@ import {
 } from "./ingest.js";
 import { retrieve, type RetrieveOptions } from "./retriever.js";
 import type {
+  Chunk,
   ChunkInfo,
   ChunkStrategy,
   DocumentInfo,
   DocumentMetadataPatch,
+  GraphChannelSource,
   IngestResult,
   RetrievalResult,
   VectorStore,
@@ -24,7 +26,11 @@ export type {
   ChunkStrategy,
   ScoredChunk,
   ScoredChunkDebug,
+  RetrievalChannel,
   RetrievalDebug,
+  GraphChannelHit,
+  GraphAugmentation,
+  GraphChannelSource,
   ChunkInfo,
   DocumentInfo,
   DocumentMetadataPatch,
@@ -45,6 +51,7 @@ export {
 export {
   reciprocalRankFusion,
   reciprocalRankFusionWithDebug,
+  fuseChannelHits,
   formatChunks,
   type RetrieveOptions,
 } from "./retriever.js";
@@ -80,15 +87,32 @@ export interface RagOptions {
   /** PDF OCR 兜底提供方；缺省为诊断模式（检出疑似扫描但不识别）。 */
   ocr?: import("./ocr.js").OcrProvider;
   ocrDecision?: Partial<import("./ocr.js").OcrDecision>;
+  /** 知识图谱通道数据源；缺省不启用图谱召回（两路行为不变）。 */
+  graph?: GraphChannelSource;
+  /** 图谱子图扩展跳数，默认 2。 */
+  graphHops?: number;
 }
+
+/** Rag 门面接受的检索选项：graph 同时支持布尔开关与直接注入数据源（核心 retrieve 只认数据源）。 */
+export type RagRetrieveOptions = Omit<RetrieveOptions, "graph"> & {
+  /**
+   * `false` 显式关闭图谱通道；`true`/缺省使用构造注入的 graph；
+   * 传入 `GraphChannelSource` 则本次调用临时覆盖构造注入的实例。
+   */
+  graph?: GraphChannelSource | boolean;
+};
 
 /** RAG 引擎门面：入库 + 混合检索 + 知识库管理。存储后端可为同步（SQLite）或异步（ES），门面一律 async。 */
 export class Rag {
   private store: VectorStore;
   private ingestOpts: IngestOptions;
+  private graph?: GraphChannelSource;
+  private graphHops: number;
 
   constructor(opts: RagOptions = {}) {
     this.store = opts.store ?? new SqliteVectorStore({ dbPath: opts.dbPath ?? "./rag.db" });
+    this.graph = opts.graph;
+    this.graphHops = opts.graphHops ?? 2;
     this.ingestOpts = {
       store: this.store,
       embeddings: opts.embeddings,
@@ -136,13 +160,35 @@ export class Rag {
     };
   }
 
-  /** 混合检索：向量 kNN + FTS5 BM25 → RRF → Top-K。 */
-  async retrieve(query: string, opts: RetrieveOptions = {}): Promise<RetrievalResult> {
-    const sources = await this.resolveVisibleSources(opts.sources, opts.viewerGroups);
-    return retrieve(this.store, this.ingestOpts.embeddings, query, {
-      ...opts,
+  /** 混合检索：向量 kNN + FTS5 BM25（+ 可选图谱通道）→ RRF → Top-K。 */
+  async retrieve(query: string, opts: RagRetrieveOptions = {}): Promise<RetrievalResult> {
+    const { graph: requested, ...rest } = opts;
+    const sources = await this.resolveVisibleSources(rest.sources, rest.viewerGroups);
+    // 显式 false 关闭；true/缺省回落到构造时注入的数据源（兼容按布尔开关调用的上层）。
+    const graph =
+      requested === false
+        ? false
+        : requested === true || requested === undefined
+          ? this.graph
+          : requested;
+    const coreOpts: RetrieveOptions = {
+      ...rest,
       sources,
-    });
+      graphHops: rest.graphHops ?? this.graphHops,
+      ...(graph !== undefined ? { graph } : {}),
+    };
+    return retrieve(this.store, this.ingestOpts.embeddings, query, coreOpts);
+  }
+
+  /**
+   * 按 chunk id 批量回取真实分块（图谱回溯用）。
+   * store 未实现该能力时返回 []，让调用方的图谱通道自然降级为空候选。
+   */
+  async getChunksByIds(ids: readonly string[], sources?: readonly string[]): Promise<Chunk[]> {
+    if (ids.length === 0) return [];
+    if (sources?.length === 0) return [];
+    if (!this.store.getChunksByIds) return [];
+    return this.store.getChunksByIds(ids, sources);
   }
 
   /**

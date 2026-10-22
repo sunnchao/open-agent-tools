@@ -177,6 +177,25 @@ export function buildKnnFilter(
 }
 
 /**
+ * 按 id 批量回取分块的查询构造器（供单测）。
+ *
+ * 用 terms 查询而不是 mget：mget 无法按 source 过滤，只能取回后再丢，
+ * 未授权分块会短暂进入进程内存；terms + filter 在存储层就完成 ACL 收窄。
+ */
+export function buildChunksByIdsQuery(
+  ids: readonly string[],
+  sources: readonly string[] | undefined,
+): Record<string, unknown> {
+  const filter = buildKnnFilter(sources);
+  return {
+    bool: {
+      must: [{ terms: { id: [...ids] } }],
+      ...(filter ? { filter: [filter] } : {}),
+    },
+  };
+}
+
+/**
  * Elasticsearch 存储：实现 `VectorStore` 的异步版本。
  * 所有方法均为 `async`，但返回类型兼容 `MaybePromise`，可直接作为 `Rag({ store })` 注入。
  */
@@ -536,6 +555,34 @@ export class ElasticsearchVectorStore implements VectorStore {
 
   async close(): Promise<void> {
     if (this.owned) await this.client.close();
+  }
+
+  /**
+   * 按 id 批量回取真实分块（图谱关系回溯用）。
+   * 来源白名单必须在**查询阶段**生效；索引不存在时按空结果降级。
+   */
+  async getChunksByIds(ids: readonly string[], sources?: readonly string[]): Promise<Chunk[]> {
+    if (ids.length === 0 || sources?.length === 0) return [];
+    try {
+      const res = await this.client.search<ChunkSource>({
+        index: this.chunksIndex,
+        query: buildChunksByIdsQuery(ids, sources) as never,
+        size: ids.length,
+        _source: ["id", "source", "chunk_index", "content"],
+      });
+      return (res.hits.hits ?? []).map((h) => {
+        const s = h._source as unknown as ChunkSource;
+        return {
+          id: s.id,
+          source: s.source,
+          chunkIndex: s.chunk_index,
+          content: s.content,
+        } satisfies Chunk;
+      });
+    } catch (error) {
+      if (isIndexNotFound(error)) return [];
+      throw error;
+    }
   }
 
   private async getDocumentSource(source: string): Promise<DocumentSource | null> {

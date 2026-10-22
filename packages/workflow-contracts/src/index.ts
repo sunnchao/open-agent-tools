@@ -136,6 +136,7 @@ export function prepareRunInputs(variables: RunVariable[], values: Record<string
 }
 export function templateFields(kind: string): string[] {
   if (kind === "llm") return ["systemPrompt", "prompt"];
+  // "graph" 仅为历史版本回放保留：旧图谱节点迁移前也可能被模板引用检查触达。
   if (kind === "rag" || kind === "graph" || kind === "sql") return ["query"];
   if (kind === "condition") return ["expression", "cases"];
   if (kind === "mcp") return ["arguments"];
@@ -164,8 +165,9 @@ export function resultFields(kind: string): Record<string, VariableType> | null 
       durationMs: "number",
       truncated: "boolean",
     };
+  // 旧 graph 节点已并入知识检索；保留其输出字段签名，兼容历史版本回放与旧选择器校验。
   if (kind === "graph") return { formatted: "string", seeds: "array" };
-  if (kind === "rag") return { formatted: "string", chunks: "array" };
+  if (kind === "rag") return { formatted: "string", chunks: "array", graph: "object" };
   if (kind === "http")
     return { body: "any", status_code: "number", headers: "object", size: "number" };
   return null;

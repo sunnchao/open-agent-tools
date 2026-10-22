@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { conditionFields } from "./condition.js";
 
+/**
+ * 节点类型。
+ *
+ * 图谱能力已并入知识库：不再有独立的 "graph" 节点，知识检索节点用 `graph` 开关控制
+ * 是否启用图谱第三路增强。历史上的 graph 节点由各端在读取旧草稿/旧版本时迁移为 rag 节点。
+ */
 export const nodeKindSchema = z.enum([
   "start",
   "input",
   "rag",
-  "graph",
   "sql",
   "llm",
   "mcp",
@@ -60,14 +65,10 @@ export const nodeConfigSchemas = {
       knowledgeBase: z.string().optional(),
       topK: z.number().int().min(1).max(20).optional(),
       query: z.string().optional(),
-    })
-    .passthrough(),
-  graph: z
-    .object({
-      ...bindings,
-      ...execution,
-      sources: z.array(z.string().refine((source) => source.trim().length > 0, "文档不能为空")).optional(),
-      query: z.string().optional(),
+      /** 是否启用图谱第三路增强（实体关系回溯分块参与 RRF）。缺省视为开启。 */
+      graph: z.boolean().optional(),
+      /** 图谱子图扩展跳数，1-4；仅 graph 开启时生效。 */
+      graphHops: z.number().int().min(1).max(4).optional(),
     })
     .passthrough(),
   sql: z
@@ -157,10 +158,12 @@ const defaultNodeConfig: Record<NodeKind, Record<string, unknown>> = {
     inputs: [{ name: "query", source: { type: "run", variable: "query" }, required: true }],
     outputs: [{ name: "query", selector: "$inputs.query" }],
   },
-  rag: { sources: [], topK: 5, query: "{{query}}", inputs: [], outputs: [] },
-  graph: {
+  rag: {
     sources: [],
+    topK: 5,
     query: "{{query}}",
+    graph: true,
+    graphHops: 2,
     inputs: [],
     outputs: [{ name: "formatted", selector: "$result.formatted" }],
   },
@@ -206,6 +209,81 @@ const defaultNodeConfig: Record<NodeKind, Record<string, unknown>> = {
   end: { inputs: [], outputs: [] },
 };
 export type HttpNodeConfig = z.infer<typeof nodeConfigSchemas.http>;
+
+/** 旧版独立图谱节点的节点类型。只用于迁移遗留草稿/版本，不再是合法 kind。 */
+export const LEGACY_GRAPH_KIND = "graph";
+
+/** 旧版图谱节点的输出契约；迁移为知识检索节点时需保留同名输出，避免下游绑定断裂。 */
+const LEGACY_GRAPH_OUTPUTS = [{ name: "formatted", selector: "$result.formatted" }];
+
+export interface LegacyGraphNodeLike {
+  id?: string;
+  kind?: string;
+  label?: string;
+  description?: string;
+  config?: Record<string, unknown>;
+}
+
+/**
+ * 判断一个节点是否是旧版独立图谱节点。
+ *
+ * 独立「图谱检索」节点已并入知识检索节点（`rag` + `config.graph`）。历史草稿、已发布版本、
+ * 导入文件里仍可能出现 `kind: "graph"`，读取时必须迁移而不是报错，否则用户升级后工作流直接打不开。
+ */
+export function isLegacyGraphNode(node: { kind?: unknown } | null | undefined): boolean {
+  return node?.kind === LEGACY_GRAPH_KIND;
+}
+
+/**
+ * 把旧版图谱节点迁移为知识检索节点（纯函数，幂等）。
+ *
+ * 迁移语义：
+ * - kind `graph` → `rag`，`graph: true` 让图谱第三路保持启用（旧节点本来只做图谱检索；
+ *   迁移后同时获得向量/关键词召回，是对旧行为的增强而非削弱）；
+ * - `sources`/`query`/`inputs`/`outputs` 原样保留，保证下游 `$result.formatted` 绑定不断裂；
+ * - 标签统一改为「知识检索」：节点库已没有「图谱检索」类型，若继续显示旧名会让用户
+ *   以为还存在两种节点；旧名在描述里标注一次，说明它是由图谱节点迁移而来。
+ */
+export function migrateLegacyGraphNode<T extends LegacyGraphNodeLike>(node: T): T {
+  if (!isLegacyGraphNode(node)) return node;
+  const config = { ...(node.config ?? {}) };
+  const outputs = Array.isArray(config.outputs) ? config.outputs : [];
+  // 用户可能改过节点名/描述；只有仍是默认旧文案（或为空）时才覆盖，避免抹掉自定义内容。
+  const defaultLegacyLabels = new Set(["图谱检索", "知识图谱", ""]);
+  const defaultLegacyDescriptions = new Set(["子图多跳扩展", "知识图谱", ""]);
+  const label =
+    typeof node.label === "string" && node.label && !defaultLegacyLabels.has(node.label.trim())
+      ? node.label
+      : "知识检索";
+  const description =
+    typeof node.description === "string" &&
+    node.description &&
+    !defaultLegacyDescriptions.has(node.description.trim())
+      ? node.description
+      : "向量+关键词+图谱多路召回";
+  return {
+    ...node,
+    kind: "rag",
+    label,
+    description,
+    config: {
+      ...defaultNodeConfig.rag,
+      ...config,
+      graph: true,
+      graphHops:
+        typeof config.graphHops === "number" && config.graphHops >= 1 && config.graphHops <= 4
+          ? config.graphHops
+          : defaultNodeConfig.rag.graphHops,
+      // 旧节点若声明了输出，尊重用户的输出映射；否则补上 formatted，保持与旧契约一致。
+      outputs: outputs.length > 0 ? outputs : LEGACY_GRAPH_OUTPUTS,
+    },
+  };
+}
+
+/** 批量迁移节点列表（返回新数组，不改入参）。 */
+export function migrateLegacyGraphNodes<T extends LegacyGraphNodeLike>(nodes: readonly T[]): T[] {
+  return nodes.map((node) => migrateLegacyGraphNode(node));
+}
 
 /** Fill editor defaults before comparing a legacy snapshot with the hydrated draft. */
 export function effectiveNodeConfig(

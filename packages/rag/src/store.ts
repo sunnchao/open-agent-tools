@@ -367,6 +367,41 @@ export class SqliteVectorStore implements VectorStore {
     }));
   }
 
+  /**
+   * 按 id 批量回取真实分块（图谱关系回溯用）。
+   * 来源白名单下推到 SQL：空数组直接返回 []，避免"不过滤"退化成越权读取。
+   * 不保证返回顺序——调用方按自己的候选排名重排。
+   */
+  getChunksByIds(ids: readonly string[], sources?: readonly string[]): Chunk[] {
+    if (ids.length === 0 || sources?.length === 0) return [];
+    const rows: Array<{ id: string; source: string; chunk_index: number; content: string }> = [];
+    // SQLite 绑定变量数有上限（旧版本 999），候选窗口很大时分批查，避免整批失败。
+    const batchSize = 500;
+    for (let start = 0; start < ids.length; start += batchSize) {
+      const batch = ids.slice(start, start + batchSize);
+      const placeholders = batch.map(() => "?").join(", ");
+      const sourceFilter = sources ? ` AND source IN (${sources.map(() => "?").join(", ")})` : "";
+      const batchRows = this.db
+        .prepare(
+          `SELECT id, source, chunk_index, content FROM chunks
+           WHERE id IN (${placeholders})${sourceFilter}`,
+        )
+        .all(...batch, ...(sources ?? [])) as unknown as Array<{
+        id: string;
+        source: string;
+        chunk_index: number;
+        content: string;
+      }>;
+      rows.push(...batchRows);
+    }
+    return rows.map((r) => ({
+      id: r.id,
+      source: r.source,
+      chunkIndex: r.chunk_index,
+      content: r.content,
+    }));
+  }
+
   close(): void {
     this.db.close();
   }

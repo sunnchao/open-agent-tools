@@ -2,9 +2,9 @@
 
 [English](./README_EN.md)
 
-open-agent-tools 是一个服务于企业内部的 AI 工具项目：把企业在内部落地 AI 时最常用的能力——智能对话、RAG 知识库、知识图谱、多源问数、工作流编排，以及 MCP 工具托管与治理——收敛到同一套 pnpm + TypeScript Monorepo 中，让企业内部的数据、知识和流程可以直接被 AI 调用。
+open-agent-tools 是一个服务于企业内部的 AI 工具项目：把企业在内部落地 AI 时最常用的能力——智能对话、RAG 知识库（内置知识图谱增强）、多源问数、工作流编排，以及 MCP 工具托管与治理——收敛到同一套 pnpm + TypeScript Monorepo 中，让企业内部的数据、知识和流程可以直接被 AI 调用。
 
-`apps/studio-web` 是企业内部使用这些能力的统一可视化入口，整合 Agent Chat、RAG 知识库、知识图谱、多源问数、工作流编排和 MCP 管理；对话、工作流、问数和设置等接口由 `apps/server`（Agent Server，默认端口 `3000`）提供。`apps/cli` 与 `apps/server` 也可作为独立的 Agent/Chat 入口运行。
+`apps/studio-web` 是企业内部使用这些能力的统一可视化入口，整合 Agent Chat、RAG 知识库（含图谱视图与图谱增强检索）、多源问数、工作流编排和 MCP 管理；对话、工作流、问数和设置等接口由 `apps/server`（Agent Server，默认端口 `3000`）提供。`apps/cli` 与 `apps/server` 也可作为独立的 Agent/Chat 入口运行。
 
 企业无需在多个孤立的 AI 工具之间来回切换：数据源接进来、知识库建起来、流程编排好、工具托管与授权管起来，再通过对话、IM 机器人和开放 API 交付给内部员工与业务系统。其中 MCP 管理平台（Control Plane + Gateway + Worker）是这套体系里的工具治理层，负责托管 MCP 服务的配置、构建、发布、回滚与访问授权，详细能力见下文「MCP 工具托管与治理」。
 
@@ -15,8 +15,9 @@ open-agent-tools 是一个服务于企业内部的 AI 工具项目：把企业�
 - IM 协同入口：Studio Web「设置 → IM 渠道」可视化配置飞书/钉钉机器人（多渠道、密钥加密存储、知识库绑定），群聊 @机器人即可走 Agent Chat + RAG 知识库问答。
 - 多源问数：Studio Web「设置 → Schema 数据源」管理多个 MySQL / PostgreSQL 只读连接、采集范围和默认路由；问数页按源隔离 catalog、关系图和 SQL 执行，并为每次问数记录从解析数据源到输出结果的分阶段审计，可在问数页「审计日志」检索回放。
 - RAG 资产运营：支持固定切分与基于 Embedding 相似度的语义切分；文档标题/标签、内容指纹、切分参数、版本与更新时间可治理；同名重传原子替换，内置查询量、空召回率、延迟、热门来源和用户反馈看板。
+- 知识库图谱增强：知识图谱已并入知识库，不再是独立工作区。检索时向量 kNN、BM25 与图谱第三路并行召回，图谱命中的关系回溯到真实分块后共同参与 RRF 融合；结果按「向量 / 关键词 / 图谱」标注每条命中的通道来源，并展示图谱种子、实体关系计数与子图上下文。知识库内的图谱视图与知识来源共用选中文档，提供子图检索、实体索引、关系详情、建图用量，以及图谱与知识库的一致性对账（缺失/过期/孤儿一键同步）。
 - MCP Gateway 连接：Studio Web「设置 → MCP Gateway」配置工作流和对话使用的 Gateway 地址与 API Key（加密存储），保存后立即生效；未保存配置时回退到环境变量。
-- 工作流编排：节点库包含开始、用户输入、知识检索、图谱检索、SQL 问数、LLM、MCP Tool、HTTP 请求、条件分支和结束节点。编辑器提供运行历史与检查点续跑、失效引用修复、运行连线高亮、节点执行策略、JSON 导入导出、多选编辑、自动布局和子图剪贴板复制粘贴。草稿可发布为不可变版本，并通过工作流级 API Key（带每分钟限流）、OpenAPI 3.1 和 `/v1/workflows/{slug}/run` 对外调用。
+- 工作流编排：节点库包含开始、用户输入、知识检索（可选图谱增强）、SQL 问数、LLM、MCP Tool、HTTP 请求、条件分支和结束节点；原「图谱检索」节点已合并进知识检索节点。编辑器提供运行历史与检查点续跑、失效引用修复、运行连线高亮、节点执行策略、JSON 导入导出、多选编辑、自动布局和子图剪贴板复制粘贴。草稿可发布为不可变版本，并通过工作流级 API Key（带每分钟限流）、OpenAPI 3.1 和 `/v1/workflows/{slug}/run` 对外调用。
 - 工作流 HTTP 请求节点：支持六种方法，请求体可选 JSON、纯文本或 multipart 表单（仅文本字段），支持 Basic/Bearer/自定义头认证、节点超时与重试；多结束节点按执行顺序合并最终输出，并保留逐节点调试轨迹。认证观测脱敏，导出与剪贴板复制移除固定凭据。
 - 工作流 SQL 问数节点：选择 Schema 数据源（缺省使用默认源），用自然语言描述问题并可引用输入变量；复用问数模块的文本转 SQL、只读校验和审计。「默认返回条数」（1–100，缺省 100）只在问题没有指定条数时生效；问题已写明前 N 条或查询全部时以问题为准，最多返回 100 行。默认输出 `rows`、`sql`、`rowCount` 和 `auditId`；需要补充业务口径时节点报错并附审计 ID。
 - 工作流条件分支节点：可视化配置 IF / ELIF / ELSE 分支，每个分支用 AND/OR 组合多条规则，内置 14 种运算符并按变量类型过滤；在画布上为每个分支选择下一节点。运行时按顺序命中第一个满足的分支，变量缺省或类型不匹配的条件按不满足处理并给出告警，运行预览和节点测试会展示命中的分支。草稿可保存未完成的条件；运行和发布前会校验变量引用、运算符、比较值类型和每个分支的下一节点。仍兼容旧的表达式模式。
@@ -71,8 +72,8 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
 | MCP Gateway        | `@open-agent-tools/mcp-server`         | MCP 协议入口、API Key 鉴权、Scope 检查、Tool 调用与 Prompt 渲染、请求审计                                      |
 | MCP Worker         | `@open-agent-tools/mcp-worker`         | ZIP 检查、依赖安装、镜像构建/扫描、Tool 容器执行                                                               |
 | Agent Server       | `@open-agent-tools/server`             | Agent Chat、工作流草稿/发布/运行与 Service API、问数、IM 渠道，以及 Provider、Schema 数据源和 MCP Gateway 设置 |
-| Studio Web         | `@open-agent-tools/studio-web`         | Agent、MCP、RAG、图谱、问数与工作流统一 React 工作台                                                           |
-| RAG Server         | `@open-agent-tools/rag-server`         | 文档入库、SQLite 索引、混合检索与可选 LLM 回答                                                                 |
+| Studio Web         | `@open-agent-tools/studio-web`         | Agent、MCP、RAG 知识库（含图谱视图）、问数与工作流统一 React 工作台                                            |
+| RAG Server         | `@open-agent-tools/rag-server`         | 文档入库、SQLite/ES 索引、向量+关键词+图谱三路混合检索与可选 LLM 回答                                          |
 | Contracts          | `@open-agent-tools/mcp-contracts`      | Manifest、Prompt、任务和 Runner I/O 的共享 Zod 契约                                                            |
 | Workflow Contracts | `@open-agent-tools/workflow-contracts` | 工作流图、变量引用、条件分支和 HTTP 节点的共享校验契约（Studio Web 与 Agent Server 共用）                      |
 | Auth               | `@open-agent-tools/mcp-auth`           | API Key 生成、解析、哈希和校验                                                                                 |
@@ -102,7 +103,7 @@ packages/
   mcp-contracts/           跨服务共享数据契约
   observability/           审计脱敏与 Langfuse/OpenTelemetry 追踪
   query-resolver/          问数前置口径解析（日期、组织、费用、状态）
-  rag/                     RAG 核心库：切分、入库、SQLite 向量索引、检索、CRAG 与知识图谱
+  rag/                     RAG 核心库：切分、入库、SQLite 向量索引、向量+关键词+图谱多路检索、CRAG
   schema-catalog/          MySQL / PostgreSQL Schema 采集与渐进式加载
   workflow-contracts/      工作流图、变量、条件分支与 HTTP 节点共享契约
 runtimes/

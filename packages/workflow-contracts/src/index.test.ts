@@ -63,7 +63,6 @@ describe("workflow variable contracts", () => {
     for (const [kind, field, text] of [
       ["llm", "systemPrompt", "{{qurey}}"],
       ["llm", "prompt", "{{missing}}"],
-      ["graph", "query", "{{missing}}"],
       ["rag", "query", "{{missing}}"],
       ["condition", "expression", "{{missing}} > 0"],
       ["mcp", "arguments", '{"a":[{"b":"{{missing}}"}]}'],
@@ -112,9 +111,10 @@ describe("workflow variable contracts", () => {
   it("validates known selectors without rejecting unknown dynamic fields", () => {
     assert.match(selectorIssue(input, "$inputs.qurey")!, /未声明/);
     assert.match(selectorIssue(input, "$result.qurey")!, /未声明/);
-    assert.match(selectorIssue({ id: "g", kind: "graph" }, "$result.formated")!, /不存在/);
+    // 图谱能力已并入知识检索节点：图谱相关输出仍按 rag 节点的结果签名校验。
+    assert.match(selectorIssue({ id: "g", kind: "rag" }, "$result.formated")!, /不存在/);
     assert.match(
-      selectorIssue({ id: "g", kind: "graph" }, "$result.formatted.text")!,
+      selectorIssue({ id: "g", kind: "rag" }, "$result.formatted.text")!,
       /没有子字段/,
     );
     assert.ok(selectorIssue({ id: "l", kind: "llm" }, "$result.text"));

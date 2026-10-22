@@ -288,6 +288,26 @@ test("旧 documents 表自动补齐切分策略字段", () => {
   cleanup();
 });
 
+test("getChunksByIds 批量回取并遵守来源白名单", () => {
+  const { dbPath, cleanup } = tmpDb();
+  const s = new SqliteVectorStore({ dbPath });
+  s.insert({ id: "a:0", source: "a.txt", chunkIndex: 0, content: "first" }, fakeEmbedding(1));
+  s.insert({ id: "a:1", source: "a.txt", chunkIndex: 1, content: "second" }, fakeEmbedding(2));
+  s.insert({ id: "b:0", source: "b.txt", chunkIndex: 0, content: "secret" }, fakeEmbedding(3));
+
+  const all = s.getChunksByIds(["a:0", "b:0", "missing"]);
+  assert.deepEqual(all.map((c) => c.id).sort(), ["a:0", "b:0"], "不存在的 id 静默跳过");
+  assert.deepEqual(
+    s.getChunksByIds(["a:0", "b:0"], ["a.txt"]).map((c) => c.id),
+    ["a:0"],
+    "白名单外分块不得返回",
+  );
+  assert.deepEqual(s.getChunksByIds(["a:0"], []), [], "空白名单表示不检索");
+  assert.deepEqual(s.getChunksByIds([]), []);
+  s.close();
+  cleanup();
+});
+
 test("replaceSource 写入失败时回滚并保留旧版本", () => {
   const { dbPath, cleanup } = tmpDb();
   const s = new SqliteVectorStore({ dbPath });
