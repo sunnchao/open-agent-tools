@@ -13,7 +13,7 @@ import {
 } from "react-native-paper";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { initialTab } from "./navigation/tabs";
+import { initialTab, normalizeTab } from "./navigation/tabs";
 import { WORKSPACES, WORKSPACE_COPY, type WorkspaceTab } from "./lib/types";
 import { WorkspaceDrawer } from "./navigation/WorkspaceDrawer";
 import { workspaceIcons } from "./components/icons";
@@ -23,7 +23,6 @@ import { ChatScreen } from "./screens/ChatScreen";
 import { McpScreen } from "./screens/McpScreen";
 import { RagScreen } from "./screens/RagScreen";
 import { ConnectorsScreen } from "./screens/ConnectorsScreen";
-import { GraphScreen } from "./screens/GraphScreen";
 import { ObservatoryScreen } from "./screens/ObservatoryScreen";
 import { ReportsScreen } from "./screens/ReportsScreen";
 import { WorkflowScreen } from "./screens/WorkflowScreen";
@@ -40,8 +39,6 @@ function renderWorkspace(tab: WorkspaceTab) {
       return <RagScreen />;
     case "connectors":
       return <ConnectorsScreen />;
-    case "graph":
-      return <GraphScreen />;
     case "observatory":
       return <ObservatoryScreen />;
     case "reports":
@@ -66,7 +63,8 @@ function StudioShell({
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const compact = width < 760;
-  const [tab, setTab] = useState<WorkspaceTab>(initialTab());
+  // 工作区无持久化；初始化时统一走 normalizeTab，兼容历史 "graph" 取值降级到知识库。
+  const [tab, setTab] = useState<WorkspaceTab>(() => normalizeTab(initialTab()));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const contentRef = React.useRef<ScrollView>(null);
   const copy = WORKSPACE_COPY[tab];

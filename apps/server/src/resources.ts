@@ -309,18 +309,72 @@ export async function callMcpTool(
   );
 }
 
+/** rag-server /api/query 返回的图谱增强上下文；旧版服务端没有 graph 字段。 */
+export interface RagGraphContext {
+  enabled?: boolean;
+  seeds?: Array<{ id: string; name: string; type?: string }>;
+  entities?: number;
+  relations?: number;
+  chunkHits?: number;
+  context?: string;
+}
+
+export interface RagQueryResponseBody {
+  queryId?: string;
+  retrieval?: unknown;
+  chunks: Array<{ source: string; chunkIndex: number; content: string } & Record<string, unknown>>;
+  graph?: RagGraphContext;
+}
+
+export interface RagRetrievalResult {
+  queryId?: string;
+  chunks: Array<Record<string, unknown>>;
+  formatted: string;
+  graph?: RagGraphContext;
+  retrieval?: unknown;
+}
+
+/**
+ * 把 /api/query 响应映射为 Agent Server 的检索结果。
+ *
+ * 抽成纯函数是为了让「图谱上下文如何进入注入文本」可被单测覆盖；同时保证
+ * 老版 rag-server（无 graph 字段）的 formatted 与历史实现逐字节一致，避免行为漂移。
+ */
+export function formatRagRetrieval(
+  body: RagQueryResponseBody,
+): Pick<RagRetrievalResult, "chunks" | "formatted" | "graph"> {
+  const chunks = body.chunks;
+  const chunksText = chunks
+    .map((chunk) => `【来源: ${chunk.source} · 第${chunk.chunkIndex + 1}段】\n${chunk.content}`)
+    .join("\n\n");
+  // 图谱上下文没有 source/chunkIndex，不能伪造成引用分块，只能作为独立区块追加到注入文本。
+  // trim 仅用于判定「是否非空」，实际注入保留上游返回的原始排版。
+  const graphContext = body.graph?.context;
+  const graphText =
+    typeof graphContext === "string" && graphContext.trim().length > 0
+      ? `【知识图谱】\n${graphContext}`
+      : "";
+  return {
+    chunks,
+    // 用数组 join 而不是直接字符串拼接：chunks 为空时不会凭空多出前导空行；
+    // 无 graph.context 时 graphText 为空被过滤，结果与旧实现逐字节一致。
+    formatted: [chunksText, graphText].filter(Boolean).join("\n\n"),
+    // graph 原样透传；缺失时不生成 graph: undefined，保持与旧服务端的返回形状一致。
+    ...(body.graph ? { graph: body.graph } : {}),
+  };
+}
+
 export async function retrieveRag(input: {
   query: string;
   sources: string[];
   topK: number;
   viewerGroups?: string[];
+  /** 是否启用图谱增强；缺省交给 rag-server 决定（新版默认开启，旧版忽略该字段）。 */
+  graph?: boolean;
+  /** 图谱子图扩展跳数（1-4）；缺省由 rag-server 用默认 2 跳。旧版服务端会忽略该字段。 */
+  graphHops?: number;
   signal?: AbortSignal;
-}): Promise<{
-  queryId?: string;
-  chunks: Array<Record<string, unknown>>;
-  formatted: string;
-  retrieval?: unknown;
-}> {
+}): Promise<RagRetrievalResult> {
   if (input.sources.length === 0) return { chunks: [], formatted: "" };
   const config = resourceConfig();
   const { signal, ...payload } = input;
@@ -331,19 +385,14 @@ export async function retrieveRag(input: {
     signal,
   });
   if (!response.ok) throw new Error(`RAG retrieval failed (${response.status})`);
-  const body = (await response.json()) as {
-    queryId?: string;
-    retrieval?: unknown;
-    chunks: Array<
-      { source: string; chunkIndex: number; content: string } & Record<string, unknown>
-    >;
-  };
+  const body = (await response.json()) as RagQueryResponseBody;
+  // 统一走纯函数：formatted 的图谱拼接只保留一处实现，测试与运行时不会分叉。
+  const { chunks, formatted, graph } = formatRagRetrieval(body);
   return {
     ...(body.queryId ? { queryId: body.queryId } : {}),
-    chunks: body.chunks,
-    formatted: body.chunks
-      .map((chunk) => `【来源: ${chunk.source} · 第${chunk.chunkIndex + 1}段】\n${chunk.content}`)
-      .join("\n\n"),
+    chunks,
+    formatted,
+    ...(graph ? { graph } : {}),
     ...(body.retrieval !== undefined ? { retrieval: body.retrieval } : {}),
   };
 }

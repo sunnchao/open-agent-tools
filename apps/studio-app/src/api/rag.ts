@@ -37,10 +37,80 @@ export interface ChunkInfo {
   length: number;
   hasEmbedding: boolean;
 }
+
+/** 检索通道：向量 / 关键词 / 图谱（图谱为后端 RRF 的第三路）。 */
+export type RetrievalChannel = "vector" | "keyword" | "graph";
+
+/** 融合前的单路候选基础结构。 */
+export interface RetrievalChannelHit {
+  id: string;
+  source: string;
+  chunkIndex: number;
+  content: string;
+  score: number;
+  rank: number;
+}
+
+/** 图谱通道候选：额外记录命中的种子实体。 */
+export interface GraphChannelHit extends RetrievalChannelHit {
+  /** 该分块由哪些种子实体命中。 */
+  seeds: string[];
+}
+
+/** 知识库回答附带的图谱增强信息。 */
+export interface GraphQueryAugmentation {
+  enabled: boolean;
+  seeds: Array<{ id: string; name: string; type: string }>;
+  entities: number;
+  relations: number;
+  chunkHits: number;
+  context: string;
+}
+
+export interface QueryChunkHit {
+  id: string;
+  source: string;
+  chunkIndex: number;
+  content: string;
+  score: number;
+  /** 三路明细：未命中的通道对应分/排名为 null。 */
+  debug?: {
+    vectorScore: number | null;
+    vectorRank: number | null;
+    keywordScore: number | null;
+    keywordRank: number | null;
+    graphScore?: number | null;
+    graphRank?: number | null;
+    rrfScore: number;
+    channels: RetrievalChannel[];
+  };
+}
+
+export interface RetrievalPayload {
+  store: string;
+  embeddingsEnabled: boolean;
+  candidates: number;
+  rrfK: number;
+  timingsMs: {
+    vectorMs: number | null;
+    keywordMs: number;
+    graphMs?: number | null;
+    fusionMs: number;
+  };
+  vectorHits: RetrievalChannelHit[];
+  keywordHits: RetrievalChannelHit[];
+  graphHits?: GraphChannelHit[];
+  graphEnabled?: boolean;
+}
+
 export interface QueryResult {
   queryId: string;
   query: string;
-  chunks: Array<{ id: string; source: string; chunkIndex: number; content: string; score: number }>;
+  chunks: QueryChunkHit[];
+  /** 三路融合明细；旧服务端缺失时前端只展示 RRF 分。 */
+  retrieval?: RetrievalPayload;
+  /** 图谱增强结果；后端未启用/未返回时缺省。 */
+  graph?: GraphQueryAugmentation;
   answer: string | null;
   generate: boolean;
   llmAvailable: boolean;
@@ -170,6 +240,10 @@ export function queryKnowledge(input: {
   topK: number;
   generate: boolean;
   sources?: string[];
+  /** 是否启用图谱增强通道；false 时后端只走向量 + 关键词两路。 */
+  graph?: boolean;
+  /** 图谱回溯跳数（后端默认 2，1..4）。 */
+  graphHops?: number;
 }): Promise<QueryResult> {
   return request("/query", {
     method: "POST",

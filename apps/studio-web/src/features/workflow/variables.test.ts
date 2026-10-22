@@ -82,7 +82,8 @@ describe("workflow variable editing", () => {
     expect(nodeInputs(node.data)[0]!.source).toEqual({ type: "run", variable: "query" });
   });
   it("offers known output fields and labels sampled dynamic fields separately", () => {
-    const graph = createNode("g", "graph", { x: 0, y: 0 });
+    // 图谱节点已并入知识检索；这里改用 rag 节点验证同一个 formatted 输出契约。
+    const graph = createNode("g", "rag", { x: 0, y: 0 });
     const options = outputOptions(graph, {
       formatted: "text",
       dynamic: { title: "value" },

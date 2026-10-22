@@ -4,6 +4,10 @@ import {
   effectiveNodeConfig,
   isVisualCondition,
   conditionRouteIssues,
+  isLegacyGraphNode,
+  migrateLegacyGraphNode,
+  migrateLegacyGraphNodes,
+  type LegacyGraphNodeLike,
 } from "@open-agent-tools/workflow-contracts";
 import type { ResourceCatalog } from "../resources/api.js";
 
@@ -61,11 +65,15 @@ export interface WorkflowValidationIssue {
 
 export function defaultConfig(kind: NodeKind): Record<string, WorkflowConfigValue> {
   if (kind === "http" || kind === "sql") return structuredClone(effectiveNodeConfig(kind));
-  if (kind === "rag") return { sources: [], topK: 5, query: "{{query}}", inputs: [], outputs: [] };
-  if (kind === "graph")
+  if (kind === "rag")
     return {
       sources: [],
+      topK: 5,
       query: "{{query}}",
+      // 图谱增强默认开启，与契约中的 defaultNodeConfig.rag 保持一致；
+      // 命中分块会作为第三路参与 RRF，输出 formatted 供下游节点消费。
+      graph: true,
+      graphHops: 2,
       inputs: [],
       outputs: [{ name: "formatted", selector: "$result.formatted" }],
     };
@@ -119,7 +127,18 @@ function validOutputs(value: unknown): NodeOutputBinding[] {
   });
 }
 
-export function migrateNodeData(data: WorkflowNodeData, nodeId?: string): WorkflowNodeData {
+/**
+ * 迁移入参：本地草稿 / 服务端历史快照里的 `kind` 可能已不是合法 NodeKind
+ * （典型例子：已删除的 `"graph"`），因此这里放宽为 string，由迁移函数先归一化。
+ */
+export type MigratableNodeData = Omit<WorkflowNodeData, "kind"> & { kind: string };
+
+export function migrateNodeData(input: MigratableNodeData, nodeId?: string): WorkflowNodeData {
+  // 旧版独立「图谱检索」节点：先迁移为「知识检索」节点（保持 sources/query/outputs 绑定不裂），
+  // 再走下方统一的配置归一化。迁移是幂等的，重复调用不会二次改写。
+  const data = (isLegacyGraphNode(input)
+    ? migrateLegacyGraphNode(input)
+    : input) as unknown as WorkflowNodeData;
   const config =
     data.kind === "condition"
       ? effectiveNodeConfig("condition", data.config ?? {})
@@ -231,19 +250,6 @@ export function validateNodeResources(
     if (missing) return `RAG 文档已失效：${missing}`;
   }
 
-  if (data.kind === "graph") {
-    const sources = data.config.sources;
-    if (!Array.isArray(sources) || sources.length === 0) return "图谱检索至少选择一个文档";
-    if (sources.some((source) => typeof source !== "string" || !source.trim())) {
-      return "图谱检索文档配置无效，请重新选择文档";
-    }
-    if (!catalog) return "资源目录尚未加载，无法校验图谱文档";
-    if (catalog.rag.error) return `图谱文档加载失败：${catalog.rag.error}`;
-    const available = new Set(catalog.rag.sources.map((source) => source.source));
-    const missing = sources.find((source) => !available.has(source));
-    if (missing) return `图谱文档已失效：${missing}`;
-  }
-
   if (data.kind === "mcp") {
     const serviceSlug = String(data.config.serviceSlug ?? "");
     const toolName = String(data.config.toolName ?? "");
@@ -266,22 +272,90 @@ export function validateNodeResources(
   return null;
 }
 
+/**
+ * 把快照里遗留的旧 `kind:"graph"` 节点迁移为知识检索节点。
+ *
+ * 为什么要单独抽一层：契约的迁移函数只认「节点形状」，而这里的节点还包着 React Flow 的
+ * `data` 外壳与位置信息，不能直接丢给 `migrateLegacyGraphNodes`。
+ * 返回新数组；未命中的节点保持原引用，不修改入参。
+ */
+export function migrateLegacyGraphNodesInGraph<
+  T extends { id: string; data: Record<string, unknown> },
+>(nodes: readonly T[]): T[] {
+  const dataList = nodes.map((node) => node.data);
+  const migratedData = migrateLegacyGraphNodes(dataList);
+  return nodes.map((node, index) => {
+    const next = migratedData[index]!;
+    if (next === dataList[index]) return node;
+    // 旧 graph 节点的 data 形状不满足 WorkflowNodeData（kind 已不是合法 NodeKind），
+    // 迁移后再走一遍统一归一化，补齐 sources/graph/graphHops 等默认值。
+    return {
+      ...node,
+      data: migrateNodeData(next as unknown as MigratableNodeData, node.id),
+    };
+  });
+}
+
+/**
+ * 迁移「尚未通过 schema 校验」的 JSON 快照（导入文件 / 剪贴板）里的旧 graph 节点。
+ *
+ * 支持两种包装：工作流文件是 `{ graph: { nodes } }`，剪贴板内容是 `{ nodes }`。
+ * 输入形状不可信：只有 nodes 为数组且每个节点 data 为对象时才处理，其余原样返回，
+ * 让 schema 继续给出明确的格式错误，而不是在迁移阶段抛类型异常。
+ */
+export function migrateLegacyGraphNodesInSnapshot<T>(value: T): T {
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const graph = record.graph;
+  if (graph && typeof graph === "object") {
+    const migratedGraph = migrateLegacyGraphNodesInSnapshot(graph);
+    if (migratedGraph === graph) return value;
+    return { ...record, graph: migratedGraph } as T;
+  }
+  const nodes = record.nodes;
+  if (!Array.isArray(nodes) || nodes.length === 0) return value;
+  const dataList: LegacyGraphNodeLike[] = [];
+  for (const node of nodes) {
+    if (!node || typeof node !== "object") return value;
+    const data = (node as { data?: unknown }).data;
+    if (!data || typeof data !== "object") return value;
+    dataList.push(data as LegacyGraphNodeLike);
+  }
+  const migratedData = migrateLegacyGraphNodes(dataList);
+  if (migratedData.every((item, index) => item === dataList[index])) return value;
+  return {
+    ...record,
+    nodes: nodes.map((node, index) => ({
+      ...(node as Record<string, unknown>),
+      data: migratedData[index],
+    })),
+  } as T;
+}
+
 export function validateWorkflowGraph(
   nodes: WorkflowGraphNode[],
   edges: WorkflowGraphEdge[],
   catalog: ResourceCatalog | null,
 ): WorkflowValidationIssue[] {
   const issues: WorkflowValidationIssue[] = [];
-  const structural = workflowGraphSchema.safeParse({ name: "validation", nodes, edges });
+  // 旧草稿/旧版本可能仍含 graph 节点，先迁移再交给 schema 校验；
+  // 否则 schema 会以「未知 kind」直接拒绝整个工作流。
+  const migratedNodes = migrateLegacyGraphNodesInGraph(nodes);
+  const structural = workflowGraphSchema.safeParse({
+    name: "validation",
+    nodes: migratedNodes,
+    edges,
+  });
   if (!structural.success) {
     return structural.error.issues.map((issue) => ({
       code: "schema",
       message: `${issue.path.join(".")}: ${issue.message}`,
       ...(typeof issue.path[1] === "number" && issue.path[0] === "nodes"
-        ? { nodeId: nodes[issue.path[1]]?.id }
+        ? { nodeId: migratedNodes[issue.path[1]]?.id }
         : {}),
     }));
   }
+  nodes = migratedNodes;
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const incoming = new Map(nodes.map((node) => [node.id, [] as WorkflowGraphEdge[]]));
   const outgoing = new Map(nodes.map((node) => [node.id, [] as WorkflowGraphEdge[]]));

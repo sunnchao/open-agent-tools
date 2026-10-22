@@ -14,11 +14,17 @@ import {
   conditionRouteIssues,
   selectedConditionEdges,
   conditionBranchLabel,
+  migrateLegacyGraphNodes,
   type ConditionWarning,
   type HttpNodeConfig,
   type WorkflowResumeCheckpoint,
 } from "@open-agent-tools/workflow-contracts";
-import { callMcpTool, retrieveRag, retrieveRagGraph, type McpToolBinding } from "../resources.js";
+import {
+  callMcpTool,
+  retrieveRag,
+  type McpToolBinding,
+  type retrieveRagGraph,
+} from "../resources.js";
 import { getDefaultProvider, getProvider, type ProviderWithKey } from "../providers/store.js";
 import { createLlmClient, type LlmMessage } from "../providers/clients/index.js";
 import {
@@ -144,6 +150,10 @@ export interface WorkflowEvent {
 export interface WorkflowDependencies {
   sqlQuery?: typeof runWorkflowSqlQuery;
   retrieveRag?: typeof retrieveRag;
+  /**
+   * 仅保留给历史调用方注入用：独立「图谱检索」节点已删除，执行器不再调用它。
+   * 图谱增强现在由知识检索节点（rag + graph 开关）走 `retrieveRag` 完成。
+   */
   retrieveRagGraph?: typeof retrieveRagGraph;
   callMcpTool?: typeof callMcpTool;
   getProvider?: (id: string, options?: { requireEnabled?: boolean }) => ProviderWithKey | null;
@@ -184,6 +194,19 @@ const NODE_KINDS = new Set<WorkflowNodeKind>(nodeKindSchema.options);
 
 function configOf(node: WorkflowNodeInput): Record<string, unknown> {
   return node.config && typeof node.config === "object" ? node.config : {};
+}
+
+/**
+ * 图谱跳数防御性归一：契约允许 1..4 的整数。
+ * 保存草稿时 schema 会校验，但执行器仍统一取整并 clamp——保证无论节点配置来自哪里，
+ * 传给 rag-server 的 graphHops 永远落在契约区间内，不会因 0/小数/字符串被服务端拒绝。
+ */
+export function normalizeGraphHops(value: unknown): number {
+  // 缺省/清空（undefined/null/空串）回落到默认 2 跳；其余按数字取整后 clamp。
+  if (value === undefined || value === null || value === "") return 2;
+  const hops = Math.floor(Number(value));
+  if (!Number.isFinite(hops)) return 2;
+  return Math.max(1, Math.min(4, hops));
 }
 
 function inputsOf(node: WorkflowNodeInput): NodeInputBinding[] {
@@ -272,6 +295,10 @@ export function validateWorkflow(
   if (!request || !Array.isArray(request.nodes) || request.nodes.length === 0) {
     throw new WorkflowValidationError("nodes must be a non-empty array");
   }
+  // 独立「图谱检索」节点已并入知识检索节点：旧草稿/已发布版本/导入文件里仍可能存着
+  // kind:"graph"。在唯一校验入口先迁移，保证升级后旧工作流照常可运行，而不是直接报
+  // invalid node kind。迁移是幂等的，对已是 rag 的节点不做任何改动。
+  request = { ...request, nodes: migrateLegacyGraphNodes(request.nodes) };
   if (
     !Array.isArray(request.edges) ||
     !request.input ||
@@ -291,12 +318,6 @@ export function validateWorkflow(
       throw new WorkflowValidationError(
         `node ${node.id}: ${config.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
       );
-    if (node.kind === "graph") {
-      const sources = (config.data as { sources?: string[] }).sources;
-      if (!sources?.length) {
-        throw new WorkflowValidationError(`node ${node.id}: 图谱检索至少选择一个文档`);
-      }
-    }
     byId.set(node.id, node);
   }
   const edges: Array<WorkflowEdgeInput & { id: string }> = [];
@@ -442,18 +463,12 @@ function resolvedDependencies(
 ): Required<
   Pick<
     WorkflowDependencies,
-    | "retrieveRag"
-    | "retrieveRagGraph"
-    | "callMcpTool"
-    | "getProvider"
-    | "getDefaultProvider"
-    | "sqlQuery"
+    "retrieveRag" | "callMcpTool" | "getProvider" | "getDefaultProvider" | "sqlQuery"
   >
 > &
   WorkflowDependencies {
   return {
     retrieveRag,
-    retrieveRagGraph,
     callMcpTool,
     getProvider,
     getDefaultProvider,
@@ -486,40 +501,25 @@ async function runNode(
         ? config.sources.filter((value): value is string => typeof value === "string")
         : [];
       const query = interpolate(config.query ?? inputs.query ?? "", inputs, "text");
+      // 图谱增强并入知识检索节点：缺省开启（与 contracts 的 defaultNodeConfig 一致），
+      // 迁移来的旧图谱节点也带 graph:true，保持既有召回能力不缩水。
+      const graph = config.graph !== false;
+      const graphHops = normalizeGraphHops(config.graphHops);
       const result = await withTimeout(
         deps.retrieveRag({
           query,
           sources,
           topK: Math.max(1, Math.min(20, Number(config.topK) || 5)),
+          graph,
+          graphHops,
           signal: deps.signal,
         }),
         configuredTimeout ?? deps.timeoutMs?.rag ?? 15_000,
         deps.signal,
       );
+      // 原样带回 chunks/formatted/graph/queryId/retrieval：下游节点可读 $result.graph，
+      // 审计侧也能用 queryId 回放 rag-server 的检索链路。
       return { result };
-    }
-    case "graph": {
-      const sources = config.sources as string[];
-      const query = interpolate(config.query ?? inputs.query ?? "", inputs, "text");
-      if (!query) throw new Error("graph node requires a query");
-      const result = await withTimeout(
-        deps.retrieveRagGraph({ query, sources, signal: deps.signal }),
-        configuredTimeout ?? deps.timeoutMs?.graph ?? 15_000,
-        deps.signal,
-      );
-      // 零命中必须显式失败：rag-server 对「没匹配到实体」返回 200 + formatted:""。
-      // 若原样当成 success，下游（常见是结束节点）只会拿到空字符串，
-      // 用户看不到任何「没检索到」的信号，最终输出为空却显示运行成功。
-      if (!result.formatted && result.seeds.length === 0)
-        throw new Error(
-          `图谱检索未命中任何实体：在所选文档中匹配不到「${query}」，请检查查询内容或所选图谱文档`,
-        );
-      return {
-        result: {
-          formatted: result.formatted,
-          seeds: result.seeds,
-        },
-      };
     }
     case "sql": {
       const query = interpolate(config.query ?? inputs.query ?? "", inputs, "text").trim();
@@ -718,9 +718,7 @@ async function runNodeWithPolicy(
   deps: Parameters<typeof runNode>[2],
 ): Promise<NodeExecution> {
   const policy = configOf(node).retry as { maxRetries?: number; delayMs?: number } | undefined;
-  const retries = ["rag", "graph", "mcp", "http"].includes(node.kind)
-    ? (policy?.maxRetries ?? 0)
-    : 0;
+  const retries = ["rag", "mcp", "http"].includes(node.kind) ? (policy?.maxRetries ?? 0) : 0;
   for (let attempt = 1; ; attempt++) {
     if (deps.signal?.aborted) throw new Error("workflow run cancelled");
     const controller = new AbortController();
@@ -778,7 +776,6 @@ function nodeKindAsType(kind: WorkflowNodeKind): ObservationKind {
     case "llm":
       return "generation";
     case "rag":
-    case "graph":
       return "retriever";
     case "mcp":
     case "http":
@@ -808,6 +805,12 @@ export async function executeWorkflow(
   emit: (event: WorkflowEvent) => void,
   dependencies: WorkflowDependencies = {},
 ): Promise<Record<string, Record<string, unknown>>> {
+  // 先迁移再校验：validateWorkflow 内部也会迁移，但后续 redactor / runVariables 都基于
+  // 这里的 request.nodes，必须让整条执行链看到同一份迁移后的节点（否则旧 graph 节点上的
+  // run 变量绑定会被漏算）。非法入参留给 validateWorkflow 报友好错误。
+  if (Array.isArray(request?.nodes)) {
+    request = { ...request, nodes: migrateLegacyGraphNodes(request.nodes) };
+  }
   const validation = validateWorkflow(request);
   if (hasRunDeclarations(request.nodes)) {
     const prepared = prepareRunInputs(runVariables(request.nodes), request.input);
@@ -1105,6 +1108,8 @@ export async function executeWorkflowNodeTest(
   ) {
     throw new WorkflowValidationError("node and inputs are required");
   }
+  // 单节点测试同样要兼容旧 graph 节点（历史草稿里的节点可能被单独试跑）。
+  request = { ...request, node: migrateLegacyGraphNodes([request.node])[0]! };
 
   const bindings = inputsOf(request.node);
   const validationNode: WorkflowNodeInput = {

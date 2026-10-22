@@ -9,7 +9,6 @@ export const workspaceIcons: Record<WorkspaceTab, IconName> = {
   mcp: "api",
   rag: "book-open-page-variant-outline",
   connectors: "transit-connection-variant",
-  graph: "graph-outline",
   observatory: "database-search-outline",
   reports: "chart-box-outline",
   workflow: "sitemap-outline",

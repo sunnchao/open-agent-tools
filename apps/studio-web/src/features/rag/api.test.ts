@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getQualityReport, submitQueryFeedback, updateDocument, uploadDocuments } from "./api.js";
+import {
+  getQualityReport,
+  queryKnowledge,
+  submitQueryFeedback,
+  updateDocument,
+  uploadDocuments,
+} from "./api.js";
 
 describe("RAG Studio API", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -68,5 +74,68 @@ describe("RAG Studio API", () => {
       "/api/admin/rag/analytics/quality-report?days=30",
       undefined,
     );
+  });
+
+  it("passes graph:false through to the query endpoint when graph enhancement is off", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ queryId: "q1", chunks: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await queryKnowledge({ query: "部署", topK: 5, generate: false, graph: false });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/rag/query",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ query: "部署", topK: 5, generate: false, graph: false }),
+      }),
+    );
+  });
+
+  it("sends graphHops together with the graph switch", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ queryId: "q2", chunks: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await queryKnowledge({
+      query: "部署",
+      topK: 3,
+      generate: true,
+      sources: ["guide.md"],
+      graph: true,
+      graphHops: 3,
+    });
+
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({
+      query: "部署",
+      topK: 3,
+      generate: true,
+      sources: ["guide.md"],
+      graph: true,
+      graphHops: 3,
+    });
+  });
+
+  it("keeps the request body unchanged when graph options are omitted", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ queryId: "q3", chunks: [] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await queryKnowledge({ query: "部署", topK: 5, generate: false });
+
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({
+      query: "部署",
+      topK: 5,
+      generate: false,
+    });
   });
 });

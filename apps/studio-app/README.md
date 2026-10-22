@@ -1,6 +1,8 @@
 # Studio App（React Native / Expo）
 
-`@open-agent-tools/studio-app` 是 `studio-web` 的移动端对等实现：同一套 Agent Server（`:3000`）与 MCP Control Plane（`:4200`）接口，覆盖对话、MCP、知识库、连接器、图谱、问数、报表、工作流、设置九大工作区。
+`@open-agent-tools/studio-app` 是 `studio-web` 的移动端对等实现：同一套 Agent Server（`:3000`）与 MCP Control Plane（`:4200`）接口，覆盖对话、MCP、知识库（含图谱增强与图谱工具）、连接器、问数、报表、工作流、设置八大工作区。
+
+> 知识图谱已并入知识库：移动端不再有独立「图谱」工作区，图谱检索、实体浏览、关系分布与同步对账都位于知识库页面内；历史 `graph` tab 值会自动降级为 `rag`。
 
 ## 运行
 

@@ -198,6 +198,9 @@ export function buildCragController(opts: GraphRouterOptions): CragController {
       const result = await rag.retrieve(query, {
         topK: rOpts.topK ?? 5,
         sources: rOpts.sources,
+        // CRAG 自己注册了独立的 graph 域；block 域必须关闭图谱第三路，
+        // 否则同一份子图证据会被两路重复计入，改变既有 CRAG 的评估口径。
+        graph: false,
       });
       return {
         chunks: result.chunks.map((c) => ({

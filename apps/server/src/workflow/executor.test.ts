@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 import {
   executeWorkflow,
   executeWorkflowNodeTest,
+  normalizeGraphHops,
   validateWorkflow,
+  type WorkflowEvent,
   type WorkflowRunRequest,
 } from "./executor.js";
 
@@ -527,14 +529,18 @@ describe("workflow executor", () => {
     );
   });
 
-  it("runs a graph node with interpolated query", async () => {
+  it("migrates a legacy graph node to a rag node and runs it through retrieveRag", async () => {
+    let ragCalls = 0;
+    let graphCalls = 0;
+    let received:
+      { query: string; sources: string[]; graph?: boolean; graphHops?: number } | undefined;
     const outputs = await executeWorkflow(
       base({
         input: { query: "OpenAI" },
         nodes: [
           {
             id: "graph",
-            kind: "graph",
+            kind: "graph" as never,
             config: {
               sources: ["guide.md"],
               query: "{{query}} 供应商",
@@ -547,136 +553,191 @@ describe("workflow executor", () => {
       }),
       () => undefined,
       {
-        retrieveRagGraph: async ({ query, sources }) => {
-          assert.deepEqual(sources, ["guide.md"]);
+        retrieveRag: async (input) => {
+          ragCalls += 1;
+          received = input;
           return {
-            formatted: `图谱结果: ${query}`,
-            seeds: [{ id: "openai", name: "openai" }],
+            chunks: [],
+            formatted: `图谱结果: ${input.query}`,
+            graph: { enabled: true, context: "OpenAI -> GPT-4", entities: 2, relations: 1 },
           };
+        },
+        retrieveRagGraph: async () => {
+          graphCalls += 1;
+          return { formatted: "", seeds: [] };
         },
       },
     );
     const nodeOutput = (outputs as Record<string, Record<string, unknown>>).graph;
     assert.ok(nodeOutput);
     assert.equal(nodeOutput.formatted, "图谱结果: OpenAI 供应商");
+    assert.equal(ragCalls, 1, "旧 graph 节点迁移后必须走 retrieveRag");
+    assert.equal(graphCalls, 0, "executor 不应再调用 retrieveRagGraph");
+    assert.equal(received?.graph, true, "迁移后的节点保持图谱增强开启");
+    assert.equal(received?.graphHops, 2);
+    assert.deepEqual(received?.sources, ["guide.md"]);
   });
 
-  it("graph node without query errors", async () => {
-    await assert.rejects(
-      executeWorkflow(
-        base({
-          nodes: [{ id: "graph", kind: "graph", config: { query: "", sources: ["guide.md"] } }],
-          edges: [],
-        }),
-        () => undefined,
-        { retrieveRagGraph: async () => ({ formatted: "", seeds: [] }) },
-      ),
-      /query/,
-    );
-  });
-
-  it("rejects graph nodes without documents in runs and isolated node tests", async () => {
-    let calls = 0;
-    const dependencies = {
-      retrieveRagGraph: async () => {
-        calls += 1;
-        return { formatted: "", seeds: [] };
-      },
-    };
-    for (const sources of [undefined, [], [""], [" "]]) {
-      const node = { id: "graph", kind: "graph" as const, config: { query: "topic", sources } };
-      await assert.rejects(
-        executeWorkflow(base({ nodes: [node] }), () => undefined, dependencies),
-        /文档/,
-      );
-      await assert.rejects(executeWorkflowNodeTest({ node, inputs: {} }, dependencies), /文档/);
-    }
-    assert.equal(calls, 0);
-  });
-
-  it("passes selected graph documents during isolated node tests", async () => {
-    const result = await executeWorkflowNodeTest(
-      {
-        node: {
-          id: "graph",
-          kind: "graph",
-          config: { query: "topic", sources: ["guide.md", "faq.md"] },
-        },
-        inputs: {},
-      },
-      {
-        retrieveRagGraph: async ({ sources }) => {
-          assert.deepEqual(sources, ["guide.md", "faq.md"]);
-          return { formatted: "scoped result", seeds: [] };
-        },
-      },
-    );
-    assert.equal(result.status, "success");
-  });
-
-  it("fails a graph node that retrieves nothing instead of passing an empty string downstream", async () => {
-    // 零命中时 rag-server 返回 200 + formatted:""；若当成 success，
-    // 下游结束节点只会拿到空字符串，最终输出为空却显示运行成功。
-    await assert.rejects(
-      executeWorkflow(
-        base({
-          nodes: [
-            {
-              id: "graph",
-              kind: "graph",
-              config: {
-                query: "卡莎有哪些技能",
-                sources: ["guide.md"],
-                outputs: [{ name: "formatted", selector: "$result.formatted" }],
-              },
-            },
-            {
-              id: "end",
-              kind: "end",
-              config: {
-                inputs: [
-                  {
-                    name: "answer",
-                    source: { type: "node", nodeId: "graph", output: "formatted" },
-                  },
-                ],
-                outputs: [{ name: "answer", selector: "$inputs.answer" }],
-              },
-            },
-          ],
-          edges: [{ source: "graph", target: "end" }],
-        }),
-        () => undefined,
-        { retrieveRagGraph: async () => ({ formatted: "", seeds: [] }) },
-      ),
-      /未命中任何实体/,
-    );
-  });
-
-  it("keeps a graph node successful when the retrieval returns content", async () => {
-    const events: Array<{ type: string; nodeId?: string }> = [];
-    await executeWorkflow(
+  it("validateWorkflow migrates legacy graph nodes before kind validation", () => {
+    const validation = validateWorkflow(
       base({
         nodes: [
           {
             id: "graph",
-            kind: "graph",
+            kind: "graph" as never,
+            label: "图谱检索",
+            config: { query: "topic", sources: ["guide.md"] },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    assert.equal(validation.nodes[0]!.kind, "rag");
+    // 默认旧名统一改为「知识检索」，避免画布上继续显示已删除的节点类型名。
+    assert.equal(validation.nodes[0]!.label, "知识检索");
+  });
+
+  it("migrates legacy graph nodes in isolated node tests too", async () => {
+    let received: Record<string, unknown> | undefined;
+    const result = await executeWorkflowNodeTest(
+      {
+        node: {
+          id: "legacy-graph",
+          kind: "graph" as never,
+          config: { query: "topic", sources: ["guide.md"] },
+        },
+        inputs: {},
+      },
+      {
+        retrieveRag: async (input) => {
+          received = input as unknown as Record<string, unknown>;
+          return { chunks: [], formatted: "ok", graph: { context: "A -> B" } };
+        },
+      },
+    );
+    assert.equal(result.status, "success");
+    assert.equal(result.metadata.nodeKind, "rag");
+    assert.equal(received?.graph, true);
+  });
+
+  it("passes graph:true by default for rag nodes", async () => {
+    let received: Record<string, unknown> | undefined;
+    await executeWorkflow(
+      base({
+        nodes: [{ id: "rag", kind: "rag", config: { sources: ["guide.md"], query: "q" } }],
+        edges: [],
+      }),
+      () => undefined,
+      {
+        retrieveRag: async (input) => {
+          received = input as unknown as Record<string, unknown>;
+          return { chunks: [], formatted: "" };
+        },
+      },
+    );
+    assert.equal(received?.graph, true);
+    assert.equal(received?.graphHops, 2);
+  });
+
+  it("passes graph:false when the rag node disables graph augmentation", async () => {
+    let received: Record<string, unknown> | undefined;
+    await executeWorkflow(
+      base({
+        nodes: [
+          {
+            id: "rag",
+            kind: "rag",
+            config: { sources: ["guide.md"], query: "q", graph: false, graphHops: 3 },
+          },
+        ],
+        edges: [],
+      }),
+      () => undefined,
+      {
+        retrieveRag: async (input) => {
+          received = input as unknown as Record<string, unknown>;
+          return { chunks: [], formatted: "" };
+        },
+      },
+    );
+    assert.equal(received?.graph, false);
+    assert.equal(received?.graphHops, 3);
+  });
+
+  it("passes graphHops through and clamps out-of-contract values defensively", async () => {
+    const seen: unknown[] = [];
+    for (const graphHops of [1, 2, 4]) {
+      await executeWorkflow(
+        base({
+          nodes: [
+            { id: "rag", kind: "rag", config: { sources: ["guide.md"], query: "q", graphHops } },
+          ],
+          edges: [],
+        }),
+        () => undefined,
+        {
+          retrieveRag: async (input) => {
+            seen.push(input.graphHops);
+            return { chunks: [], formatted: "" };
+          },
+        },
+      );
+    }
+    assert.deepEqual(seen, [1, 2, 4]);
+    // 合法值原样透传；非常规来源的越界/非整数值在 runNode 侧兜底收敛。
+    assert.equal(normalizeGraphHops(0), 1);
+    assert.equal(normalizeGraphHops(9), 4);
+    assert.equal(normalizeGraphHops(2.7), 2);
+    assert.equal(normalizeGraphHops("3"), 3);
+    assert.equal(normalizeGraphHops(undefined), 2);
+    assert.equal(normalizeGraphHops(null), 2);
+    assert.equal(normalizeGraphHops(""), 2);
+    assert.equal(normalizeGraphHops("abc"), 2);
+  });
+
+  it("returns graph context from retrieveRag on the rag node result", async () => {
+    const events: WorkflowEvent[] = [];
+    await executeWorkflow(
+      base({
+        nodes: [
+          {
+            id: "rag",
+            kind: "rag",
             config: {
-              query: "topic",
               sources: ["guide.md"],
-              outputs: [{ name: "formatted", selector: "$result.formatted" }],
+              query: "q",
+              outputs: [
+                { name: "formatted", selector: "$result.formatted" },
+                { name: "graph", selector: "$result.graph" },
+              ],
             },
           },
         ],
         edges: [],
       }),
-      (event) => events.push(event as { type: string; nodeId?: string }),
+      (event) => events.push(event),
       {
-        retrieveRagGraph: async () => ({ formatted: "命中内容", seeds: [{ id: "a", name: "A" }] }),
+        retrieveRag: async () => ({
+          queryId: "q1",
+          chunks: [{ source: "guide.md", chunkIndex: 0, content: "x" }],
+          formatted: "x",
+          graph: { enabled: true, context: "A -> B", entities: 2, relations: 1, chunkHits: 1 },
+          retrieval: { graphEnabled: true },
+        }),
       },
     );
     const result = events.find((event) => event.type === "node_result");
-    assert.equal(result?.nodeId, "graph");
+    assert.equal(result?.nodeId, "rag");
+    const nodeResult = result?.result as Record<string, unknown>;
+    assert.equal(nodeResult.queryId, "q1");
+    assert.deepEqual(nodeResult.retrieval, { graphEnabled: true });
+    assert.deepEqual(result?.outputs?.graph, {
+      enabled: true,
+      context: "A -> B",
+      entities: 2,
+      relations: 1,
+      chunkHits: 1,
+    });
   });
 });
 

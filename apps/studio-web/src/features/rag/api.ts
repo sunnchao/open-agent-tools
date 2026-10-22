@@ -53,6 +53,9 @@ export interface ChunkInfo {
   hasEmbedding: boolean;
 }
 
+/** 检索通道：向量 / 关键词 / 图谱。后端的图谱第三路与另外两路一起参与 RRF。 */
+export type RetrievalChannel = "vector" | "keyword" | "graph";
+
 export interface RetrievalChannelHit {
   id: string;
   source: string;
@@ -62,15 +65,33 @@ export interface RetrievalChannelHit {
   rank: number;
 }
 
+/** 融合前的图谱候选：seeds 记录该分块由哪些种子实体回溯而来。 */
+export interface GraphChannelHit extends RetrievalChannelHit {
+  seeds: string[];
+}
+
 export interface QueryChunkHit extends RetrievalChannelHit {
   debug?: {
     vectorScore: number | null;
     vectorRank: number | null;
     keywordScore: number | null;
     keywordRank: number | null;
+    /** 图谱通道原始分与排名；旧服务端或未启用图谱时缺省。 */
+    graphScore?: number | null;
+    graphRank?: number | null;
     rrfScore: number;
-    channels: Array<"vector" | "keyword">;
+    channels: RetrievalChannel[];
   };
+}
+
+/** 图谱增强结果：seeds + 子图统计 + 序列化上下文（供展示与解释，不参与引用编号）。 */
+export interface GraphQueryAugmentation {
+  enabled: boolean;
+  seeds: Array<{ id: string; name: string; type: string }>;
+  entities: number;
+  relations: number;
+  chunkHits: number;
+  context: string;
 }
 
 export interface RetrievalPayload {
@@ -78,9 +99,19 @@ export interface RetrievalPayload {
   embeddingsEnabled: boolean;
   candidates: number;
   rrfK: number;
-  timingsMs: { vectorMs: number | null; keywordMs: number; fusionMs: number };
+  timingsMs: {
+    vectorMs: number | null;
+    keywordMs: number;
+    /** 图谱通道耗时；未启用时后端可能缺省。 */
+    graphMs?: number | null;
+    fusionMs: number;
+  };
   vectorHits: RetrievalChannelHit[];
   keywordHits: RetrievalChannelHit[];
+  /** 图谱通道是否参与本次检索；旧服务端缺省时前端按未知处理。 */
+  graphEnabled?: boolean;
+  /** 融合前的图谱候选（含种子实体名），用于解释第三路召回。 */
+  graphHits?: GraphChannelHit[];
 }
 
 export interface QueryResult {
@@ -88,8 +119,10 @@ export interface QueryResult {
   queryId: string;
   query: string;
   chunks: QueryChunkHit[];
-  /** 双路明细：与 chunks[].debug 同源，老服务端缺失时前端降级只展示 RRF。 */
+  /** 检索明细：与 chunks[].debug 同源，老服务端缺失时前端降级只展示 RRF。 */
   retrieval?: RetrievalPayload;
+  /** 图谱增强结果；老服务端或显式关闭图谱时缺省。 */
+  graph?: GraphQueryAugmentation;
   answer: string | null;
   generate: boolean;
   llmAvailable: boolean;
@@ -102,8 +135,10 @@ export interface QueryDetailTraceChunk extends RetrievalChannelHit {
   vectorRank: number | null;
   keywordScore: number | null;
   keywordRank: number | null;
+  graphScore?: number | null;
+  graphRank?: number | null;
   rrfScore: number;
-  channels: Array<"vector" | "keyword">;
+  channels: RetrievalChannel[];
 }
 
 export interface QueryDetail {
@@ -130,11 +165,20 @@ export interface QueryDetail {
     embeddingsEnabled: boolean;
     candidates: number;
     rrfK: number;
-    timingsMs: { vectorMs: number | null; keywordMs: number; fusionMs: number };
+    timingsMs: {
+      vectorMs: number | null;
+      keywordMs: number;
+      graphMs?: number | null;
+      fusionMs: number;
+    };
     visibleSources?: string[];
     viewerGroups?: string[];
     vectorHits: QueryDetailTraceHit[];
     keywordHits: QueryDetailTraceHit[];
+    /** 图谱候选与序列化上下文；旧 trace 没有该字段。 */
+    graphEnabled?: boolean;
+    graphHits?: QueryDetailTraceHit[];
+    graphContext?: string | null;
     fused: QueryDetailTraceChunk[];
     formatted?: string | null;
     answer?: string | null;
@@ -266,6 +310,9 @@ export function queryKnowledge(input: {
   topK: number;
   generate: boolean;
   sources?: string[];
+  /** false 显式关闭图谱第三路；缺省时由服务端按配置决定。 */
+  graph?: boolean;
+  graphHops?: number;
 }): Promise<QueryResult> {
   return request("/query", {
     method: "POST",

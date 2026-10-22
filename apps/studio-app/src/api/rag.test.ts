@@ -57,4 +57,19 @@ describe("rag api", () => {
     expect(urls[4]).toBe("http://a:3000/api/admin/rag/query");
     expect(fetchMock.mock.calls[8]?.[1]?.body).toBeInstanceOf(FormData);
   });
+
+  it("passes graph toggle and hops through to the query endpoint", async () => {
+    setAuthMemory({ agentUrl: "http://a:3000" });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({ queryId: "q", chunks: [] }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await queryKnowledge({ query: "q", topK: 5, generate: false, graph: false });
+    await queryKnowledge({ query: "q", topK: 5, generate: false, graphHops: 3 });
+    const bodies = fetchMock.mock.calls.map((call) =>
+      JSON.parse(String((call[1] as RequestInit | undefined)?.body)),
+    );
+    expect(bodies[0]).toMatchObject({ query: "q", graph: false });
+    expect(bodies[1]).toMatchObject({ query: "q", graphHops: 3 });
+  });
 });

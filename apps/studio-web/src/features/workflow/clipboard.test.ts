@@ -64,6 +64,41 @@ it("accepts remapped internal sources and checks external sources against the de
   expect(() => assertSelectionSources(external.nodes, [upstream])).toThrow("上游节点");
 });
 
+it("migrates a legacy graph node pasted from an older selection", () => {
+  // 旧剪贴板内容：kind 为已下线的 "graph"，parseSelection 必须迁移而不是拒绝。
+  const text = JSON.stringify({
+    format: "open-agent-tools/workflow-selection",
+    version: 1,
+    graph: {
+      name: "selection",
+      nodes: [
+        {
+          id: "g",
+          type: "studio",
+          position: { x: 0, y: 0 },
+          data: {
+            id: "g",
+            kind: "graph",
+            label: "图谱检索",
+            description: "",
+            status: "idle",
+            config: {
+              sources: ["guide.md"],
+              query: "topic",
+              outputs: [{ name: "formatted", selector: "$result.formatted" }],
+            },
+          },
+        },
+      ],
+      edges: [],
+    },
+  });
+  const parsed = parseSelection(text);
+  expect(parsed.nodes[0]?.data.kind).toBe("rag");
+  expect(parsed.nodes[0]?.data.config.graph).toBe(true);
+  expect(parsed.nodes[0]?.data.config.sources).toEqual(["guide.md"]);
+});
+
 it("removes fixed HTTP credentials from copied and externally pasted selections", () => {
   const node = createNode(
     "h",

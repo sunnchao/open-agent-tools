@@ -22,6 +22,7 @@ import { startPublishedWorkflow } from "../workflows/runtime.js";
 import { graphToRunNodes } from "../workflows/types.js";
 import {
   cachedNodesFromEvents,
+  migrateLegacyGraphNodes,
   prepareResumeCheckpoint,
   type WorkflowResumeCheckpoint,
 } from "@open-agent-tools/workflow-contracts";
@@ -33,6 +34,11 @@ workflowRouter.post("/api/workflow/run", async (req: Request, res: Response) => 
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     res.status(400).json({ error: "workflow request is required" });
     return;
+  }
+  // 旧草稿可能仍带 kind:"graph" 节点。这里在进入续跑比对与执行前统一迁移，
+  // 否则 resume 会把「未迁移的当前节点」与「已迁移的历史快照」判成节点已修改。
+  if (Array.isArray(request.nodes)) {
+    request = { ...request, nodes: migrateLegacyGraphNodes(request.nodes) };
   }
   let workflow: ReturnType<typeof getWorkflow> = null;
   if (request.workflowId !== undefined) {

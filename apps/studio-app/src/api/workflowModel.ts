@@ -2,7 +2,9 @@
 import {
   conditionRouteIssues,
   effectiveNodeConfig,
+  isLegacyGraphNode,
   isVisualCondition,
+  migrateLegacyGraphNode,
   runVariables,
   variableIssues,
   resultFields,
@@ -82,8 +84,12 @@ export type { ConditionCase, RunVariable, VariableIssue };
 export const palette: PaletteItem[] = [
   { kind: "start", label: "开始", description: "工作流入口", group: "输入" },
   { kind: "input", label: "用户输入", description: "定义输入变量", group: "输入" },
-  { kind: "rag", label: "知识检索", description: "召回知识片段", group: "知识与模型" },
-  { kind: "graph", label: "图谱检索", description: "子图多跳扩展", group: "知识与模型" },
+  {
+    kind: "rag",
+    label: "知识检索",
+    description: "向量+关键词+图谱多路召回",
+    group: "知识与模型",
+  },
   { kind: "sql", label: "SQL 问数", description: "自然语言查询数据库", group: "工具与逻辑" },
   { kind: "llm", label: "LLM", description: "生成或理解文本", group: "知识与模型" },
   { kind: "mcp", label: "MCP Tool", description: "调用 MCP 工具", group: "工具与逻辑" },
@@ -100,7 +106,6 @@ export const NODE_KINDS: NodeKind[] = [
   "start",
   "input",
   "rag",
-  "graph",
   "sql",
   "llm",
   "mcp",
@@ -143,7 +148,7 @@ export function nodeOutputs(data: { config: Record<string, unknown> }): NodeOutp
 export function migrateNodeData(
   data: {
     id?: string;
-    kind: NodeKind;
+    kind: NodeKind | "graph";
     label?: string;
     description?: string;
     config?: Record<string, unknown>;
@@ -157,8 +162,18 @@ export function migrateNodeData(
   status: NodeRunStatus;
   config: Record<string, WorkflowConfigValue>;
 } {
-  const kind = data.kind;
-  const raw = (data.config ?? {}) as Record<string, unknown>;
+  // 旧版独立「图谱检索」节点已并入知识检索（rag + config.graph），读取历史草稿时先迁移。
+  const migrated = isLegacyGraphNode(data)
+    ? migrateLegacyGraphNode({
+        id: data.id,
+        kind: data.kind,
+        label: data.label,
+        description: data.description,
+        config: data.config,
+      })
+    : data;
+  const kind = migrated.kind as NodeKind;
+  const raw = (migrated.config ?? {}) as Record<string, unknown>;
   const config = {
     ...defaultConfig(kind),
     ...(raw as Record<string, WorkflowConfigValue>),
@@ -170,10 +185,10 @@ export function migrateNodeData(
     delete config.tool;
   }
   return {
-    id: typeof data.id === "string" && data.id ? data.id : (nodeId ?? ""),
+    id: typeof migrated.id === "string" && migrated.id ? migrated.id : (nodeId ?? ""),
     kind,
-    label: data.label ?? palette.find((p) => p.kind === kind)?.label ?? kind,
-    description: data.description ?? "",
+    label: migrated.label ?? palette.find((p) => p.kind === kind)?.label ?? kind,
+    description: migrated.description ?? "",
     status: "idle",
     config,
   };

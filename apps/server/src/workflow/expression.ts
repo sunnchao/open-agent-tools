@@ -141,7 +141,8 @@ class Parser {
   }
 
   private parseUnary(): unknown {
-    if (this.matchOperator("!")) return !Boolean(this.parseUnary());
+    // `!x` 与 `!Boolean(x)` 的求值语义完全一致，但前者不会被 no-extra-boolean-cast 判为冗余。
+    if (this.matchOperator("!")) return !this.parseUnary();
     return this.parsePrimary();
   }
 

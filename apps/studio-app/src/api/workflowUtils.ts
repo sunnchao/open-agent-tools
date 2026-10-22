@@ -1,10 +1,12 @@
 // RN 版工作流周边纯函数：与 Web 版 nodeTest/runEdges/runHistory/runOutput/clipboard/io 同语义，去除 DOM/xyflow 强依赖。
 import {
+  migrateLegacyGraphNode,
   nodeConfigSchemas,
   portableHttpConfig,
   runVariables,
   workflowFileSchema,
   workflowGraphSchema,
+  type LegacyGraphNodeLike,
 } from "@open-agent-tools/workflow-contracts";
 import { createEdge, createNode, nodeInputs, nodeOutputs, snapshotGraph } from "./workflowModel";
 import type {
@@ -168,6 +170,29 @@ export function canConnectTarget(
 
 // ---- 导出/导入（去凭据，与 Web io.ts 同策略简化版） ----
 export const workflowFileSizeLimit = 2 * 1024 * 1024;
+
+/**
+ * 兼容旧文件：独立「图谱检索」节点已并入知识检索，旧导出文件里仍可能是 kind:"graph"。
+ * 在 schema 校验前先把这些节点迁移成 rag，否则 workflowGraphSchema 会直接拒绝整个文件。
+ *
+ * 注意：导入文件/剪贴板用的是画布节点结构（kind 位于 node.data.kind），
+ * 需逐个迁移 data；migrateLegacyGraphNode 对非 graph 节点会原样返回。
+ */
+function migrateLegacyGraphPayload<T>(graph: T): T {
+  if (!graph || typeof graph !== "object") return graph;
+  const record = graph as { nodes?: unknown };
+  if (!Array.isArray(record.nodes)) return graph;
+  const nodes = record.nodes.map((node) => {
+    if (!node || typeof node !== "object") return node;
+    const data = (node as { data?: unknown }).data;
+    if (!data || typeof data !== "object") return node;
+    return {
+      ...(node as object),
+      data: migrateLegacyGraphNode(data as LegacyGraphNodeLike),
+    };
+  });
+  return { ...(graph as object), nodes } as T;
+}
 const secretField =
   /(api[-_]?key|authorization|password|client[-_]?secret|provider[-_]?key|(^|[_-])(access|refresh|bearer)[-_]?token|(^|[_-])secret($|[_-]))/i;
 function assertNoCredentials(value: unknown, path = "file"): void {
@@ -213,6 +238,11 @@ export function parseWorkflowFile(text: string): WorkflowSnapshot {
     value = JSON.parse(text);
   } catch {
     throw new Error("文件不是合法 JSON");
+  }
+  // 旧导出文件可能含已废弃的 graph 节点，先迁移再走 schema 校验。
+  if (value && typeof value === "object" && "graph" in value) {
+    const file = value as { graph?: unknown };
+    value = { ...(value as object), graph: migrateLegacyGraphPayload(file.graph) };
   }
   const parsed = workflowFileSchema.safeParse(value);
   if (!parsed.success)
@@ -270,7 +300,8 @@ export function parseSelection(text: string): { nodes: WorkflowNode[]; edges: Wo
   }
   if (!value || value.format !== clipboardFormat || value.version !== 1)
     throw new Error("剪贴板不含支持的工作流节点");
-  const parsed = workflowGraphSchema.safeParse(value.graph);
+  // 旧剪贴板内容同样可能含 graph 节点，迁移后再校验。
+  const parsed = workflowGraphSchema.safeParse(migrateLegacyGraphPayload(value.graph));
   if (!parsed.success) throw new Error(`剪贴板节点格式无效：${parsed.error.issues[0]?.message}`);
   if (!parsed.data.nodes.length) throw new Error("剪贴板未包含任何节点");
   const nodes = parsed.data.nodes.map((n, index) => {

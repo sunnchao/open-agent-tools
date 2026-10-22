@@ -33,16 +33,10 @@ import {
   type OnNodesChange,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import {
-  ApartmentOutlined,
-  ReloadOutlined,
-  SyncOutlined,
-} from "../../lib/icons.js";
-import { StudioPage } from "../../components/studio/StudioPageHeader.js";
-import { StudioNotice, type StudioNoticeValue } from "../../components/studio/StudioNotice.js";
+import { ApartmentOutlined, ReloadOutlined, SyncOutlined } from "../../lib/icons.js";
 import { UsageTag } from "../../components/UsageTag.js";
 import type { MessageUsage } from "../../types.js";
-import { listDocuments, type DocumentSource } from "../rag/api.js";
+import type { DocumentSource } from "./api.js";
 import {
   documentGraph,
   neighborsOf,
@@ -55,14 +49,14 @@ import {
   type GraphExport,
   type GraphNode,
   type SyncStatus,
-} from "./api.js";
-import { RelationEdge } from "./RelationEdge.js";
+} from "../graph/api.js";
+import { RelationEdge } from "../graph/RelationEdge.js";
 import {
   parallelCurveOffsets,
   RELATION_PORTS,
   rerouteRelationEdges,
   type RelationFlowEdge,
-} from "./relationRouting.js";
+} from "../graph/relationRouting.js";
 
 /** 实体类型 → 配色（浅色主题）。 */
 const TYPE_COLORS: Record<string, { fill: string; stroke: string; text: string }> = {
@@ -385,11 +379,28 @@ function GraphSyncBar({
   );
 }
 
-export function GraphWorkspace() {
+export interface GraphPanelProps {
+  /** 受控文档来源：与知识库左侧「知识来源」列表共享同一份选中状态。 */
+  source: string | null;
+  onSourceChange: (source: string | null) => void;
+  /** 父级已经加载好的文档列表，避免面板重复请求 /documents。 */
+  documents: DocumentSource[];
+  documentsLoading: boolean;
+}
+
+/**
+ * 知识库内的图谱视图。
+ *
+ * 与原独立 GraphWorkspace 的差异：不再自己管理文档列表与选中来源（由 RagWorkspace 统一持有），
+ * 这样「文档」「图谱」两个视图共享右侧选中文档，点左侧文档即可联动。
+ */
+function GraphPanelContent({
+  source,
+  onSourceChange,
+  documents,
+  documentsLoading,
+}: GraphPanelProps) {
   const { message } = App.useApp();
-  const [documents, setDocuments] = useState<DocumentSource[]>([]);
-  const [documentsLoading, setDocumentsLoading] = useState(true);
-  const [source, setSource] = useState<string>();
   const [documentData, setDocumentData] = useState<DocumentGraph | null>(null);
   const [graphRevision, setGraphRevision] = useState(0);
   const requestId = useRef(0);
@@ -402,7 +413,9 @@ export function GraphWorkspace() {
     targetName: string;
   } | null>(null);
   const [busy, setBusy] = useState<"search" | "expand" | "list" | null>(null);
-  const [notice, setNotice] = useState<StudioNoticeValue | null>(null);
+  const [notice, setNotice] = useState<{ type: "success" | "error" | "info"; text: string } | null>(
+    null,
+  );
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [usage, setUsage] = useState<MessageUsage>();
@@ -413,19 +426,10 @@ export function GraphWorkspace() {
     for (const edge of documentData?.edges ?? []) {
       counts.set(edge.relType, (counts.get(edge.relType) ?? 0) + 1);
     }
-    return [...counts].map(([relType, count]) => ({ relType, count })).sort((a, b) => b.count - a.count);
+    return [...counts]
+      .map(([relType, count]) => ({ relType, count }))
+      .sort((a, b) => b.count - a.count);
   }, [documentData]);
-
-  const refreshDocuments = useCallback(async () => {
-    setDocumentsLoading(true);
-    try {
-      setDocuments((await listDocuments()).sources);
-    } catch (reason) {
-      setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
-    } finally {
-      setDocumentsLoading(false);
-    }
-  }, []);
 
   const refreshSync = useCallback(async () => {
     try {
@@ -461,23 +465,24 @@ export function GraphWorkspace() {
   }, [source]);
 
   useEffect(() => {
-    void refreshDocuments();
     void refreshSync();
-  }, [refreshDocuments, refreshSync]);
+  }, [refreshSync]);
 
   useEffect(() => {
     void refreshDocument();
-    return () => { requestId.current += 1; };
+    return () => {
+      requestId.current += 1;
+    };
   }, [refreshDocument, graphRevision]);
 
   useEffect(() => {
     if (source && !documentsLoading && !documents.some((document) => document.source === source)) {
       requestId.current += 1;
-      setSource(undefined);
+      onSourceChange(null);
       setQuery("");
       setNotice({ type: "error", text: "所选文档已失效，请重新选择文档" });
     }
-  }, [documents, documentsLoading, source]);
+  }, [documents, documentsLoading, onSourceChange, source]);
 
   // 后台抽取是异步的，构建期间轮询直到落地，否则用户看不到图谱何时可用
   const inProgress = (sync?.building.length ?? 0) + (sync?.queued ?? 0) > 0;
@@ -503,16 +508,13 @@ export function GraphWorkspace() {
       setSync(result.status);
       setBuildUsage(result.usage);
       setGraphRevision((value) => value + 1);
-      await Promise.all([refreshDocuments(), refreshSync()]);
+      await refreshSync();
       const parts: string[] = [];
       if (result.rebuilt.length > 0) parts.push(`重建 ${result.rebuilt.length} 篇`);
       if (result.removed.length > 0) parts.push(`清理 ${result.removed.length} 项残留`);
       if (result.failed.length > 0) parts.push(`${result.failed.length} 篇失败`);
       const text = parts.length > 0 ? `同步完成：${parts.join("，")}` : "已是最新状态";
-      setNotice({
-        type: result.failed.length > 0 ? "error" : "success",
-        text,
-      });
+      setNotice({ type: result.failed.length > 0 ? "error" : "success", text });
       if (result.failed.length === 0) void message.success(text);
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
@@ -524,27 +526,24 @@ export function GraphWorkspace() {
   const runSearch = async (searchQuery = query) => {
     const trimmed = searchQuery.trim();
     if (!trimmed) return;
-    if (!source) {
-      setNotice({ type: "error", text: "请先选择文档，再检索图谱" });
-      return;
-    }
     const currentRequest = ++requestId.current;
     setBusy("search");
     setNotice(null);
     setUsage(undefined);
     try {
-      const result = await retrieveGraph(trimmed, 2, [source]);
+      // 选了文档就限定在该文档内检索；未选文档时省略 sources，走全库图谱检索。
+      const result = await retrieveGraph(trimmed, 2, source ? [source] : undefined);
       if (currentRequest !== requestId.current) return;
       setUsage(result.usage);
       setSelected(null);
       setSelectedRelation(null);
       if (!result.subgraph || result.subgraph.nodes.length === 0) {
         setExportData(null);
-        setNotice({ type: "error", text: "所选文档中未找到相关实体" });
+        setNotice({ type: "error", text: "未找到相关实体" });
         return;
       }
       setExportData(result.subgraph);
-      const hitText = `命中种子: ${result.seeds.map((s) => s.name).join("、") || "无"}`;
+      const hitText = `命中种子: ${result.seeds.map((seed) => seed.name).join("、") || "无"}`;
       setNotice({ type: "success", text: hitText });
     } catch (reason) {
       if (currentRequest !== requestId.current) return;
@@ -555,12 +554,12 @@ export function GraphWorkspace() {
   };
 
   const expandEntity = async (entityId: string) => {
-    if (!source) return;
     const currentRequest = ++requestId.current;
     setBusy("expand");
     setSelectedRelation(null);
     try {
-      const neighbors = await neighborsOf(entityId, 2, source);
+      // 全库模式（未选文档）下也允许展开，此时不加 source 限制。
+      const neighbors = await neighborsOf(entityId, 2, source ?? undefined);
       if (currentRequest !== requestId.current) return;
       setSelected(entities.find((entity) => entity.id === entityId) ?? null);
       setExportData((current) => mergeExport(current, neighbors));
@@ -579,241 +578,299 @@ export function GraphWorkspace() {
     setSelectedRelation({ edge, sourceName, targetName });
   };
 
+  const resetView = (nextSource: string | null) => {
+    requestId.current += 1;
+    onSourceChange(nextSource);
+    setQuery("");
+    setNotice(null);
+    setDocumentData(null);
+    setExportData(null);
+    setSelected(null);
+    setSelectedRelation(null);
+    setUsage(undefined);
+    setBusy(null);
+  };
+
   const stats = exportData?.stats ?? null;
 
   return (
-    <StudioPage
-      eyebrow="上下文工程 / 知识图谱"
-      title="知识图谱"
-      description="先选择文档，查看该文档的完整实体与关系，再在文档范围内检索子图。"
-      actions={
-        <>
-          <Badge status="success" text="GraphRAG" />
-          <Button
-            icon={<ReloadOutlined spin={busy === "list"} />}
-            onClick={() => {
-              setNotice(null);
-              void refreshDocument();
-              void refreshDocuments();
-              void refreshSync();
-            }}
-          >
-            刷新
-          </Button>
-        </>
-      }
-      extra={<StudioNotice notice={notice} />}
-    >
-      <Flex vertical gap={12} style={{ flex: 1, minHeight: 0, padding: 16, overflowY: "auto" }}>
-        <GraphSyncBar
-          status={sync}
-          syncing={syncing}
-          lastUsage={buildUsage}
-          onReconcile={() => void handleReconcile()}
+    <Flex vertical gap={12} style={{ flex: 1, minWidth: 0, minHeight: 0, overflowY: "auto" }}>
+      {notice ? (
+        <Alert
+          type={notice.type === "error" ? "error" : notice.type}
+          showIcon
+          closable
+          message={notice.text}
+          onClose={() => setNotice(null)}
         />
-        <Card size="small">
-          <Flex vertical gap={8} style={{ marginBottom: 12 }}>
-            <Typography.Text strong>选择文档</Typography.Text>
-            <Select
-              aria-label="图谱文档"
-              value={source}
-              placeholder="请先选择文档"
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              loading={documentsLoading}
-              options={documents.map((document) => ({
-                value: document.source,
-                label: document.title && document.title !== document.source
-                  ? `${document.title} · ${document.source}`
-                  : document.source,
-              }))}
-              notFoundContent={documentsLoading ? <Spin size="small" /> : "暂无文档，请先上传文档"}
-              onChange={(nextSource: string | undefined) => {
-                requestId.current += 1;
-                setSource(nextSource);
-                setQuery("");
-                setNotice(null);
-                setDocumentData(null);
-                setExportData(null);
-                setSelected(null);
-                setSelectedRelation(null);
-                setUsage(undefined);
-                setBusy(null);
-              }}
-            />
-          </Flex>
-          <Flex gap={8} align="center" wrap>
-            <Input.Search
-              aria-label="子图检索"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onSearch={() => void runSearch()}
-              placeholder={source ? "在当前文档内搜索实体或问题" : "请先选择文档"}
-              disabled={!source || !documentData || busy !== null}
-              loading={busy === "search"}
-              enterButton="子图检索"
-              style={{ flex: "1 1 240px" }}
-            />
+      ) : null}
+      <GraphSyncBar
+        status={sync}
+        syncing={syncing}
+        lastUsage={buildUsage}
+        onReconcile={() => void handleReconcile()}
+      />
+      <Card size="small">
+        <Flex vertical gap={8} style={{ marginBottom: 12 }}>
+          <Flex gap={8} align="center" justify="space-between" wrap>
+            <Typography.Text strong>图谱文档</Typography.Text>
             <Button
-              disabled={!documentData || busy !== null}
+              size="small"
+              icon={<ReloadOutlined spin={busy === "list"} />}
               onClick={() => {
-                requestId.current += 1;
-                setQuery("");
-                setUsage(undefined);
-                setSelected(null);
-                setSelectedRelation(null);
                 setNotice(null);
-                setExportData(documentData);
+                void refreshDocument();
+                void refreshSync();
+                setGraphRevision((value) => value + 1);
               }}
             >
-              显示完整图谱
+              刷新
             </Button>
           </Flex>
-          {usage ? (
-            <Typography.Text type="secondary" style={{ display: "block", marginTop: 8, fontSize: 12 }}>
-              <UsageTag usage={usage} />
-            </Typography.Text>
-          ) : null}
+          <Select
+            aria-label="图谱文档"
+            value={source ?? undefined}
+            placeholder="全库检索（不限定文档）"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            loading={documentsLoading}
+            options={documents.map((document) => ({
+              value: document.source,
+              label:
+                document.title && document.title !== document.source
+                  ? `${document.title} · ${document.source}`
+                  : document.source,
+            }))}
+            notFoundContent={documentsLoading ? <Spin size="small" /> : "暂无文档，请先上传文档"}
+            onChange={(nextSource: string | undefined) => resetView(nextSource ?? null)}
+          />
+        </Flex>
+        <Flex gap={8} align="center" wrap>
+          <Input.Search
+            aria-label="子图检索"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onSearch={() => void runSearch()}
+            placeholder={source ? "在当前文档内搜索实体或问题" : "在全库图谱中搜索实体或问题"}
+            disabled={busy !== null}
+            loading={busy === "search"}
+            enterButton="子图检索"
+            style={{ flex: "1 1 240px" }}
+          />
+          <Button
+            disabled={!documentData || busy !== null}
+            onClick={() => {
+              requestId.current += 1;
+              setQuery("");
+              setUsage(undefined);
+              setSelected(null);
+              setSelectedRelation(null);
+              setNotice(null);
+              setExportData(documentData);
+            }}
+          >
+            显示完整图谱
+          </Button>
+        </Flex>
+        {usage ? (
+          <Typography.Text
+            type="secondary"
+            style={{ display: "block", marginTop: 8, fontSize: 12 }}
+          >
+            <UsageTag usage={usage} />
+          </Typography.Text>
+        ) : null}
+      </Card>
+
+      <Flex gap={12} align="flex-start" wrap style={{ flex: "1 1 auto", minHeight: 480 }}>
+        <Card
+          size="small"
+          title="实体索引"
+          extra={<Tag>{entities.length}</Tag>}
+          style={{
+            width: 280,
+            maxWidth: "100%",
+            flex: "0 0 auto",
+            maxHeight: 560,
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+          }}
+          styles={{ body: { padding: 8, minHeight: 0, overflowY: "auto" } }}
+        >
+          {busy === "list" ? (
+            <Flex justify="center" style={{ padding: 24 }}>
+              <Spin aria-label="正在加载实体" />
+            </Flex>
+          ) : entities.length === 0 ? (
+            <Empty description={source ? "该文档暂无实体，请等待建图或同步图谱" : "请先选择文档"} />
+          ) : (
+            <List
+              size="small"
+              dataSource={entities}
+              rowKey="id"
+              renderItem={(entity) => {
+                const color = colorFor(entity.type);
+                return (
+                  <List.Item
+                    onClick={() => {
+                      setQuery(entity.name);
+                      void runSearch(entity.name);
+                    }}
+                    style={{ cursor: "pointer", borderRadius: 8, padding: "6px 8px" }}
+                  >
+                    <List.Item.Meta
+                      avatar={<Badge color={color.stroke} />}
+                      title={
+                        <Typography.Text strong ellipsis style={{ maxWidth: 130 }}>
+                          {entity.name}
+                        </Typography.Text>
+                      }
+                      description={entity.type}
+                    />
+                  </List.Item>
+                );
+              }}
+            />
+          )}
         </Card>
 
-        <Flex gap={12} align="flex-start" wrap style={{ flex: "1 1 auto", minHeight: 480 }}>
-          <Card
-            size="small"
-            title="实体索引"
-            extra={<Tag>{entities.length}</Tag>}
-            style={{ width: 280, maxWidth: "100%", flex: "0 0 auto", maxHeight: 560, overflow: "hidden", display: "flex", flexDirection: "column" }}
-            styles={{ body: { padding: 8, minHeight: 0, overflowY: "auto" } }}
-          >
-            {busy === "list" ? (
-              <Flex justify="center" style={{ padding: 24 }}>
-                <Spin aria-label="正在加载实体" />
+        <Card
+          size="small"
+          title={
+            <Flex gap={8} align="center" justify="space-between" wrap>
+              <Flex gap={8} align="center">
+                <ApartmentOutlined />
+                <Typography.Text strong>
+                  图谱{" "}
+                  {stats
+                    ? `${stats.entities} 实体 · ${stats.relations} 关系`
+                    : source
+                      ? "暂无数据"
+                      : "未选择文档"}
+                </Typography.Text>
               </Flex>
-            ) : entities.length === 0 ? (
-              <Empty description={source ? "该文档暂无实体，请等待建图或同步图谱" : "请先选择文档"} />
-            ) : (
-              <List
-                size="small"
-                dataSource={entities}
-                rowKey="id"
-                renderItem={(entity) => {
-                  const color = colorFor(entity.type);
-                  return (
-                    <List.Item
-                      onClick={() => {
-                        setQuery(entity.name);
-                        void runSearch(entity.name);
-                      }}
-                      style={{ cursor: "pointer", borderRadius: 8, padding: "6px 8px" }}
-                    >
-                      <List.Item.Meta
-                        avatar={<Badge color={color.stroke} />}
-                        title={<Typography.Text strong ellipsis style={{ maxWidth: 130 }}>{entity.name}</Typography.Text>}
-                        description={entity.type}
-                      />
-                    </List.Item>
-                  );
-                }}
-              />
-            )}
-          </Card>
-
-          <Card
-            size="small"
-            title={
-              <Flex gap={8} align="center" justify="space-between" wrap>
-                <Flex gap={8} align="center">
-                  <ApartmentOutlined />
-                  <Typography.Text strong>
-                    图谱 {stats ? `${stats.entities} 实体 · ${stats.relations} 关系` : source ? "暂无数据" : "未选择文档"}
-                  </Typography.Text>
-                </Flex>
-                <Flex gap={4} wrap>
-                  {Object.keys(TYPE_COLORS).map((type) => (
-                    <Tag key={type} color="default">
-                      {type}
-                    </Tag>
-                  ))}
-                </Flex>
+              <Flex gap={4} wrap>
+                {Object.keys(TYPE_COLORS).map((type) => (
+                  <Tag key={type} color="default">
+                    {type}
+                  </Tag>
+                ))}
               </Flex>
-            }
-            style={{ flex: "1 1 320px", minWidth: "min(320px, 100%)", minHeight: 480, display: "flex", flexDirection: "column" }}
-            styles={{ body: { flex: 1, minHeight: 420, padding: 8, display: "flex", flexDirection: "column" } }}
-          >
-            <div style={{ flex: 1, minHeight: 420 }}>
-              {exportData?.nodes.length ? <GraphCanvas
+            </Flex>
+          }
+          style={{
+            flex: "1 1 320px",
+            minWidth: "min(320px, 100%)",
+            minHeight: 480,
+            display: "flex",
+            flexDirection: "column",
+          }}
+          styles={{
+            body: {
+              flex: 1,
+              minHeight: 420,
+              padding: 8,
+              display: "flex",
+              flexDirection: "column",
+            },
+          }}
+        >
+          <div style={{ flex: 1, minHeight: 420 }}>
+            {exportData?.nodes.length ? (
+              <GraphCanvas
                 data={exportData}
                 selectedEdgeId={selectedRelation?.edge.id ?? null}
                 onNodeClick={(id) => void expandEntity(id)}
                 onEdgeClick={selectRelation}
                 onPaneClick={() => setSelectedRelation(null)}
-              /> : (
-                <Flex align="center" justify="center" style={{ minHeight: 420 }}>
-                  {busy === "list" ? <Spin aria-label="正在加载文档图谱" /> : (
-                    <Empty description={!source ? "请先选择文档，查看其实体与关系" : "当前图谱暂无实体"} />
-                  )}
-                </Flex>
-              )}
-            </div>
-            <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: "8px 0 0" }}>
-              点击节点展开 2 跳邻域；点击连线查看关系；拖拽节点调整布局。
-            </Typography.Paragraph>
-          </Card>
-
-          <Card
-            size="small"
-            title={selectedRelation ? "关系详情" : "实体详情"}
-            style={{ width: 300, maxWidth: "100%", flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}
-          >
-            {selectedRelation ? (
-              <Descriptions size="small" column={1} bordered>
-                <Descriptions.Item label="起点">{selectedRelation.sourceName}</Descriptions.Item>
-                <Descriptions.Item label="关系">{selectedRelation.edge.relType}</Descriptions.Item>
-                <Descriptions.Item label="终点">{selectedRelation.targetName}</Descriptions.Item>
-                <Descriptions.Item label="权重">{selectedRelation.edge.weight}</Descriptions.Item>
-              </Descriptions>
-            ) : selected ? (
-              <Flex vertical gap={8}>
-                <Typography.Title level={5} style={{ margin: 0 }}>{selected.name}</Typography.Title>
-                <Tag style={{ alignSelf: "flex-start" }}>{selected.type}</Tag>
-                {Object.keys(selected.props ?? {}).length > 0 ? (
-                  <Descriptions size="small" column={1} bordered>
-                    {Object.entries(selected.props).map(([key, value]) => (
-                      <Descriptions.Item key={key} label={key}>{value}</Descriptions.Item>
-                    ))}
-                  </Descriptions>
+              />
+            ) : (
+              <Flex align="center" justify="center" style={{ minHeight: 420 }}>
+                {busy === "list" ? (
+                  <Spin aria-label="正在加载文档图谱" />
                 ) : (
-                  <Empty description="该实体暂无附加属性（规则抽取通常无 props）。" />
+                  <Empty
+                    description={
+                      !source
+                        ? "选择文档查看完整图谱，或直接输入问题做全库子图检索"
+                        : "当前图谱暂无实体"
+                    }
+                  />
                 )}
               </Flex>
-            ) : (
-              <Empty description="点击图中节点或连线查看详情" />
             )}
-            {relTypes.length > 0 ? (
-              <Card size="small" type="inner" title="关系分布" style={{ marginTop: 12 }}>
-                <List
-                  size="small"
-                  dataSource={relTypes}
-                  rowKey="relType"
-                  renderItem={(item) => (
-                    <List.Item extra={<Tag>{item.count}</Tag>}>
-                      <Typography.Text>{item.relType}</Typography.Text>
-                    </List.Item>
-                  )}
-                />
-              </Card>
-            ) : null}
-          </Card>
-        </Flex>
+          </div>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: "8px 0 0" }}>
+            点击节点展开 2 跳邻域；点击连线查看关系；拖拽节点调整布局。
+          </Typography.Paragraph>
+        </Card>
+
+        <Card
+          size="small"
+          title={selectedRelation ? "关系详情" : "实体详情"}
+          style={{
+            width: 300,
+            maxWidth: "100%",
+            flex: "0 0 auto",
+            maxHeight: "100%",
+            overflowY: "auto",
+          }}
+        >
+          {selectedRelation ? (
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label="起点">{selectedRelation.sourceName}</Descriptions.Item>
+              <Descriptions.Item label="关系">{selectedRelation.edge.relType}</Descriptions.Item>
+              <Descriptions.Item label="终点">{selectedRelation.targetName}</Descriptions.Item>
+              <Descriptions.Item label="权重">{selectedRelation.edge.weight}</Descriptions.Item>
+            </Descriptions>
+          ) : selected ? (
+            <Flex vertical gap={8}>
+              <Typography.Title level={5} style={{ margin: 0 }}>
+                {selected.name}
+              </Typography.Title>
+              <Tag style={{ alignSelf: "flex-start" }}>{selected.type}</Tag>
+              {Object.keys(selected.props ?? {}).length > 0 ? (
+                <Descriptions size="small" column={1} bordered>
+                  {Object.entries(selected.props).map(([key, value]) => (
+                    <Descriptions.Item key={key} label={key}>
+                      {value}
+                    </Descriptions.Item>
+                  ))}
+                </Descriptions>
+              ) : (
+                <Empty description="该实体暂无附加属性（规则抽取通常无 props）。" />
+              )}
+            </Flex>
+          ) : (
+            <Empty description="点击图中节点或连线查看详情" />
+          )}
+          {relTypes.length > 0 ? (
+            <Card size="small" type="inner" title="关系分布" style={{ marginTop: 12 }}>
+              <List
+                size="small"
+                dataSource={relTypes}
+                rowKey="relType"
+                renderItem={(item) => (
+                  <List.Item extra={<Tag>{item.count}</Tag>}>
+                    <Typography.Text>{item.relType}</Typography.Text>
+                  </List.Item>
+                )}
+              />
+            </Card>
+          ) : null}
+        </Card>
       </Flex>
-    </StudioPage>
+    </Flex>
   );
 }
 
-export function GraphWorkspaceWithProvider() {
+/** React Flow 的 hooks 要求祖先提供 Provider，嵌入知识库时由面板自己兜底。 */
+export function GraphPanel(props: GraphPanelProps) {
   return (
     <ReactFlowProvider>
-      <GraphWorkspace />
+      <GraphPanelContent {...props} />
     </ReactFlowProvider>
   );
 }

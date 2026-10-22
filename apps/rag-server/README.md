@@ -1,6 +1,6 @@
 # rag-server · 知识库 API
 
-`@open-agent-tools/rag-server` 为 Studio Web 提供知识库上传、资产目录、分块预览、混合检索、可选 LLM 回答和查询质量运营能力。
+`@open-agent-tools/rag-server` 为 Studio Web 提供知识库上传、资产目录、分块预览、多路混合检索（向量 + 关键词 + 知识图谱）、可选 LLM 回答和查询质量运营能力。
 
 ## 启动
 
@@ -12,17 +12,22 @@ pnpm --filter @open-agent-tools/rag-server dev
 
 ## API
 
-| 方法     | 路径                            | 说明                    |
-| -------- | ------------------------------- | ----------------------- |
-| `GET`    | `/api/health`                   | 能力状态                |
-| `POST`   | `/api/documents`                | 上传 PDF、TXT、Markdown |
-| `GET`    | `/api/documents`                | 来源与分块统计          |
-| `GET`    | `/api/documents/:source/chunks` | 分块详情                |
-| `PATCH`  | `/api/documents/:source`        | 更新展示标题和标签      |
-| `DELETE` | `/api/documents/:source`        | 删除来源                |
-| `POST`   | `/api/query`                    | 混合检索与可选生成回答  |
-| `PUT`    | `/api/query/:queryId/feedback`  | 提交或更新赞/踩反馈     |
-| `GET`    | `/api/analytics/overview`       | 查询质量与运营概览      |
+| 方法     | 路径                            | 说明                                                   |
+| -------- | ------------------------------- | ------------------------------------------------------ |
+| `GET`    | `/api/health`                   | 能力状态（含 `graphRetrieval`）                        |
+| `POST`   | `/api/documents`                | 上传 PDF、TXT、Markdown                                |
+| `GET`    | `/api/documents`                | 来源与分块统计                                         |
+| `GET`    | `/api/documents/:source/chunks` | 分块详情                                               |
+| `PATCH`  | `/api/documents/:source`        | 更新展示标题和标签                                     |
+| `DELETE` | `/api/documents/:source`        | 删除来源（级联清理派生的图谱实体与关系）               |
+| `POST`   | `/api/query`                    | 多路混合检索（向量 + 关键词 + 图谱）与可选生成回答     |
+| `PUT`    | `/api/query/:queryId/feedback`  | 提交或更新赞/踩反馈                                    |
+| `GET`    | `/api/analytics/overview`       | 查询质量与运营概览                                     |
+| `POST`   | `/api/graph/retrieve`           | 子图检索（种子定位 + 多跳扩展，供图谱视图/工作流节点） |
+| `GET`    | `/api/graph/sync-status`        | 知识库与图谱库一致性快照                               |
+| `POST`   | `/api/graph/reconcile`          | 一键对账：清理孤儿并重建缺失/过期来源                  |
+
+`POST /api/query` 请求可带 `graph?: boolean`（默认 `true`）与 `graphHops?: number`（默认 2，限制 1..4）。响应新增 `graph` 对象（`enabled` / `seeds` / `entities` / `relations` / `chunkHits` / `context`），`retrieval` 增加 `graphEnabled`、`graphHits` 与 `timingsMs.graphMs`，`chunks[].debug.channels` 可包含 `"graph"`，并新增 `graphScore` / `graphRank`。部署侧可用 `RAG_GRAPH_RETRIEVAL=false` 全局关闭图谱通道（此时请求体无法再开启）。图谱上下文会作为「【知识图谱】」区块拼入 LLM 提示词。
 
 同名文档重传会在向量生成成功后原子替换分块并递增版本；失败时保留旧版本。历史 SQLite 会自动补齐文档目录。查询响应包含 `queryId`，运营数据默认保留 90 天，可通过 `RAG_QUERY_RETENTION_DAYS` 调整。
 
@@ -33,7 +38,7 @@ pnpm --filter @open-agent-tools/rag-server dev
 
 语义切分必须配置 `OPENAI_API_KEY` 和可用的 Embeddings 模型；能力不可用时 API 返回 400，不会静默退化成固定切分。
 
-环境变量见 `.env.example`。默认数据库为 `apps/rag-server/rag.db`。
+环境变量见 `.env.example`。默认数据库为 `apps/rag-server/rag.db`。图谱库默认 `apps/rag-server/rag-graph.db`；`RAG_GRAPH_RETRIEVAL=false` 可全局关闭图谱检索通道，`RAG_AUTO_EXTRACT=false` 则上传后不自动建图、改由对账触发。
 
 ## 存储后端：SQLite / Elasticsearch
 

@@ -37,6 +37,7 @@ import {
   DislikeOutlined,
   FileTextOutlined,
   LikeOutlined,
+  NodeIndexOutlined,
   ReloadOutlined,
   SaveOutlined,
   SearchOutlined,
@@ -61,12 +62,16 @@ import {
   type ChunkStrategy,
   type DocumentSource,
   type DocumentStats,
+  type GraphQueryAugmentation,
   type QueryDetail,
   type QueryFeedbackRating,
   type QueryResult,
   type QualityReport,
 } from "./api.js";
+import { channelLabel } from "./channelLabel.js";
 import { subscribeChunkTarget } from "./chunkTarget.js";
+import { GraphPanel } from "./GraphPanel.js";
+import { type RagView } from "./ragRoute.js";
 import { UsageTag } from "../../components/UsageTag.js";
 
 interface RagSettings {
@@ -78,9 +83,16 @@ interface RagSettings {
   topK: number;
   generate: boolean;
   restrictToSelected: boolean;
+  /** 图谱增强默认开启：图谱第三路参与 RRF，命中分块与向量/关键词同权融合。 */
+  graphEnhance: boolean;
 }
 
 const defaultSeparators = ["\n\n", "\n", "。", "！", "？", ". ", " "];
+
+/** 三路融合口径说明：放在常量里避免长中文串在 JSX 中被随意折行破坏可读性。 */
+const RRF_CHANNEL_HINT =
+  "RRF 只看排名不看原始分：同一分块在多路排名越靠前，融合分越高。" +
+  "向量分为余弦相似度、关键词分为 BM25、图谱分为子图关系权重，三路绝对值不可直接跨路比较。";
 
 const defaultSettings: RagSettings = {
   chunkSize: 1024,
@@ -91,20 +103,28 @@ const defaultSettings: RagSettings = {
   topK: 5,
   generate: true,
   restrictToSelected: false,
+  graphEnhance: true,
 };
 
-export function RagWorkspace() {
+export interface RagWorkspaceProps {
+  /** 路由传入的初始视图；旧 #/graph 会带 graph。 */
+  initialView?: RagView;
+  /** 路由传入的初始文档；旧 #/graph/<source> 的首段就是文档名。 */
+  initialSource?: string | null;
+}
+
+export function RagWorkspace({ initialView, initialSource }: RagWorkspaceProps) {
   const { message } = App.useApp();
   const settingsInitialized = useRef(false);
   const [stats, setStats] = useState<DocumentStats | null>(null);
-  const [selectedSource, setSelectedSource] = useState<string | null>(null);
+  const [selectedSource, setSelectedSource] = useState<string | null>(initialSource ?? null);
   const [chunks, setChunks] = useState<ChunkInfo[]>([]);
   const [highlightChunkIndex, setHighlightChunkIndex] = useState<number | null>(null);
   const [settings, setSettings] = useState<RagSettings>(defaultSettings);
   const [separatorText, setSeparatorText] = useState(() => separatorsToText(defaultSeparators));
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<QueryResult | null>(null);
-  const [view, setView] = useState<"documents" | "analytics">("documents");
+  const [view, setView] = useState<RagView>(initialView ?? "documents");
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [qualityReport, setQualityReport] = useState<QualityReport | null>(null);
@@ -129,7 +149,12 @@ export function RagWorkspace() {
         if (next.separators) setSeparatorText(separatorsToText(next.separators));
         settingsInitialized.current = true;
       }
-      setSelectedSource((current) => current ?? next.sources[0]?.source ?? null);
+      // 路由指定的文档可能已被删除：回落到第一个来源，避免后续请求 404。
+      setSelectedSource((current) =>
+        current && next.sources.some((document) => document.source === current)
+          ? current
+          : (next.sources[0]?.source ?? null),
+      );
     } catch (reason) {
       setNotice({ type: "error", text: reason instanceof Error ? reason.message : String(reason) });
     } finally {
@@ -155,6 +180,14 @@ export function RagWorkspace() {
 
   useEffect(() => void refresh(), [refresh]);
 
+  // 同一工作区内 hash 变化不会重新挂载组件（App 的 key 是 workspace），
+  // 因此路由参数变化时要主动同步视图与文档；依赖只在路由值真正变化时更新，
+  // 不会覆盖用户在当前页面内的手动选择。
+  useEffect(() => {
+    setView(initialView ?? "documents");
+    if (initialSource) setSelectedSource(initialSource);
+  }, [initialView, initialSource]);
+
   // A4 引用定位:从「对话」工作区点引用跳过来时,定位到对应文档与分块。
   useEffect(
     () =>
@@ -172,7 +205,8 @@ export function RagWorkspace() {
   }, [refreshAnalytics, view]);
 
   useEffect(() => {
-    if (!selectedSource) {
+    // 只有文档视图需要分块预览；图谱/运营分析视图不应额外拉取分块（避免三视图重复请求）。
+    if (view !== "documents" || !selectedSource) {
       setChunks([]);
       return;
     }
@@ -184,7 +218,7 @@ export function RagWorkspace() {
           text: reason instanceof Error ? reason.message : String(reason),
         }),
       );
-  }, [selectedSource]);
+  }, [selectedSource, view]);
 
   const separatorError =
     settings.chunkStrategy === "fixed" ? validateSeparators(settings.separators) : null;
@@ -249,6 +283,9 @@ export function RagWorkspace() {
           topK: settings.topK,
           generate: settings.generate,
           ...(settings.restrictToSelected && selectedSource ? { sources: [selectedSource] } : {}),
+          // 只在关闭时显式传 false：开启时沿用服务端默认（含全局开关与可用性判断），
+          // 避免前端硬编码 true 覆盖掉服务端配置。
+          ...(settings.graphEnhance ? {} : { graph: false }),
         }),
       );
     } catch (reason) {
@@ -370,19 +407,98 @@ export function RagWorkspace() {
     },
   ];
 
+  // 「文档」「图谱」两个视图共用同一份知识来源列表：
+  // 左侧选中哪篇文档，图谱面板就定位到哪篇，不必维护两套选择状态。
+  const sourcesPanel = (
+    <Card
+      className="studio-split-layout__aside"
+      size="small"
+      title="知识来源"
+      extra={<Tag>{stats?.sources.length ?? 0}</Tag>}
+      style={{
+        width: 320,
+        flex: "0 0 auto",
+        maxHeight: "100%",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+      }}
+      styles={{
+        body: {
+          padding: 8,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        },
+      }}
+    >
+      <Upload.Dragger
+        multiple
+        accept=".pdf,.txt,.md"
+        showUploadList={false}
+        disabled={busy === "upload" || Boolean(separatorError) || semanticUnavailable}
+        beforeUpload={(file, fileList) => {
+          void upload(fileList.length > 0 ? Array.from(fileList) : [file as unknown as File]);
+          return false;
+        }}
+      >
+        <Flex vertical align="center" gap={4} style={{ padding: "8px 0" }}>
+          <CloudUploadOutlined style={{ fontSize: 20 }} />
+          <Typography.Text strong style={{ fontSize: 12 }}>
+            {busy === "upload" ? "入库中..." : "拖入文档或点击上传"}
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            PDF、TXT、Markdown
+          </Typography.Text>
+        </Flex>
+      </Upload.Dragger>
+      {busy === "loading" ? (
+        <Flex justify="center" style={{ padding: 24 }}>
+          <Spin aria-label="正在加载知识库" />
+        </Flex>
+      ) : stats?.sources.length === 0 ? (
+        <Empty description="拖入文档以创建知识来源" />
+      ) : (
+        <Table<DocumentSource>
+          size="small"
+          rowKey="source"
+          columns={docColumns}
+          dataSource={stats?.sources ?? []}
+          pagination={
+            (stats?.sources.length ?? 0) > 10 ? { pageSize: 10, showSizeChanger: false } : false
+          }
+          showHeader={false}
+          onRow={(record) => ({
+            onClick: () => {
+              setSelectedSource(record.source);
+              setHighlightChunkIndex(null);
+            },
+            style: {
+              cursor: "pointer",
+              background: record.source === selectedSource ? "var(--studio-selected)" : undefined,
+            },
+          })}
+          locale={{ emptyText: <Empty description="拖入文档以创建知识来源" /> }}
+        />
+      )}
+    </Card>
+  );
+
   return (
     <StudioPage
       eyebrow="上下文工程 / RAG"
       title="知识库"
-      description="上传文档构建知识来源，预览召回片段，分析服务质量。"
+      description="上传文档构建知识来源，检索时向量、关键词与知识图谱三路融合，并分析服务质量。"
       actions={
         <>
-          <Segmented<"documents" | "analytics">
+          <Segmented<RagView>
             aria-label="知识库视图"
             value={view}
             onChange={(value) => setView(value)}
             options={[
               { value: "documents", label: "文档", icon: <FileTextOutlined /> },
+              { value: "graph", label: "图谱", icon: <NodeIndexOutlined /> },
               { value: "analytics", label: "运营分析", icon: <BarChartOutlined /> },
             ]}
           />
@@ -414,6 +530,34 @@ export function RagWorkspace() {
             onDaysChange={setQualityDays}
           />
         </div>
+      ) : view === "graph" ? (
+        <Flex
+          className="studio-split-layout"
+          gap={12}
+          align="flex-start"
+          style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}
+        >
+          {sourcesPanel}
+          <Flex
+            className="studio-split-layout__main"
+            vertical
+            gap={12}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              alignSelf: "stretch",
+              overflow: "hidden",
+            }}
+          >
+            <GraphPanel
+              source={selectedSource}
+              onSourceChange={setSelectedSource}
+              documents={stats?.sources ?? []}
+              documentsLoading={busy === "loading"}
+            />
+          </Flex>
+        </Flex>
       ) : (
         <Flex
           className="studio-split-layout"
@@ -421,82 +565,7 @@ export function RagWorkspace() {
           align="flex-start"
           style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}
         >
-          <Card
-            className="studio-split-layout__aside"
-            size="small"
-            title="知识来源"
-            extra={<Tag>{stats?.sources.length ?? 0}</Tag>}
-            style={{
-              width: 320,
-              flex: "0 0 auto",
-              maxHeight: "100%",
-              overflow: "hidden",
-              display: "flex",
-              flexDirection: "column",
-            }}
-            styles={{
-              body: {
-                padding: 8,
-                overflowY: "auto",
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-              },
-            }}
-          >
-            <Upload.Dragger
-              multiple
-              accept=".pdf,.txt,.md"
-              showUploadList={false}
-              disabled={busy === "upload" || Boolean(separatorError) || semanticUnavailable}
-              beforeUpload={(file, fileList) => {
-                void upload(fileList.length > 0 ? Array.from(fileList) : [file as unknown as File]);
-                return false;
-              }}
-            >
-              <Flex vertical align="center" gap={4} style={{ padding: "8px 0" }}>
-                <CloudUploadOutlined style={{ fontSize: 20 }} />
-                <Typography.Text strong style={{ fontSize: 12 }}>
-                  {busy === "upload" ? "入库中..." : "拖入文档或点击上传"}
-                </Typography.Text>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  PDF、TXT、Markdown
-                </Typography.Text>
-              </Flex>
-            </Upload.Dragger>
-            {busy === "loading" ? (
-              <Flex justify="center" style={{ padding: 24 }}>
-                <Spin aria-label="正在加载知识库" />
-              </Flex>
-            ) : stats?.sources.length === 0 ? (
-              <Empty description="拖入文档以创建知识来源" />
-            ) : (
-              <Table<DocumentSource>
-                size="small"
-                rowKey="source"
-                columns={docColumns}
-                dataSource={stats?.sources ?? []}
-                pagination={
-                  (stats?.sources.length ?? 0) > 10
-                    ? { pageSize: 10, showSizeChanger: false }
-                    : false
-                }
-                showHeader={false}
-                onRow={(record) => ({
-                  onClick: () => {
-                    setSelectedSource(record.source);
-                    setHighlightChunkIndex(null);
-                  },
-                  style: {
-                    cursor: "pointer",
-                    background:
-                      record.source === selectedSource ? "var(--studio-selected)" : undefined,
-                  },
-                })}
-                locale={{ emptyText: <Empty description="拖入文档以创建知识来源" /> }}
-              />
-            )}
-          </Card>
+          {sourcesPanel}
 
           <Flex
             className="studio-split-layout__main"
@@ -652,7 +721,7 @@ export function RagWorkspace() {
               )}
               <Form.Item
                 label={`Top-K ${settings.topK}`}
-                extra="混合检索使用向量 kNN 与 BM25，经 RRF 融合排序。"
+                extra="向量 kNN、BM25 与图谱候选经 RRF 融合排序。"
               >
                 <Slider
                   aria-label="Top-K"
@@ -660,6 +729,13 @@ export function RagWorkspace() {
                   max={10}
                   value={settings.topK}
                   onChange={(value) => setSettings({ ...settings, topK: value })}
+                />
+              </Form.Item>
+              <Form.Item label="图谱增强" extra="用实体关系多路补充召回，命中分块参与 RRF。">
+                <Switch
+                  aria-label="图谱增强"
+                  checked={settings.graphEnhance}
+                  onChange={(checked) => setSettings({ ...settings, graphEnhance: checked })}
                 />
               </Form.Item>
               <Form.Item
@@ -1307,17 +1383,12 @@ function AuditTraceView({ detail }: { detail: QueryDetail }) {
     {
       title: "通道",
       key: "channels",
-      width: 90,
-      render: (_: unknown, record) =>
-        record.channels.length === 2 ? (
-          <Tag color="purple">双路</Tag>
-        ) : record.channels.includes("vector") ? (
-          <Tag color="blue">向量</Tag>
-        ) : record.channels.includes("keyword") ? (
-          <Tag color="green">关键词</Tag>
-        ) : (
-          <Tag>—</Tag>
-        ),
+      width: 110,
+      render: (_: unknown, record) => {
+        // 审计回放与检索预览共用同一套三路标签，避免旧「channels.length === 2」判定把图谱路算错。
+        const tag = channelLabel(record.channels);
+        return <Tag color={tag.color}>{tag.label}</Tag>;
+      },
     },
     {
       title: "RRF",
@@ -1357,6 +1428,22 @@ function AuditTraceView({ detail }: { detail: QueryDetail }) {
         ) : (
           <Typography.Text style={{ fontSize: 12 }}>
             {value.toFixed(4)} #{(record.keywordRank ?? 0) + 1}
+          </Typography.Text>
+        ),
+    },
+    {
+      title: "图谱分",
+      dataIndex: "graphScore",
+      key: "graphScore",
+      width: 110,
+      render: (value: number | null | undefined, record) =>
+        value === null || value === undefined ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            —
+          </Typography.Text>
+        ) : (
+          <Typography.Text style={{ fontSize: 12 }}>
+            {value.toFixed(4)} #{(record.graphRank ?? 0) + 1}
           </Typography.Text>
         ),
     },
@@ -1472,6 +1559,21 @@ function AuditTraceView({ detail }: { detail: QueryDetail }) {
                 ),
               },
               {
+                key: "graph",
+                status: trace.graphEnabled === false ? "wait" : "finish",
+                title:
+                  trace.graphEnabled === false
+                    ? "图谱增强 · 未启用"
+                    : `图谱检索 · ${trace.graphHits?.length ?? 0} 候选`,
+                description: (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {trace.graphEnabled === false
+                      ? "本次请求显式关闭图谱第三路，仅融合向量与关键词"
+                      : `子图回溯真实分块后参与 RRF，耗时 ${trace.timingsMs.graphMs ?? 0} ms`}
+                  </Typography.Text>
+                ),
+              },
+              {
                 key: "rrf",
                 status: "finish",
                 title: `RRF 融合 · k=${trace.rrfK} · 取 Top-${detail.topK}`,
@@ -1535,6 +1637,24 @@ function AuditTraceView({ detail }: { detail: QueryDetail }) {
                   />
                 ),
               },
+              ...(trace.graphEnabled === false
+                ? []
+                : [
+                    {
+                      key: "graph",
+                      label: `图谱候选（${trace.graphHits?.length ?? 0}）· 子图关系权重`,
+                      children: (
+                        <Table
+                          size="small"
+                          rowKey="id"
+                          columns={channelColumns}
+                          dataSource={(trace.graphHits ?? []).slice(0, 30)}
+                          pagination={false}
+                          scroll={{ x: "max-content" }}
+                        />
+                      ),
+                    } as const,
+                  ]),
               ...(trace.formatted
                 ? [
                     {
@@ -1543,6 +1663,19 @@ function AuditTraceView({ detail }: { detail: QueryDetail }) {
                       children: (
                         <Typography.Paragraph code style={{ fontSize: 12 }}>
                           {trace.formatted}
+                        </Typography.Paragraph>
+                      ),
+                    } as const,
+                  ]
+                : []),
+              ...(trace.graphContext
+                ? [
+                    {
+                      key: "graph-context",
+                      label: "知识图谱上下文（参与提示词增强）",
+                      children: (
+                        <Typography.Paragraph code style={{ fontSize: 12, whiteSpace: "pre-wrap" }}>
+                          {trace.graphContext}
                         </Typography.Paragraph>
                       ),
                     } as const,
@@ -1689,6 +1822,7 @@ function QueryPreview({
   onFeedback: (rating: QueryFeedbackRating) => void;
 }) {
   const retrieval = result.retrieval;
+  const graph = result.graph;
   return (
     <Card
       size="small"
@@ -1763,11 +1897,26 @@ function QueryPreview({
                     <Descriptions.Item label="关键词候选">
                       {retrieval.keywordHits.length}
                     </Descriptions.Item>
+                    <Descriptions.Item label="图谱候选">
+                      {retrieval.graphHits?.length ?? 0}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="图谱耗时">
+                      {retrieval.timingsMs.graphMs === undefined ||
+                      retrieval.timingsMs.graphMs === null
+                        ? "—"
+                        : `${retrieval.timingsMs.graphMs} ms`}
+                    </Descriptions.Item>
                   </Descriptions>
+                  {retrieval.graphEnabled === false ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="图谱增强未启用"
+                      description="本次检索只融合向量与关键词两路；开启「图谱增强」后可额外召回实体关系关联的分块。"
+                    />
+                  ) : null}
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    RRF 只看排名不看原始分：同 chunk
-                    在双路排名越靠前融合分越高。向量分为余弦相似度，关键词分为 BM25（ES/SQLite
-                    实现一致，绝对值不可跨路比较）。
+                    {RRF_CHANNEL_HINT}
                   </Typography.Text>
                 </Flex>
               ),
@@ -1779,9 +1928,10 @@ function QueryPreview({
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message="老服务端未返回双路明细，仅展示 RRF 融合分。升级 rag-server 后可区分向量/关键词分数。"
+          message="老服务端未返回检索明细，仅展示 RRF 融合分。升级 rag-server 后可区分向量/关键词/图谱分数。"
         />
       )}
+      <GraphAugmentationCard graph={graph} graphEnabled={retrieval?.graphEnabled} />
       {result.generate ? (
         <Card size="small" type="inner" title="ANSWER" style={{ marginBottom: 12 }}>
           {result.answer ? (
@@ -1799,17 +1949,7 @@ function QueryPreview({
         rowKey="id"
         renderItem={(chunk, index) => {
           const debug = chunk.debug;
-          const channels = debug?.channels ?? [];
-          const channelTag =
-            channels.length === 2 ? (
-              <Tag color="purple">双路命中</Tag>
-            ) : channels.includes("vector") ? (
-              <Tag color="blue">仅向量</Tag>
-            ) : channels.includes("keyword") ? (
-              <Tag color="green">仅关键词</Tag>
-            ) : (
-              <Tag>RRF</Tag>
-            );
+          const tag = channelLabel(debug?.channels ?? []);
           return (
             <List.Item>
               <List.Item.Meta
@@ -1819,7 +1959,7 @@ function QueryPreview({
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {chunk.source} · 第 {chunk.chunkIndex + 1} 段
                     </Typography.Text>
-                    {channelTag}
+                    <Tag color={tag.color}>{tag.label}</Tag>
                   </Flex>
                 }
                 description={
@@ -1862,6 +2002,23 @@ function QueryPreview({
                             : ""}
                         </Tag>
                       </Tooltip>
+                      <Tooltip
+                        title={
+                          debug
+                            ? `图谱分（子图关系权重归一化，候选排名 #${debug.graphRank !== null && debug.graphRank !== undefined ? debug.graphRank + 1 : "-"}）`
+                            : "图谱原始分（老服务端无此字段）"
+                        }
+                      >
+                        <Tag color="volcano">
+                          图谱{" "}
+                          {debug?.graphScore !== null && debug?.graphScore !== undefined
+                            ? debug.graphScore.toFixed(4)
+                            : "—"}
+                          {debug?.graphRank !== null && debug?.graphRank !== undefined
+                            ? ` #${debug.graphRank + 1}`
+                            : ""}
+                        </Tag>
+                      </Tooltip>
                     </Flex>
                     <Typography.Paragraph style={{ fontSize: 12, marginBottom: 0 }}>
                       {chunk.content}
@@ -1873,6 +2030,99 @@ function QueryPreview({
           );
         }}
       />
+    </Card>
+  );
+}
+
+/**
+ * 「知识图谱增强」卡片。
+ *
+ * 命中 0 条或未启用时仍给出明确说明，但不渲染空的种子/上下文区域，
+ * 避免用户以为界面加载失败；完全没有 graph 字段（老服务端）时整卡不渲染。
+ */
+function GraphAugmentationCard({
+  graph,
+  graphEnabled,
+}: {
+  graph?: GraphQueryAugmentation;
+  graphEnabled?: boolean;
+}) {
+  if (!graph) return null;
+  const inactive = graph.enabled === false || graphEnabled === false;
+  const noHits = !inactive && graph.chunkHits === 0;
+  if (inactive || noHits) {
+    // 未启用/未命中时只留一句解释，不渲染空的种子与上下文区块。
+    return (
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="知识图谱增强"
+        description={
+          inactive
+            ? "图谱增强未启用：本次检索仅使用向量与关键词两路。"
+            : "图谱增强已启用，但本次问题未命中任何图谱实体，未产生图谱候选分块。"
+        }
+      />
+    );
+  }
+  return (
+    <Card
+      size="small"
+      type="inner"
+      title="知识图谱增强"
+      extra={<Tag color="volcano">{graph.chunkHits} 分块回溯</Tag>}
+      style={{ marginBottom: 12 }}
+    >
+      <Flex vertical gap={8}>
+        <Flex gap={12} wrap>
+          <Typography.Text style={{ fontSize: 12 }}>
+            实体 <strong>{graph.entities}</strong>
+          </Typography.Text>
+          <Typography.Text style={{ fontSize: 12 }}>
+            关系 <strong>{graph.relations}</strong>
+          </Typography.Text>
+          <Typography.Text style={{ fontSize: 12 }}>
+            回溯分块 <strong>{graph.chunkHits}</strong>
+          </Typography.Text>
+        </Flex>
+        <Flex gap={4} wrap align="center">
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            种子实体：
+          </Typography.Text>
+          {graph.seeds.length === 0 ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              无
+            </Typography.Text>
+          ) : (
+            graph.seeds.map((seed) => (
+              <Tag key={seed.id} color="volcano">
+                {seed.name}
+                {seed.type ? ` · ${seed.type}` : ""}
+              </Tag>
+            ))
+          )}
+        </Flex>
+        {graph.context ? (
+          <Collapse
+            size="small"
+            items={[
+              {
+                key: "graph-context",
+                label: "图谱上下文（子图三元组，参与提示词增强）",
+                children: (
+                  <Typography.Paragraph
+                    code
+                    style={{ fontSize: 12, whiteSpace: "pre-wrap", marginBottom: 0 }}
+                  >
+                    {graph.context}
+                  </Typography.Paragraph>
+                ),
+              },
+            ]}
+          />
+        ) : null}
+      </Flex>
     </Card>
   );
 }

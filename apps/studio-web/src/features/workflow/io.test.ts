@@ -76,6 +76,52 @@ it("rejects invalid references and unavailable RAG resources before creating a w
   ).toThrow("RAG 文档已失效");
 });
 
+it("migrates legacy graph nodes when importing older workflow files", () => {
+  // 构造一份旧版导出文件：中间节点 kind 仍为已下线的 "graph"。
+  const legacy = JSON.parse(serializeWorkflow(echo()));
+  legacy.graph.nodes[1] = {
+    id: "g",
+    type: "studio",
+    position: { x: 280, y: 0 },
+    data: {
+      id: "g",
+      kind: "graph",
+      label: "图谱检索",
+      description: "子图多跳扩展",
+      status: "idle",
+      config: {
+        sources: ["guide.md"],
+        query: "topic",
+        outputs: [{ name: "formatted", selector: "$result.formatted" }],
+      },
+    },
+  };
+  legacy.graph.edges = [
+    { source: "s", target: "g" },
+    { source: "g", target: "e" },
+  ];
+  // 下游 end 节点原本绑定 input 的 query 输出；换成 graph 后需要改绑到迁移节点的 formatted。
+  legacy.graph.nodes[2].data.config.inputs = [
+    { name: "query", source: { type: "node", nodeId: "g", output: "formatted" } },
+  ];
+  const imported = parseWorkflowFile(JSON.stringify(legacy), {
+    rag: { sources: [{ source: "guide.md", chunks: 4 }] },
+    mcp: { services: [], configured: false },
+  } as never);
+  const migrated = imported.nodes.find((node) => node.id === "g");
+  expect(migrated?.data.kind).toBe("rag");
+  expect(migrated?.data.config.graph).toBe(true);
+  expect(migrated?.data.config.graphHops).toBe(2);
+  expect(migrated?.data.config.sources).toEqual(["guide.md"]);
+  expect(migrated?.data.config.outputs).toEqual([
+    { name: "formatted", selector: "$result.formatted" },
+  ]);
+  expect(imported.edges.map((edge) => [edge.source, edge.target])).toEqual([
+    ["s", "g"],
+    ["g", "e"],
+  ]);
+});
+
 it("strips fixed HTTP authentication and literal credential bindings on export and import while keeping an editable draft", () => {
   for (const authorization of [
     { type: "bearer", config: { token: "private-bearer" } },

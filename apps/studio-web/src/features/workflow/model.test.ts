@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ResourceCatalog } from "../resources/api.js";
+import { hydrateWorkflowSnapshot } from "./graph.js";
+import type { WorkflowNode } from "./types.js";
 import {
   migrateNodeData,
   defaultConfig,
@@ -40,8 +42,10 @@ describe("workflow resource model", () => {
     ).toMatchObject({
       sources: ["guide.md"],
       topK: 3,
+      graph: true,
+      graphHops: 2,
       inputs: [],
-      outputs: [],
+      outputs: [{ name: "formatted", selector: "$result.formatted" }],
     });
     expect(
       migrateNodeData(data("mcp", { service: "docs", tool: "search", arguments: "{}" })).config,
@@ -127,32 +131,91 @@ describe("workflow resource model", () => {
     ).toBeNull();
   });
 
-  it("requires explicit, available document scopes for graph nodes", () => {
-    expect(defaultConfig("graph").sources).toEqual([]);
-    expect(migrateNodeData(data("graph", { query: "topic" })).config.sources).toEqual([]);
-    for (const sources of [undefined, []]) {
-      expect(validateNodeResources(data("graph", { sources }), catalog)).toMatch(/至少选择一个文档/);
-    }
-    for (const sources of [[""], [" "], [42]]) {
-      expect(validateNodeResources(data("graph", { sources }), catalog)).toMatch(/配置无效/);
-    }
-    expect(validateNodeResources(data("graph", { sources: ["missing.md"] }), catalog)).toMatch(/已失效/);
-    expect(validateNodeResources(data("graph", { sources: ["guide.md"] }), null)).toMatch(/尚未加载/);
-    expect(validateNodeResources(data("graph", { sources: ["guide.md"] }), {
-      ...catalog, rag: { sources: [], error: "offline" },
-    })).toMatch(/加载失败/);
-    expect(validateNodeResources(data("graph", { sources: ["guide.md"] }), catalog)).toBeNull();
+  it("migrates a legacy graph node into a knowledge-retrieval node with graph enhancement on", () => {
+    // 旧 graph 节点：kind 已不在 NodeKind 联合里，走迁移入口获得 rag 语义。
+    const legacy = {
+      ...data("rag", {}, "graph-1"),
+      kind: "graph",
+      label: "图谱检索",
+      config: {
+        sources: ["guide.md"],
+        query: "topic",
+        outputs: [{ name: "formatted", selector: "$result.formatted" }],
+      },
+    } as unknown as WorkflowNodeData;
+    const migrated = migrateNodeData(legacy);
+    expect(migrated.kind).toBe("rag");
+    expect(migrated.config.graph).toBe(true);
+    expect(migrated.config.graphHops).toBe(2);
+    expect(migrated.config.sources).toEqual(["guide.md"]);
+    expect(migrated.config.query).toBe("topic");
+    expect(migrated.config.outputs).toEqual([{ name: "formatted", selector: "$result.formatted" }]);
+
+    // 幂等：迁移后的节点再次迁移不应再变化。
+    expect(migrateNodeData(migrated)).toEqual(migrated);
   });
 
-  it("includes unconfigured graph documents in workflow node checks", () => {
-    const nodes = [data("start", {}, "start"), data("graph", { query: "topic" }, "graph"), data("end", {
-      inputs: [{ name: "answer", source: { type: "literal", value: "done" } }],
-      outputs: [{ name: "answer", selector: "$inputs.answer" }],
-    }, "end")]
-      .map((node) => ({ id: node.id, data: node }));
-    const edges = [{ source: "start", target: "graph" }, { source: "graph", target: "end" }];
+  it("migrates legacy graph nodes when hydrating a local draft", () => {
+    // 本地草稿（localStorage）与历史快照都走 hydrateWorkflowSnapshot，
+    // 这里验证旧 graph 节点在该入口同样被迁移，避免打开旧草稿白屏。
+    const legacy = {
+      id: "g",
+      type: "studio" as const,
+      position: { x: 0, y: 0 },
+      data: {
+        ...data("rag", {}, "g"),
+        kind: "graph",
+        config: { sources: ["guide.md"], query: "topic" },
+      },
+    };
+    const hydrated = hydrateWorkflowSnapshot({
+      name: "legacy",
+      nodes: [legacy as unknown as WorkflowNode],
+      edges: [],
+    });
+    expect(hydrated.nodes[0]?.data.kind).toBe("rag");
+    expect(hydrated.nodes[0]?.data.config.graph).toBe(true);
+    expect(hydrated.nodes[0]?.data.config.graphHops).toBe(2);
+  });
+
+  it("defaults knowledge retrieval to graph enhancement with a formatted output", () => {
+    const config = defaultConfig("rag");
+    expect(config.graph).toBe(true);
+    expect(config.graphHops).toBe(2);
+    expect(config.outputs).toEqual([{ name: "formatted", selector: "$result.formatted" }]);
+  });
+
+  it("keeps the existing RAG resource validation", () => {
+    expect(validateNodeResources(data("rag", { sources: [] }), catalog)).toMatch(/至少/);
+    expect(validateNodeResources(data("rag", { sources: ["missing.md"] }), catalog)).toMatch(
+      /失效/,
+    );
+    expect(validateNodeResources(data("rag", { sources: ["guide.md"] }), catalog)).toBeNull();
+    expect(validateNodeResources(data("rag", { sources: ["guide.md"] }), null)).toMatch(/尚未加载/);
+  });
+
+  it("validates legacy graph nodes after migrating them to knowledge retrieval", () => {
+    const nodes = [
+      data("start", {}, "start"),
+      { ...data("rag", { query: "topic" }, "graph"), kind: "graph" } as unknown as WorkflowNodeData,
+      data(
+        "end",
+        {
+          inputs: [{ name: "answer", source: { type: "literal", value: "done" } }],
+          outputs: [{ name: "answer", selector: "$inputs.answer" }],
+        },
+        "end",
+      ),
+    ].map((node) => ({ id: node.id, data: node }));
+    const edges = [
+      { source: "start", target: "graph" },
+      { source: "graph", target: "end" },
+    ];
+    // 旧 graph 节点迁移为 rag 后仍要求挂载文档，因此提示语沿用 RAG 口径。
     expect(validateWorkflowGraph(nodes, edges, catalog)).toContainEqual({
-      code: "resource", nodeId: "graph", message: "图谱检索至少选择一个文档",
+      code: "resource",
+      nodeId: "graph",
+      message: "至少挂载一个 RAG 文档",
     });
     nodes[1]!.data.config.sources = ["guide.md"];
     expect(validateWorkflowGraph(nodes, edges, catalog)).toEqual([]);

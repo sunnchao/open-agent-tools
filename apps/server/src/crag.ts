@@ -18,6 +18,9 @@ export function createChatCragController(
         query,
         sources: rOpts.sources ?? [],
         topK: rOpts.topK ?? 5,
+        // CRAG 已注册独立的 graph 域并行召回；block 域若再让 rag-server 做图谱增强，
+        // 同一份子图事实会被算成两路证据、抬高评估置信度，所以这里显式关闭图谱通道。
+        graph: false,
         ...(viewerGroups !== undefined ? { viewerGroups } : {}),
       });
       return {

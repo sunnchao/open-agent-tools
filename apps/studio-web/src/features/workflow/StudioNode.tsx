@@ -83,13 +83,10 @@ function NodeStatus({ status }: { status: NodeRunStatus }) {
 function nodeSummary(data: WorkflowNodeData): string {
   if (data.kind === "rag") {
     const sources = Array.isArray(data.config.sources) ? data.config.sources : [];
-    return sources.length > 0
-      ? `${sources.length} 个文档 · Top-${data.config.topK}`
-      : "选择 RAG 文档";
-  }
-  if (data.kind === "graph") {
-    const sources = Array.isArray(data.config.sources) ? data.config.sources : [];
-    return sources.length > 0 ? `${sources.length} 个文档 · 图谱检索` : "选择图谱文档";
+    if (sources.length === 0) return "选择 RAG 文档";
+    // 图谱增强默认开启（只有显式 false 才算关闭），让画布上能一眼看出召回策略。
+    const graph = data.config.graph !== false ? "图谱增强开" : "图谱增强关";
+    return `${sources.length} 个文档 · Top-${String(data.config.topK)} · ${graph}`;
   }
   if (data.kind === "sql") return String(data.config.query || "配置问数问题");
   if (data.kind === "llm") return `MODEL: ${String(data.config.model)}`;

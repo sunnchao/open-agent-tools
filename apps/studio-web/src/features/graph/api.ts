@@ -37,6 +37,13 @@ export interface GraphRetrieveResult {
   seeds: Array<{ id: string; name: string; type: string }>;
   formatted: string;
   subgraph: GraphExport | null;
+  /** 图谱通道摘要（部分服务端版本回传），与知识库检索的 graph 字段同构的可选子集。 */
+  graph?: {
+    enabled?: boolean;
+    entities?: number;
+    relations?: number;
+    chunkHits?: number;
+  };
 }
 
 export interface EntityListResult {

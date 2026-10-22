@@ -8,7 +8,7 @@ import {
 } from "@open-agent-tools/workflow-contracts";
 import type { ResourceCatalog } from "../resources/api.js";
 import { createEdge, createNode, snapshotGraph } from "./graph.js";
-import { validateWorkflowGraph } from "./model.js";
+import { migrateLegacyGraphNodesInSnapshot, validateWorkflowGraph } from "./model.js";
 import { variableNodes } from "./variables.js";
 import { restoreBranchEdge } from "./condition.js";
 import type { WorkflowSnapshot } from "./types.js";
@@ -159,7 +159,10 @@ export function parseWorkflowFile(text: string, catalog: ResourceCatalog | null)
   } catch {
     throw new Error("文件不是合法 JSON");
   }
-  const parsed = workflowFileSchema.safeParse(value);
+  // 旧导出文件可能仍含已下线的 graph 节点：先迁移节点再交给 schema，
+  // 否则整份文件会被「未知 kind」拒绝，用户无法再打开历史工作流。
+  const migrated = migrateLegacyGraphNodesInSnapshot(value);
+  const parsed = workflowFileSchema.safeParse(migrated);
   if (!parsed.success)
     throw new Error(
       parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n"),

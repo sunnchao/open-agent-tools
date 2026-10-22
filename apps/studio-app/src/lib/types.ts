@@ -261,7 +261,6 @@ export type WorkspaceTab =
   | "mcp"
   | "rag"
   | "connectors"
-  | "graph"
   | "observatory"
   | "reports"
   | "workflow"
@@ -269,9 +268,8 @@ export type WorkspaceTab =
 export const WORKSPACES: Array<{ id: WorkspaceTab; label: string; en: string }> = [
   { id: "chat", label: "对话", en: "Chat" },
   { id: "mcp", label: "MCP", en: "Toolkit" },
-  { id: "rag", label: "知识库", en: "Knowledge" },
+  { id: "rag", label: "知识库", en: "Knowledge + Graph" },
   { id: "connectors", label: "连接器", en: "Connectors" },
-  { id: "graph", label: "图谱", en: "Graph" },
   { id: "observatory", label: "问数", en: "Schema" },
   { id: "reports", label: "报表", en: "Reports" },
   { id: "workflow", label: "工作流", en: "Workflow" },
@@ -284,9 +282,8 @@ export const WORKSPACE_COPY: Record<
 > = {
   chat: { label: "对话", en: "Chat", description: "多模型会话与工具协同" },
   mcp: { label: "MCP", en: "Toolkit", description: "工具治理、发布与调用" },
-  rag: { label: "知识库", en: "Knowledge", description: "文档检索与质量运营" },
+  rag: { label: "知识库", en: "Knowledge + Graph", description: "文档检索、图谱增强与质量运营" },
   connectors: { label: "连接器", en: "Connectors", description: "同步外部内容源" },
-  graph: { label: "图谱", en: "Graph", description: "实体关系与知识对账" },
   observatory: { label: "问数", en: "Schema", description: "自然语言查询与审计" },
   reports: { label: "报表", en: "Reports", description: "定时报表与运行记录" },
   workflow: { label: "工作流", en: "Workflow", description: "编排、发布与回放" },

@@ -1,5 +1,4 @@
 import { config as loadEnv } from "dotenv";
-import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
@@ -11,14 +10,16 @@ import { ElasticsearchVectorStore } from "@open-agent-tools/rag";
 import { TesseractOcrProvider } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
 import { parseChunkStrategy, parseSemanticThreshold, parseSeparators } from "./chunk-settings.js";
-import { querySources } from "./query-settings.js";
 import { buildCragController, graphRouter } from "./graph.js";
+import { createGraphChannel } from "./graph-channel.js";
+import { healthRouter } from "./health.js";
+import { queryRouter } from "./query-api.js";
 import { GraphLifecycle } from "./lifecycle.js";
-import { RagAnalyticsStore, type QueryEventInput, type RetrievalTrace } from "./analytics.js";
+import { RagAnalyticsStore } from "./analytics.js";
 import { EvalRunner } from "./eval/runner.js";
 import { evalRouter } from "./eval/router.js";
 import { EvalStore } from "./eval/store.js";
-import { accessGroups, documentMetadataPatch, queryFeedback } from "./request-validation.js";
+import { documentMetadataPatch, queryFeedback } from "./request-validation.js";
 import { assertRagAuthConfigured, resolveRagAuth } from "./auth.js";
 import { qualityReportRouter } from "./quality-api.js";
 import { RagUsageStore, ragUsageMiddleware, trackRagLlm } from "./usage.js";
@@ -44,6 +45,8 @@ const defaultSeparators = parseSeparators(process.env.RAG_SEPARATORS, DEFAULT_SE
 const defaultChunkStrategy = parseChunkStrategy(process.env.RAG_CHUNK_STRATEGY, "fixed");
 // 相邻单元相似度低于阈值时断块；阈值越高，分块越细。
 const defaultSemanticThreshold = parseSemanticThreshold(process.env.RAG_SEMANTIC_THRESHOLD, 0.75);
+// 图谱作为检索第三路的部署级总开关：默认开启，设 false 时 /api/query 退回两路且忽略请求体 graph。
+const graphRetrieval = process.env.RAG_GRAPH_RETRIEVAL !== "false";
 // PDF OCR 兜底：默认关闭保持原生快路径；开启后疑似扫描页走 Provider 识别，超页同步限流。
 const ocrDecision = normalizeOcrDecision({
   enabled: process.env.RAG_OCR_ENABLED === "true",
@@ -100,6 +103,11 @@ if (ragStore) {
   );
 }
 
+// 图谱实例在 Rag 之后构造，但 Rag 构造时就要注入图谱第三路通道；
+// 用可变引用 + 闭包延迟解析，打破「Rag 依赖 graph、graph 又依赖 Rag 分块」的构造顺序循环。
+const graphRef: { current?: KnowledgeGraph } = {};
+const graphChannel = createGraphChannel({ rag: () => rag, graph: () => graphRef.current });
+
 const rag = new Rag({
   embeddings,
   dbPath,
@@ -111,6 +119,7 @@ const rag = new Rag({
   semanticThreshold: defaultSemanticThreshold,
   ocr: ocrProvider,
   ocrDecision,
+  graph: graphChannel,
 });
 const analytics = new RagAnalyticsStore(dbPath, Number(process.env.RAG_QUERY_RETENTION_DAYS) || 90);
 const usageStore = new RagUsageStore(dbPath);
@@ -150,6 +159,8 @@ const graph = new KnowledgeGraph({
       }
     : {}),
 });
+// Rag 已持有 graphChannel，此后图谱检索即可解析到真实实例。
+graphRef.current = graph;
 const crag = buildCragController({ rag, graph });
 
 // 知识库与图谱库的唯一联动入口：上传重建、删除级联、状态对账都必须经由此处，
@@ -182,12 +193,6 @@ const upload = multer({
   defParamCharset: "utf8", // multipart filename 字段按 UTF-8 解码，避免中文文件名变乱码
 });
 
-function clampTopK(value: unknown): number {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return 5;
-  return Math.max(1, Math.min(20, Math.floor(n)));
-}
-
 function uploadChunkSettings(body: Record<string, unknown>): {
   chunkSize: number;
   chunkOverlap: number;
@@ -217,17 +222,18 @@ function uploadChunkSettings(body: Record<string, unknown>): {
   };
 }
 
-app.get("/api/health", (_req: Request, res: Response) => {
-  res.json({
-    ok: true,
-    store: ragStore ? "elasticsearch" : "sqlite",
+app.use(
+  "/api",
+  healthRouter({
+    storeKind: ragStore ? "elasticsearch" : "sqlite",
     embeddingsEnabled: Boolean(embeddings),
     llmAvailable: Boolean(llm),
     ocrEnabled: ocrDecision.enabled,
     ocrMinCharsPerPage: ocrDecision.minCharsPerPage,
     ocrMaxPagesSync: ocrDecision.maxPagesSync,
-  });
-});
+    graphRetrieval,
+  }),
+);
 
 /** 上传文档（支持多文件 .pdf/.txt/.md），幂等入库。 */
 app.post("/api/documents", upload.array("files"), async (req: Request, res: Response) => {
@@ -386,325 +392,18 @@ app.put("/api/query/:queryId/feedback", (req: Request, res: Response) => {
   }
 });
 
-/** 混合检索（+ 可选 LLM 生成回答 / CRAG 纠正评估）。 */
-app.post("/api/query", async (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as {
-    query?: unknown;
-    topK?: unknown;
-    generate?: unknown;
-    sources?: unknown;
-    viewerGroups?: unknown;
-    crag?: unknown;
-  };
-  const query = typeof body.query === "string" ? body.query.trim() : "";
-  if (!query) {
-    res.status(400).json({ error: "query is required" });
-    return;
-  }
-  const topK = clampTopK(body.topK);
-  const generate = Boolean(body.generate);
-  const useCrag = Boolean(body.crag);
-  const queryId = randomUUID();
-  const queryStartedAt = Date.now();
-  let analyticsRecorded = false;
-  let sources: string[] | undefined;
-  let viewerGroups: string[] | undefined;
-  let visibleSources: string[] | undefined;
-  let sourceCount = 0;
-  try {
-    sources = querySources(body.sources);
-    if (res.locals.ragScope === "runtime") {
-      // runtime 调用不传分组时只能看公开文档，绝不继承管理侧的全量语义。
-      viewerGroups =
-        body.viewerGroups === undefined ? [] : accessGroups(body.viewerGroups, "viewerGroups");
-    } else if (body.viewerGroups !== undefined) {
-      viewerGroups = accessGroups(body.viewerGroups, "viewerGroups");
-    }
-    visibleSources = await rag.resolveVisibleSources(sources, viewerGroups);
-    sourceCount = visibleSources?.length ?? (await rag.listSources()).length;
-  } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-    return;
-  }
-  try {
-    await runTraced("rag-query", async (span) => {
-      span.update({
-        input: { query, topK, sources, generate, crag: useCrag },
-        metadata: { sources: (sources ?? []).join(","), topK: String(topK) },
-      });
-      await withTraceAttributes(
-        {
-          tags: ["rag"],
-          metadata: { source: "query", generate: String(generate), crag: String(useCrag) },
-        },
-        async () => {
-          try {
-            // CRAG 模式：评估 + 纠正 + 条带精炼
-            if (useCrag) {
-              // CRAG 控制器内部直接合并 block/graph 证据；此处先按文档 ACL 收窄来源。
-              const result = await crag.retrieve(query, {
-                ...(visibleSources !== undefined ? { sources: visibleSources } : {}),
-              });
-              let answer: string | null = null;
-              if (generate && llm && result.formatted) {
-                const resp = await trackRagLlm("rag_query", llm.model, () =>
-                  llm.invoke([
-                    {
-                      role: "system",
-                      content:
-                        "你是知识库问答助手。基于提供的资料回答用户问题；资料未覆盖的内容请如实说明，不要编造。引用请标注【来源】。\n\n" +
-                        result.formatted,
-                    },
-                    { role: "user", content: query },
-                  ]),
-                );
-                answer =
-                  typeof resp.content === "string" ? resp.content : JSON.stringify(resp.content);
-              }
-              span.update({
-                output: {
-                  assessment: result.assessment,
-                  confidence: result.confidence,
-                  actions: result.actions.join(","),
-                  citations: result.citations.length,
-                  answer: summarize(answer),
-                },
-              });
-              recordAnalytics({
-                id: queryId,
-                query,
-                sources,
-                sourceCount,
-                topK,
-                generate,
-                crag: true,
-                hits: result.citations,
-                answerGenerated: Boolean(answer),
-                answer,
-                assessment: result.assessment,
-                actions: result.actions,
-                latencyMs: Date.now() - queryStartedAt,
-              });
-              analyticsRecorded = true;
-              res.json({
-                queryId,
-                query,
-                crag: {
-                  assessment: result.assessment,
-                  confidence: result.confidence,
-                  actions: result.actions,
-                },
-                formatted: result.formatted,
-                citations: result.citations,
-                answer,
-                generate,
-                llmAvailable: Boolean(llm),
-              });
-              return;
-            }
-
-            const result = await rag.retrieve(query, {
-              topK,
-              sources: visibleSources,
-            });
-            let answer: string | null = null;
-            if (generate && llm && result.chunks.length > 0) {
-              const resp = await trackRagLlm("rag_query", llm.model, () =>
-                llm.invoke([
-                  {
-                    role: "system",
-                    content:
-                      "你是知识库问答助手。基于提供的资料回答用户问题；资料未覆盖的内容请如实说明，不要编造。引用请标注【来源】。\n\n" +
-                      result.formatted(),
-                  },
-                  { role: "user", content: query },
-                ]),
-              );
-              answer =
-                typeof resp.content === "string" ? resp.content : JSON.stringify(resp.content);
-            }
-            span.update({
-              output: {
-                chunks: result.chunks.length,
-                vectorHits: result.debug?.vectorHits.length ?? 0,
-                keywordHits: result.debug?.keywordHits.length ?? 0,
-                answer: summarize(answer),
-              },
-            });
-            const trace = buildRetrievalTrace({
-              storeKind: ragStore ? "elasticsearch" : "sqlite",
-              embeddingsEnabled: Boolean(embeddings),
-              visibleSources,
-              viewerGroups,
-              result,
-              formatted: result.formatted(),
-              answer,
-            });
-            recordAnalytics({
-              id: queryId,
-              query,
-              sources,
-              sourceCount,
-              topK,
-              generate,
-              crag: false,
-              hits: result.chunks,
-              answerGenerated: Boolean(answer),
-              answer,
-              latencyMs: Date.now() - queryStartedAt,
-              trace,
-            });
-            analyticsRecorded = true;
-            res.json({
-              queryId,
-              query,
-              chunks: result.chunks,
-              retrieval: toRetrievalPayload(result),
-              answer,
-              generate,
-              llmAvailable: Boolean(llm),
-            });
-          } catch (error) {
-            span.update({
-              level: "ERROR",
-              statusMessage: error instanceof Error ? error.message : String(error),
-            });
-            throw error;
-          }
-        },
-      );
-    });
-  } catch (e) {
-    if (!analyticsRecorded) {
-      recordAnalytics({
-        id: queryId,
-        query,
-        sources,
-        sourceCount,
-        topK,
-        generate,
-        crag: useCrag,
-        hits: [],
-        answerGenerated: false,
-        latencyMs: Date.now() - queryStartedAt,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-    res.status(500).json({ error: String(e), queryId });
-  }
-});
-
-/** 统计写入失败不应拖垮在线问答，错误保留在服务日志中。 */
-function recordAnalytics(input: QueryEventInput): void {
-  try {
-    analytics.recordQuery(input);
-  } catch (error) {
-    console.error(`[rag-analytics] failed to record query ${input.id}: ${String(error)}`);
-  }
-}
-
-/** 候选 content 截断存 trace（防单次查询 trace 膨胀）；融合块存全量。 */
-function truncateContent(content: string, max = 300): { content: string; truncated: boolean } {
-  if (content.length <= max) return { content, truncated: false };
-  return { content: `${content.slice(0, max)}…(+${content.length - max} chars)`, truncated: true };
-}
-
-type RetrieveResultLike = Awaited<ReturnType<Rag["retrieve"]>>;
-
-function toRetrievalPayload(result: RetrieveResultLike): Record<string, unknown> {
-  return {
-    store: ragStore ? "elasticsearch" : "sqlite",
-    embeddingsEnabled: result.debug?.embeddingsEnabled ?? Boolean(embeddings),
-    candidates: result.debug?.candidates ?? 30,
-    rrfK: result.debug?.rrfK ?? 60,
-    timingsMs: result.debug?.timingsMs ?? { vectorMs: null, keywordMs: 0, fusionMs: 0 },
-    vectorHits: (result.debug?.vectorHits ?? []).map((h) => ({
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: h.content,
-      score: h.score,
-      rank: h.rank,
-    })),
-    keywordHits: (result.debug?.keywordHits ?? []).map((h) => ({
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: h.content,
-      score: h.score,
-      rank: h.rank,
-    })),
-  };
-}
-
-function buildRetrievalTrace(input: {
-  storeKind: string;
-  embeddingsEnabled: boolean;
-  visibleSources: string[] | undefined;
-  viewerGroups: string[] | undefined;
-  result: RetrieveResultLike;
-  formatted: string;
-  answer: string | null;
-}): RetrievalTrace {
-  const debug = input.result.debug;
-  let truncated = false;
-  const vectorHits = (debug?.vectorHits ?? []).map((h) => {
-    const t = truncateContent(h.content);
-    truncated = truncated || t.truncated;
-    return {
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: t.content,
-      score: h.score,
-      rank: h.rank,
-    };
-  });
-  const keywordHits = (debug?.keywordHits ?? []).map((h) => {
-    const t = truncateContent(h.content);
-    truncated = truncated || t.truncated;
-    return {
-      id: h.id,
-      source: h.source,
-      chunkIndex: h.chunkIndex,
-      content: t.content,
-      score: h.score,
-      rank: h.rank,
-    };
-  });
-  const fused = input.result.chunks.map((c) => ({
-    id: c.id,
-    source: c.source,
-    chunkIndex: c.chunkIndex,
-    content: c.content,
-    score: c.score,
-    rank: -1,
-    vectorScore: c.debug?.vectorScore ?? null,
-    vectorRank: c.debug?.vectorRank ?? null,
-    keywordScore: c.debug?.keywordScore ?? null,
-    keywordRank: c.debug?.keywordRank ?? null,
-    rrfScore: c.debug?.rrfScore ?? c.score,
-    channels: c.debug?.channels ?? [],
-  }));
-  return {
-    store: input.storeKind,
-    embeddingsEnabled: input.embeddingsEnabled,
-    candidates: debug?.candidates ?? 30,
-    rrfK: debug?.rrfK ?? 60,
-    timingsMs: debug?.timingsMs ?? { vectorMs: null, keywordMs: 0, fusionMs: 0 },
-    visibleSources: input.visibleSources,
-    viewerGroups: input.viewerGroups,
-    vectorHits,
-    keywordHits,
-    fused,
-    formatted:
-      input.formatted.length > 20000
-        ? `${input.formatted.slice(0, 20000)}…(truncated)`
-        : input.formatted,
-    answer: input.answer,
-    truncated: truncated || input.formatted.length > 20000,
-  };
-}
+app.use(
+  "/api",
+  queryRouter({
+    rag,
+    analytics,
+    crag,
+    ...(llm ? { llm } : {}),
+    embeddingsEnabled: Boolean(embeddings),
+    storeKind: ragStore ? "elasticsearch" : "sqlite",
+    graphRetrieval,
+  }),
+);
 
 /** 按 queryId 回放完整链路（admin）。BFF 透传后前端用 /api/admin/rag/query/:id 访问。 */
 app.get("/api/query/:queryId", (req: Request, res: Response) => {
@@ -721,12 +420,6 @@ app.get("/api/query/:queryId", (req: Request, res: Response) => {
   }
   res.json({ detail });
 });
-
-/** 截断长回答，仅用于 trace output，不影响响应内容。 */
-function summarize(value: string | null): string | null {
-  if (!value) return value;
-  return value.length > 500 ? `${value.slice(0, 500)}…(+${value.length - 500} chars)` : value;
-}
 
 // 知识图谱 API
 app.use("/api/graph", graphRouter({ rag, graph, lifecycle }));

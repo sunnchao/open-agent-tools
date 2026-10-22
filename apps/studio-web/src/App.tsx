@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Input, Modal, Popover } from "antd";
 import { DEFAULT_BRANDING, type BrandingConfig } from "./features/branding/api.js";
+import { ragRouteState } from "./features/rag/ragRoute.js";
 import {
   buildHashRoute,
   parseHashRoute,
@@ -17,7 +18,6 @@ import {
   DatabaseOutlined,
   MenuOutlined,
   MessageOutlined,
-  NodeIndexOutlined,
   RightOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -38,11 +38,6 @@ const McpWorkspace = lazy(() =>
 const RagWorkspace = lazy(() =>
   import("./features/rag/RagWorkspace.js").then((module) => ({
     default: module.RagWorkspace,
-  })),
-);
-const GraphWorkspace = lazy(() =>
-  import("./features/graph/GraphWorkspace.js").then((module) => ({
-    default: module.GraphWorkspaceWithProvider,
   })),
 );
 const WorkflowWorkspace = lazy(() =>
@@ -72,15 +67,7 @@ const ReportsWorkspace = lazy(() =>
 );
 
 type Workspace =
-  | "chat"
-  | "mcp"
-  | "rag"
-  | "connectors"
-  | "graph"
-  | "observatory"
-  | "reports"
-  | "workflow"
-  | "settings";
+  "chat" | "mcp" | "rag" | "connectors" | "observatory" | "reports" | "workflow" | "settings";
 
 const workspaces: Array<{
   id: Workspace;
@@ -91,7 +78,7 @@ const workspaces: Array<{
 }> = [
   { id: "chat", label: "对话", en: "Chat", badge: "AI", icon: <MessageOutlined /> },
   { id: "mcp", label: "MCP", en: "Toolkit", badge: "API", icon: <ApiOutlined /> },
-  { id: "rag", label: "知识库", en: "Knowledge", badge: "RAG", icon: <DatabaseOutlined /> },
+  { id: "rag", label: "知识库", en: "Knowledge", badge: "RAG+KG", icon: <DatabaseOutlined /> },
   {
     id: "connectors",
     label: "连接器",
@@ -99,7 +86,6 @@ const workspaces: Array<{
     badge: "SYNC",
     icon: <BranchesOutlined />,
   },
-  { id: "graph", label: "图谱", en: "Graph", badge: "KG", icon: <NodeIndexOutlined /> },
   { id: "observatory", label: "问数", en: "Schema", badge: "SQL", icon: <TableOutlined /> },
   { id: "reports", label: "报表", en: "Reports", badge: "CRON", icon: <BarChartOutlined /> },
   {
@@ -116,7 +102,13 @@ function routeFromHash(): StudioRoute {
   return parseHashRoute(window.location.hash);
 }
 
+/**
+ * 旧 `#/graph` 工作区已被知识库吸收；
+ * 这里只把它归一到 rag，具体的「图谱视图 + 文档」由 RagWorkspace 通过路由参数解析。
+ * 其余未知 workspace 仍回落 workflow。
+ */
 function workspaceFromRoute(route: StudioRoute): Workspace {
+  if (route.workspace === "graph") return "rag";
   return workspaces.some((item) => item.id === route.workspace)
     ? (route.workspace as Workspace)
     : "workflow";
@@ -157,6 +149,8 @@ export function App({ branding = DEFAULT_BRANDING }: { branding?: BrandingConfig
   const [searchQuery, setSearchQuery] = useState("");
 
   const workspace = workspaceFromRoute(route);
+  // 知识库合并了原来的图谱工作区：视图与文档选择都从路由派生（#/graph 兼容 #/rag/graph）。
+  const ragRoute = ragRouteState(route);
 
   useEffect(() => {
     const handleHashChange = () =>
@@ -435,9 +429,13 @@ export function App({ branding = DEFAULT_BRANDING }: { branding?: BrandingConfig
                 />
               ) : null}
               {workspace === "mcp" ? <McpWorkspace /> : null}
-              {workspace === "rag" ? <RagWorkspace /> : null}
+              {workspace === "rag" ? (
+                <RagWorkspace
+                  initialView={ragRoute.initialView}
+                  initialSource={ragRoute.initialSource}
+                />
+              ) : null}
               {workspace === "connectors" ? <ConnectorsWorkspace /> : null}
-              {workspace === "graph" ? <GraphWorkspace /> : null}
               {workspace === "observatory" ? <ObservatoryWorkspace /> : null}
               {workspace === "reports" ? <ReportsWorkspace /> : null}
               {workspace === "workflow" ? (

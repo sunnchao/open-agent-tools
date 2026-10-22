@@ -7,7 +7,7 @@ import type { Edge } from "@xyflow/react";
 import { createEdge, createNode, snapshotGraph } from "./graph.js";
 import { cloneSubgraph } from "./subgraph.js";
 import { serializeWorkflow, workflowFileSizeLimit } from "./io.js";
-import { nodeInputs, nodeOutputs } from "./model.js";
+import { migrateLegacyGraphNodesInSnapshot, nodeInputs, nodeOutputs } from "./model.js";
 import type { WorkflowNode } from "./types.js";
 import { restoreBranchEdge } from "./condition.js";
 
@@ -52,7 +52,8 @@ export function parseSelection(text: string): { nodes: WorkflowNode[]; edges: Ed
   }
   if (!value || value.format !== format || value.version !== 1)
     throw new Error("剪贴板不含支持的工作流节点");
-  const parsed = workflowGraphSchema.safeParse(value.graph);
+  // 旧剪贴板内容可能包含已下线的 graph 节点：同样先迁移再校验。
+  const parsed = workflowGraphSchema.safeParse(migrateLegacyGraphNodesInSnapshot(value.graph));
   if (!parsed.success) throw new Error(`剪贴板节点格式无效：${parsed.error.issues[0]?.message}`);
   if (!parsed.data.nodes.length) throw new Error("剪贴板未包含任何节点");
   const nodes = parsed.data.nodes.map((node, index) => {

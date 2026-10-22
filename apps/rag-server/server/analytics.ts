@@ -24,21 +24,37 @@ export interface RetrievalTraceChunk extends RetrievalTraceHit {
   vectorRank: number | null;
   keywordScore: number | null;
   keywordRank: number | null;
+  /** 图谱第三路的原始分/排名；未命中为 null（旧 trace 无此字段）。 */
+  graphScore?: number | null;
+  graphRank?: number | null;
   rrfScore: number;
-  channels: Array<"vector" | "keyword">;
+  channels: Array<"vector" | "keyword" | "graph">;
 }
 
-/** 完整检索链路：审计详情按 queryId 回放的唯一数据源。候选 content 截断存，融合块存全量。 */
+/**
+ * 完整检索链路：审计详情按 queryId 回放的唯一数据源。候选 content 截断存，融合块存全量。
+ * graph* 均为可选：旧 trace_json 反序列化后没有这些键，读取方不得假设它们存在。
+ */
 export interface RetrievalTrace {
   store: string;
   embeddingsEnabled: boolean;
   candidates: number;
   rrfK: number;
-  timingsMs: { vectorMs: number | null; keywordMs: number; fusionMs: number };
+  timingsMs: {
+    vectorMs: number | null;
+    keywordMs: number;
+    fusionMs: number;
+    graphMs?: number | null;
+  };
   visibleSources?: string[];
   viewerGroups?: string[];
   vectorHits: RetrievalTraceHit[];
   keywordHits: RetrievalTraceHit[];
+  /** 图谱通道候选（融合前）；未启用/旧 trace 缺省。 */
+  graphHits?: RetrievalTraceHit[];
+  graphEnabled?: boolean;
+  /** 图谱子图序列化文本（prompt 增强用），超长已截断。 */
+  graphContext?: string | null;
   fused: RetrievalTraceChunk[];
   formatted?: string | null;
   answer?: string | null;
