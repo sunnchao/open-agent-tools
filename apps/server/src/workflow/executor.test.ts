@@ -577,29 +577,106 @@ describe("workflow executor", () => {
 
   it("rejects graph nodes without documents in runs and isolated node tests", async () => {
     let calls = 0;
-    const dependencies = { retrieveRagGraph: async () => {
-      calls += 1;
-      return { formatted: "", seeds: [] };
-    } };
+    const dependencies = {
+      retrieveRagGraph: async () => {
+        calls += 1;
+        return { formatted: "", seeds: [] };
+      },
+    };
     for (const sources of [undefined, [], [""], [" "]]) {
       const node = { id: "graph", kind: "graph" as const, config: { query: "topic", sources } };
-      await assert.rejects(executeWorkflow(base({ nodes: [node] }), () => undefined, dependencies), /文档/);
+      await assert.rejects(
+        executeWorkflow(base({ nodes: [node] }), () => undefined, dependencies),
+        /文档/,
+      );
       await assert.rejects(executeWorkflowNodeTest({ node, inputs: {} }, dependencies), /文档/);
     }
     assert.equal(calls, 0);
   });
 
   it("passes selected graph documents during isolated node tests", async () => {
-    const result = await executeWorkflowNodeTest({
-      node: { id: "graph", kind: "graph", config: { query: "topic", sources: ["guide.md", "faq.md"] } },
-      inputs: {},
-    }, {
-      retrieveRagGraph: async ({ sources }) => {
-        assert.deepEqual(sources, ["guide.md", "faq.md"]);
-        return { formatted: "scoped result", seeds: [] };
+    const result = await executeWorkflowNodeTest(
+      {
+        node: {
+          id: "graph",
+          kind: "graph",
+          config: { query: "topic", sources: ["guide.md", "faq.md"] },
+        },
+        inputs: {},
       },
-    });
+      {
+        retrieveRagGraph: async ({ sources }) => {
+          assert.deepEqual(sources, ["guide.md", "faq.md"]);
+          return { formatted: "scoped result", seeds: [] };
+        },
+      },
+    );
     assert.equal(result.status, "success");
+  });
+
+  it("fails a graph node that retrieves nothing instead of passing an empty string downstream", async () => {
+    // 零命中时 rag-server 返回 200 + formatted:""；若当成 success，
+    // 下游结束节点只会拿到空字符串，最终输出为空却显示运行成功。
+    await assert.rejects(
+      executeWorkflow(
+        base({
+          nodes: [
+            {
+              id: "graph",
+              kind: "graph",
+              config: {
+                query: "卡莎有哪些技能",
+                sources: ["guide.md"],
+                outputs: [{ name: "formatted", selector: "$result.formatted" }],
+              },
+            },
+            {
+              id: "end",
+              kind: "end",
+              config: {
+                inputs: [
+                  {
+                    name: "answer",
+                    source: { type: "node", nodeId: "graph", output: "formatted" },
+                  },
+                ],
+                outputs: [{ name: "answer", selector: "$inputs.answer" }],
+              },
+            },
+          ],
+          edges: [{ source: "graph", target: "end" }],
+        }),
+        () => undefined,
+        { retrieveRagGraph: async () => ({ formatted: "", seeds: [] }) },
+      ),
+      /未命中任何实体/,
+    );
+  });
+
+  it("keeps a graph node successful when the retrieval returns content", async () => {
+    const events: Array<{ type: string; nodeId?: string }> = [];
+    await executeWorkflow(
+      base({
+        nodes: [
+          {
+            id: "graph",
+            kind: "graph",
+            config: {
+              query: "topic",
+              sources: ["guide.md"],
+              outputs: [{ name: "formatted", selector: "$result.formatted" }],
+            },
+          },
+        ],
+        edges: [],
+      }),
+      (event) => events.push(event as { type: string; nodeId?: string }),
+      {
+        retrieveRagGraph: async () => ({ formatted: "命中内容", seeds: [{ id: "a", name: "A" }] }),
+      },
+    );
+    const result = events.find((event) => event.type === "node_result");
+    assert.equal(result?.nodeId, "graph");
   });
 });
 

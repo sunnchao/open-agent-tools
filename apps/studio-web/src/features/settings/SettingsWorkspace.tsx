@@ -572,7 +572,12 @@ export function SettingsWorkspace() {
   ];
 
   return (
-    <Flex vertical gap={12} style={{ flex: 1, minHeight: 0, padding: 16, overflowY: "auto" }}>
+    <Flex
+      vertical
+      gap={12}
+      className="settings-workspace"
+      style={{ flex: 1, minHeight: 0, padding: 16, overflowY: "auto" }}
+    >
       <Flex align="flex-start" justify="space-between" gap={12} wrap>
         <Flex vertical gap={2}>
           <Typography.Text type="secondary" style={{ fontSize: 10, fontWeight: 700, letterSpacing: 2 }}>
@@ -596,8 +601,18 @@ export function SettingsWorkspace() {
           </Flex>
         ) : null}
       </Flex>
-      <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 0 }}>
-        <Card size="small" styles={{ body: { padding: 8 } }} style={{ width: 230, flex: "0 0 auto" }}>
+      <Flex
+        className="settings-workspace__layout"
+        gap={12}
+        align="flex-start"
+        style={{ flex: 1, minHeight: 0 }}
+      >
+        <Card
+          className="settings-workspace__menu"
+          size="small"
+          styles={{ body: { padding: 8 } }}
+          style={{ width: 230, flex: "0 0 auto" }}
+        >
           <Menu
             mode="vertical"
             selectedKeys={[activeSection]}
@@ -606,7 +621,7 @@ export function SettingsWorkspace() {
             style={{ borderInlineEnd: "none" }}
           />
         </Card>
-        <Flex vertical gap={12} style={{ flex: 1, minWidth: 0 }}>
+        <Flex className="settings-workspace__content" vertical gap={12} style={{ flex: 1, minWidth: 0 }}>
           {activeSection === "providers" ? (
             <Flex vertical gap={12}>
               {error ? <Alert type="error" showIcon message={error} /> : null}

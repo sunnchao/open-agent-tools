@@ -368,11 +368,13 @@ export function McpWorkspace() {
       {view === "services" ? (
         <>
           <Flex
+            className="studio-split-layout"
             gap={12}
             align="flex-start"
             style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}
           >
             <Card
+              className="studio-split-layout__aside"
               size="small"
               title="服务列表"
               extra={<Tag>{services.length}</Tag>}
@@ -419,7 +421,7 @@ export function McpWorkspace() {
                         cursor: "pointer",
                         borderRadius: 8,
                         padding: "8px 12px",
-                        background: service.id === selectedId ? "#f0f5ff" : undefined,
+                        background: service.id === selectedId ? "var(--studio-selected)" : undefined,
                       }}
                     >
                       <List.Item.Meta
@@ -437,7 +439,12 @@ export function McpWorkspace() {
               )}
             </Card>
 
-            <Flex vertical gap={12} style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+            <Flex
+              className="studio-split-layout__main"
+              vertical
+              gap={12}
+              style={{ flex: 1, minWidth: 0, overflowY: "auto" }}
+            >
               <Card size="small">
                 <Flex gap={8} align="center" wrap>
                   <Segmented<AssetTab>
@@ -526,7 +533,7 @@ export function McpWorkspace() {
                             cursor: "pointer",
                             borderRadius: 8,
                             padding: "8px 12px",
-                            background: selected ? "#f0f5ff" : undefined,
+                            background: selected ? "var(--studio-selected)" : undefined,
                           }}
                         >
                           <List.Item.Meta
@@ -551,6 +558,7 @@ export function McpWorkspace() {
             </Flex>
 
             <Card
+              className="studio-split-layout__detail"
               size="small"
               title="配置与预览"
               style={{ width: 360, flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}

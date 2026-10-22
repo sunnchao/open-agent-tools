@@ -22,6 +22,26 @@ function groupLabel(ts?: number): string {
   return "更早";
 }
 
+function previewText(session: Session): string {
+  const last = [...session.messages].reverse().find((message) => message.content.trim());
+  return last?.content.replace(/\s+/g, " ").slice(0, 72) ?? "暂无消息";
+}
+
+function timeLabel(ts?: number): string {
+  if (!ts) return "—";
+  const date = new Date(ts);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (date.getTime() >= startOfToday) {
+    return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  }
+  const yesterday = new Date(startOfToday - 24 * 60 * 60 * 1000);
+  if (date >= yesterday) {
+    return `昨天 ${date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+}
+
 export function SessionList({
   sessions,
   activeId,
@@ -68,7 +88,7 @@ export function SessionList({
 
   return (
     <div className="session-list">
-      <div style={{ padding: "4px 6px 8px" }}>
+      <div className="session-list__search">
         <Input
           allowClear
           size="small"
@@ -79,23 +99,11 @@ export function SessionList({
         />
       </div>
       {filtered.length === 0 ? (
-        <div style={{ padding: "24px 12px", textAlign: "center", color: "#9299a3", fontSize: 12 }}>
-          没有匹配的对话
-        </div>
+        <div className="session-list__empty">没有匹配的对话</div>
       ) : (
         filtered.map(([label, items]) => (
           <div key={label}>
-            <div
-              style={{
-                padding: "8px 10px 4px",
-                fontSize: 11,
-                fontWeight: 600,
-                color: "#9299a3",
-                letterSpacing: 0.5,
-              }}
-            >
-              {label}
-            </div>
+            <div className="session-group">{label}</div>
             {items.map((s) => (
               <div
                 key={s.id}
@@ -121,7 +129,17 @@ export function SessionList({
                     onClick={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  <span className="session-item__title">{s.title}</span>
+                  <>
+                    <span className="session-item__title" title={s.title}>
+                      {s.title}
+                    </span>
+                    <span className="session-item__preview">{previewText(s)}</span>
+                    <span className="session-item__meta">
+                      <span>{timeLabel(s.updatedAt)}</span>
+                      <span>·</span>
+                      <span>{s.messages.length} 条</span>
+                    </span>
+                  </>
                 )}
                 <Space size={0} className="session-item__actions" onClick={(e) => e.stopPropagation()}>
                   <Button

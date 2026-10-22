@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import { Flex, Typography } from "antd";
+import { Typography } from "antd";
 
 export interface StudioPageHeaderProps {
   eyebrow: string;
@@ -8,48 +8,22 @@ export interface StudioPageHeaderProps {
   actions?: ReactNode;
 }
 
-const headerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 20,
-  minHeight: 74,
-  flex: "0 0 auto",
-  padding: "12px 22px",
-  background: "var(--studio-surface)",
-  borderBottom: "1px solid var(--studio-line)",
-};
-
-const eyebrowStyle: CSSProperties = {
-  fontSize: 10,
-  fontWeight: 700,
-  letterSpacing: 2,
-  textTransform: "uppercase",
-  margin: 0,
-};
-
-/** 管理页统一页头:英文 eyebrow + 中文标题 + 可选描述 + 右侧操作区。 */
+/** 管理页统一页头：编辑式眉题 + 中文标题 + 可选描述 + 右侧操作区。 */
 export function StudioPageHeader({ eyebrow, title, description, actions }: StudioPageHeaderProps) {
   return (
-    <header className="studio-page-header" style={headerStyle}>
-      <Flex vertical gap={2} style={{ minWidth: 0 }}>
-        <Typography.Text type="secondary" style={eyebrowStyle}>
-          {eyebrow}
-        </Typography.Text>
-        <Typography.Title level={4} style={{ margin: 0, fontSize: 22, fontWeight: 650 }}>
+    <header className="studio-page-header">
+      <div className="studio-page-header__main">
+        <Typography.Text className="studio-page-header__eyebrow">{eyebrow}</Typography.Text>
+        <Typography.Title level={2} className="studio-page-header__title">
           {title}
         </Typography.Title>
         {description ? (
-          <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0", fontSize: 12 }}>
+          <Typography.Paragraph className="studio-page-header__description">
             {description}
           </Typography.Paragraph>
         ) : null}
-      </Flex>
-      {actions ? (
-        <Flex gap={8} align="center" wrap style={{ flex: "0 0 auto" }}>
-          {actions}
-        </Flex>
-      ) : null}
+      </div>
+      {actions ? <div className="studio-page-header__actions">{actions}</div> : null}
     </header>
   );
 }
@@ -71,38 +45,15 @@ export function StudioPage({
   bodyStyle,
 }: StudioPageProps) {
   return (
-    <section
-      className="studio-page"
-      style={{
-        position: "relative",
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        minWidth: 0,
-        minHeight: 0,
-        overflow: "hidden",
-        background: "var(--studio-bg)",
-      }}
-    >
+    <section className="studio-page">
       <StudioPageHeader
         eyebrow={eyebrow}
         title={title}
         description={description}
         actions={actions}
       />
-      {extra}
-      <div
-        className="studio-page__body"
-        style={{
-          flex: 1,
-          minWidth: 0,
-          minHeight: 0,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          ...bodyStyle,
-        }}
-      >
+      {extra ? <div className="studio-page__extra">{extra}</div> : null}
+      <div className="studio-page__body" style={bodyStyle}>
         {children}
       </div>
     </section>

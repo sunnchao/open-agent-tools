@@ -507,6 +507,13 @@ async function runNode(
         configuredTimeout ?? deps.timeoutMs?.graph ?? 15_000,
         deps.signal,
       );
+      // 零命中必须显式失败：rag-server 对「没匹配到实体」返回 200 + formatted:""。
+      // 若原样当成 success，下游（常见是结束节点）只会拿到空字符串，
+      // 用户看不到任何「没检索到」的信号，最终输出为空却显示运行成功。
+      if (!result.formatted && result.seeds.length === 0)
+        throw new Error(
+          `图谱检索未命中任何实体：在所选文档中匹配不到「${query}」，请检查查询内容或所选图谱文档`,
+        );
       return {
         result: {
           formatted: result.formatted,

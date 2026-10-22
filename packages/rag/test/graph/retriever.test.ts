@@ -202,3 +202,60 @@ test("sources 白名单：关系两端实体都必须可见", async () => {
   assert.ok(!result.subgraph?.relations.some((relation) => relation.dstId === salesOnly));
   cleanup();
 });
+
+test("中文自然语言问句：重叠滑窗定位到问句中的实体名", async () => {
+  const { store, add, link, cleanup } = setup();
+  add("卡莎");
+  add("射手");
+  link("卡莎", "射手");
+  const retriever = new GraphRetriever(store);
+  // 贪婪切块会把「卡莎有哪些技能」切成「卡莎有哪」「些技能」，
+  // 跨过实体名边界后一个都命中不了，于是整句检索退化为零命中。
+  for (const query of ["卡莎有哪些技能", "介绍下卡莎的定位", "卡莎"]) {
+    const result = await retriever.retrieve(query);
+    assert.ok(
+      result.seeds.some((seed) => seed.name === "卡莎"),
+      `查询「${query}」应命中实体「卡莎」`,
+    );
+  }
+  cleanup();
+});
+
+test("maxNodes 截断时不输出裸实体 id：关系两端恒在子图内", async () => {
+  const { store, add, link, cleanup } = setup();
+  add("卡莎");
+  // 大扇出邻域，迫使 maxNodes 截断邻居实体。
+  for (let index = 0; index < 40; index += 1) {
+    add(`英雄${index}`);
+    link("卡莎", `英雄${index}`, "related_to", "a.md");
+  }
+  const retriever = new GraphRetriever(store);
+  const result = await retriever.retrieve("卡莎", { maxHops: 2, maxNodes: 8 });
+  const subgraph = result.subgraph!;
+  const ids = new Set(subgraph.entities.map((entity) => entity.id));
+  assert.ok(subgraph.entities.length <= 8);
+  for (const relation of subgraph.relations) {
+    assert.ok(ids.has(relation.srcId), `关系起点 ${relation.srcId} 必须在子图内`);
+    assert.ok(ids.has(relation.dstId), `关系终点 ${relation.dstId} 必须在子图内`);
+  }
+  assert.doesNotMatch(subgraph.formatted(), /\([0-9a-f]{40}\)/, "序列化文本不得出现裸实体 id");
+  cleanup();
+});
+
+test("formatted 携带实体属性，便于回答属性类问题", async () => {
+  const { store, add, cleanup } = setup();
+  const kaisa = add("卡莎", "person");
+  store.upsertEntity({
+    id: kaisa,
+    name: "卡莎",
+    type: "person",
+    props: { 称号: "虚空之女", 英文名: "Kaisa" },
+  });
+  const retriever = new GraphRetriever(store);
+  const result = await retriever.retrieve("卡莎");
+  const text = result.subgraph!.formatted();
+  assert.match(text, /实体属性:/);
+  assert.match(text, /虚空之女/);
+  assert.match(text, /Kaisa/);
+  cleanup();
+});

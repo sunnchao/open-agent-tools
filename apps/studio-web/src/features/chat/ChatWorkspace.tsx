@@ -12,14 +12,20 @@ import { fetchProviders, type ProviderMetadata } from "../providers/api.js";
 import { useResourceCatalog } from "../resources/useResourceCatalog.js";
 import { ChatResourceDrawer } from "./ChatResourceDrawer.js";
 
-export function ChatWorkspace() {
+interface ChatWorkspaceProps {
+  /** 路由里的会话 ID（`#/chat/<sessionId>`）。 */
+  sessionId: string | null;
+  /** 切换会话时把 ID 写回路由，地址栏立即可见。 */
+  onSessionChange: (sessionId: string) => void;
+}
+
+export function ChatWorkspace({ sessionId, onSessionChange }: ChatWorkspaceProps) {
   const {
     ready,
     sessions,
     activeId,
     activeSession,
     newChat,
-    selectSession,
     deleteSession,
     renameSession,
     addMessage,
@@ -30,7 +36,7 @@ export function ChatWorkspace() {
     removeMessage,
     updateSessionResources,
     updateSessionRouting,
-  } = useChatSessions();
+  } = useChatSessions(sessionId);
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false);
   const resources = useResourceCatalog();
   const composerRef = useRef<ComposerHandle>(null);
@@ -72,6 +78,14 @@ export function ChatWorkspace() {
   useEffect(() => {
     composerRef.current?.focus();
   }, [activeId]);
+
+  // 路由里没有有效会话时（直接打开 #/chat，或会话已被删除），
+  // 把当前会话 ID 写回地址栏，保证刷新后仍停在同一段对话。
+  useEffect(() => {
+    if (!ready || !activeId) return;
+    if (sessionId === activeId) return;
+    onSessionChange(activeId);
+  }, [ready, activeId, sessionId, onSessionChange]);
 
   // 会话未显式选择模型时，回退到构建期 VITE_MODEL（保持原有行为）。
   const fallbackModel = import.meta.env.VITE_MODEL as string | undefined;
@@ -199,9 +213,9 @@ export function ChatWorkspace() {
         sessions={sessions}
         activeId={activeId}
         collapsed={!sessionPanelOpen}
-        onNewChat={() => void newChat()}
+        onNewChat={() => onSessionChange(newChat())}
         onSelect={(id) => {
-          selectSession(id);
+          onSessionChange(id);
           if (compactLayout) setSessionPanelOpen(false);
         }}
         onDelete={(id) => void deleteSession(id)}
@@ -218,9 +232,15 @@ export function ChatWorkspace() {
       <Layout className="chat-main">
         <ChatHeader
           title={activeSession.title}
+          messageCount={activeSession.messages.length}
           sessionsOpen={sessionPanelOpen}
           overlayMode={compactLayout}
+          providers={providers}
+          providerId={activeSession.providerId}
+          model={activeSession.model}
           onToggleSessions={() => setSessionPanelOpen((open) => !open)}
+          onOpenContext={() => setResourceDrawerOpen(true)}
+          onRoutingChange={(routing) => updateSessionRouting(activeSession.id, routing)}
         />
         <MessageList
           messages={activeSession.messages}

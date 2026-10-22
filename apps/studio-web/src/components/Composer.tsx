@@ -1,11 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { Badge, Button, Input, Select, Tag, Tooltip } from "antd";
+import { Badge, Button, Input, Select, Tooltip } from "antd";
 import {
-  ApiOutlined,
+  ArrowRightOutlined,
   DatabaseOutlined,
   PauseCircleOutlined,
-  SendOutlined,
   SettingOutlined,
+  TableOutlined,
+  ToolOutlined,
 } from "../lib/icons.js";
 import type { TextAreaRef } from "antd/es/input/TextArea";
 import type { ChatResourceBinding } from "../types.js";
@@ -102,7 +103,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
             className="composer-textarea"
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            placeholder="给助手发送消息…"
+            placeholder="向 Open Agent 提问，或描述要完成的任务…"
             autoSize={{ minRows: 1, maxRows: 8 }}
             disabled={disabled}
             variant="borderless"
@@ -118,37 +119,44 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           <div className="composer-toolbar">
             {/* 左侧：资源标签 + 选择器 */}
             <div className="composer-toolbar__left">
-              {/* 资源标签 */}
-              {resources.rag.sources.length > 0 ? (
-                <Tag
-                  icon={<DatabaseOutlined />}
-                  color="orange"
-                  style={{ cursor: "pointer", marginInlineEnd: 0 }}
+              <div className="composer-resources" aria-label="对话资源">
+                <button
+                  type="button"
+                  className={`composer-resource-chip${
+                    resources.rag.sources.length > 0 ? " is-on" : ""
+                  }`}
+                  aria-pressed={resources.rag.sources.length > 0}
                   onClick={onConfigureResources}
                 >
-                  RAG {resources.rag.sources.length}
-                </Tag>
-              ) : null}
-              {resources.mcpTools.length > 0 ? (
-                <Tag
-                  icon={<ApiOutlined />}
-                  color="green"
-                  style={{ cursor: "pointer", marginInlineEnd: 0 }}
+                  <DatabaseOutlined />
+                  知识库
+                  {resources.rag.sources.length > 0 ? <b>{resources.rag.sources.length}</b> : null}
+                </button>
+                <button
+                  type="button"
+                  className={`composer-resource-chip${
+                    resources.sqlSources.length > 0 ? " is-on" : ""
+                  }`}
+                  aria-pressed={resources.sqlSources.length > 0}
                   onClick={onConfigureResources}
                 >
-                  MCP {resources.mcpTools.length}
-                </Tag>
-              ) : null}
-              {resources.sqlSources.length > 0 ? (
-                <Tag
-                  icon={<DatabaseOutlined />}
-                  color="blue"
-                  style={{ cursor: "pointer", marginInlineEnd: 0 }}
+                  <TableOutlined />
+                  SQL
+                  {resources.sqlSources.length > 0 ? <b>{resources.sqlSources.length}</b> : null}
+                </button>
+                <button
+                  type="button"
+                  className={`composer-resource-chip${
+                    resources.mcpTools.length > 0 ? " is-on" : ""
+                  }`}
+                  aria-pressed={resources.mcpTools.length > 0}
                   onClick={onConfigureResources}
                 >
-                  SQL 问数 {resources.sqlSources.length}
-                </Tag>
-              ) : null}
+                  <ToolOutlined />
+                  Tools
+                  {resources.mcpTools.length > 0 ? <b>{resources.mcpTools.length}</b> : null}
+                </button>
+              </div>
 
               {/* Provider 选择 */}
               {providers.length > 0 ? (
@@ -215,7 +223,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                 <Button
                   type="primary"
                   size="small"
-                  icon={<SendOutlined />}
+                  icon={<ArrowRightOutlined />}
                   onClick={handleSend}
                   disabled={!canSend}
                   title="发送（Enter）"

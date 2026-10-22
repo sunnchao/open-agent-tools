@@ -6,7 +6,7 @@ import {
   type WorkflowResumeCheckpoint,
 } from "@open-agent-tools/workflow-contracts";
 import { variableNodes, renameVariable, repairVariableReference } from "./variables.js";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Alert, Badge, Button, Empty, Flex, Input, Segmented, Spin, Tag, Tooltip, Typography } from "antd";
 import "./workflow-panels.css";
@@ -28,7 +28,8 @@ import "@xyflow/react/dist/style.css";
 import {
   BranchesOutlined,
   CheckCircleFilled,
-  CloseCircleFilled,
+  CloseCircleOutlined,
+  CloseOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -171,6 +172,18 @@ function WorkflowCanvas({
   const [paletteQuery, setPaletteQuery] = useState("");
   const [nodePicker, setNodePicker] = useState<NodePickerState | null>(null);
   const [showIssues, setShowIssues] = useState(false);
+  const [issuesMenuPosition, setIssuesMenuPosition] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
+  const issuesButtonRef = useRef<HTMLButtonElement>(null);
+  const issuesMenuRef = useRef<HTMLDivElement>(null);
+  const closeIssues = useCallback((restoreFocus = true) => {
+    setShowIssues(false);
+    if (restoreFocus) issuesButtonRef.current?.focus();
+  }, []);
   const [editRevision, setEditRevision] = useState(0);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [running, setRunning] = useState(false);
@@ -486,6 +499,78 @@ function WorkflowCanvas({
     },
     [focusRunNode],
   );
+
+  useEffect(() => {
+    if (!showIssues) return;
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeIssues();
+    };
+    window.addEventListener("keydown", handleKey, true);
+    return () => window.removeEventListener("keydown", handleKey, true);
+  }, [showIssues, closeIssues]);
+
+  useEffect(() => {
+    if (!showIssues) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (issuesMenuRef.current?.contains(target) || issuesButtonRef.current?.contains(target)) {
+        return;
+      }
+      closeIssues(false);
+    };
+    // React Flow 的平移/选择会吞掉冒泡阶段的 pointerdown，关闭逻辑必须走捕获阶段。
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [showIssues, closeIssues]);
+
+  // 弹框贴住触发按钮，并在左右/上下边界内收敛，避免窄屏时被裁掉。
+  useLayoutEffect(() => {
+    if (!showIssues) {
+      setIssuesMenuPosition(null);
+      return;
+    }
+    const update = () => {
+      const trigger = issuesButtonRef.current;
+      const menu = issuesMenuRef.current;
+      if (!trigger || !menu) return;
+      const margin = 12;
+      const gap = 8;
+      const width = Math.min(384, window.innerWidth - margin * 2);
+      const rect = trigger.getBoundingClientRect();
+      const left = Math.min(
+        Math.max(margin, rect.right - width),
+        window.innerWidth - width - margin,
+      );
+      const spaceBelow = window.innerHeight - rect.bottom - gap - margin;
+      const spaceAbove = rect.top - gap - margin;
+      const naturalHeight = menu.scrollHeight;
+      let top = rect.bottom + gap;
+      let maxHeight = Math.max(160, spaceBelow);
+      if (naturalHeight > spaceBelow && spaceAbove > spaceBelow) {
+        maxHeight = Math.max(160, spaceAbove);
+        top = Math.max(margin, rect.top - gap - Math.min(naturalHeight, maxHeight));
+      }
+      setIssuesMenuPosition({
+        top: Math.round(top),
+        left: Math.round(left),
+        width: Math.round(width),
+        maxHeight: Math.round(maxHeight),
+      });
+    };
+    update();
+    const handleScroll = (event: Event) => {
+      const menu = issuesMenuRef.current;
+      if (menu && event.target instanceof Node && menu.contains(event.target)) return;
+      update();
+    };
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", handleScroll, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [showIssues, validationIssues]);
 
   const connect = useCallback(
     (connection: Connection) => {
@@ -1343,9 +1428,11 @@ function WorkflowCanvas({
           </Button>
           <div className="workflow-validation-wrap">
             <Button
+              ref={issuesButtonRef}
               danger={validationIssues.length > 0}
-              icon={validationIssues.length > 0 ? <CloseCircleFilled /> : <CheckCircleFilled />}
+              icon={validationIssues.length > 0 ? <CloseCircleOutlined /> : <CheckCircleFilled />}
               aria-expanded={showIssues}
+              aria-haspopup="dialog"
               aria-label={
                 validationIssues.length > 0
                   ? `工作流有 ${validationIssues.length} 个问题`
@@ -1357,38 +1444,109 @@ function WorkflowCanvas({
             </Button>
             {showIssues ? (
               <div
+                ref={issuesMenuRef}
                 className="workflow-validation-menu"
                 role="dialog"
                 aria-label="工作流问题"
+                style={
+                  issuesMenuPosition
+                    ? {
+                        top: issuesMenuPosition.top,
+                        left: issuesMenuPosition.left,
+                        width: issuesMenuPosition.width,
+                        maxHeight: issuesMenuPosition.maxHeight,
+                      }
+                    : { visibility: "hidden" }
+                }
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => event.stopPropagation()}
               >
-                <header>
-                  <b>运行前检查</b>
-                  <span>{validationIssues.length}</span>
+                <header className="workflow-validation-menu__head">
+                  <span className="workflow-validation-menu__heading">
+                    <b>运行前检查</b>
+                    <span>
+                      {validationIssues.length > 0
+                        ? "修复后即可发布或运行"
+                        : "节点连接和变量绑定均可运行"}
+                    </span>
+                  </span>
+                  <span
+                    className={
+                      validationIssues.length > 0
+                        ? "workflow-validation-menu__count is-error"
+                        : "workflow-validation-menu__count is-ok"
+                    }
+                    aria-hidden="true"
+                  >
+                    {validationIssues.length}
+                  </span>
+                  <button
+                    type="button"
+                    className="workflow-validation-menu__close"
+                    aria-label="关闭问题列表"
+                    onClick={() => closeIssues()}
+                  >
+                    <CloseOutlined />
+                  </button>
                 </header>
                 {validationIssues.length === 0 ? (
-                  <p>节点连接和变量绑定均可运行。</p>
+                  <p className="workflow-validation-menu__empty">
+                    <CheckCircleFilled />
+                    <span>没有发现问题，可以发布或运行。</span>
+                  </p>
                 ) : (
-                  <ol>
-                    {validationIssues.map((issue, index) => (
-                      <li key={`${issue.code}-${issue.nodeId ?? "workflow"}-${index}`}>
-                        <Button type="text" size="small" icon={<CloseCircleFilled />} onClick={() => focusIssue(issue)}>
-                          {issue.message} · {issue.nodeId ?? "WORKFLOW"}
-                        </Button>
-                        {issue.reference &&
-                          issue.suggestions?.map((suggestion) => (
-                            <Button
-                              key={suggestion}
-                              type="link"
-                              size="small"
-                              onClick={() => repairReference(issue, suggestion)}
-                            >
-                              改为 {suggestion}
-                            </Button>
-                          ))}
-                      </li>
-                    ))}
+                  <ol className="workflow-validation-menu__list">
+                    {validationIssues.map((issue, index) => {
+                      const issueNode = issue.nodeId
+                        ? nodes.find((node) => node.id === issue.nodeId)
+                        : undefined;
+                      const issueNodeLabel = issueNode?.data.label;
+                      const nodeChip = !issue.nodeId
+                        ? "工作流级"
+                        : !issueNodeLabel || !issue.message.includes(issueNodeLabel)
+                          ? `节点 ${issueNodeLabel ?? issue.nodeId}`
+                          : null;
+                      return (
+                        <li key={`${issue.code}-${issue.nodeId ?? "workflow"}-${index}`}>
+                          <button
+                            type="button"
+                            className="workflow-validation-issue"
+                            onClick={() => focusIssue(issue)}
+                            aria-label={`定位问题：${issue.message}`}
+                          >
+                            <span className="workflow-validation-issue__severity" aria-hidden="true">
+                              <CloseCircleOutlined />
+                            </span>
+                            <span className="workflow-validation-issue__body">
+                              <span className="workflow-validation-issue__message">{issue.message}</span>
+                              {nodeChip ? (
+                                <span className="workflow-validation-issue__node" title={issue.nodeId}>
+                                  {nodeChip}
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="workflow-validation-issue__locate" aria-hidden="true">
+                              定位
+                            </span>
+                          </button>
+                          {issue.reference && issue.suggestions?.length ? (
+                            <div className="workflow-validation-fixes">
+                              <span className="workflow-validation-fixes__label">建议</span>
+                              {issue.suggestions.map((suggestion) => (
+                                <button
+                                  key={suggestion}
+                                  type="button"
+                                  className="workflow-validation-fix"
+                                  onClick={() => repairReference(issue, suggestion)}
+                                >
+                                  改为 <code>{suggestion}</code>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </li>
+                      );
+                    })}
                   </ol>
                 )}
               </div>

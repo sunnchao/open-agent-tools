@@ -10,18 +10,22 @@ import type { CSSProperties, FC } from "react";
 import type { LucideProps } from "lucide-react";
 import {
   ArrowDown,
+  ArrowRight,
   BarChart3,
+  Bell,
   Webhook,
   Boxes,
   Building2,
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   CirclePause,
   CirclePlay,
   CloudUpload,
   Code,
+  Command,
   Copy,
   Database,
   Download,
@@ -33,11 +37,15 @@ import {
   GitBranch,
   Globe,
   Hammer,
+  History,
   KeyRound,
+  Layers3,
   Loader2,
+  Menu,
   MessageSquare,
   Minus,
   Network,
+  Ellipsis,
   PanelLeftClose,
   PanelLeftOpen,
   PencilLine,
@@ -107,6 +115,7 @@ export const CopyOutlined = adapt(Copy);
 export const DeleteOutlined = adapt(Trash2);
 export const EditOutlined = adapt(SquarePen);
 export const SearchOutlined = adapt(Search);
+export const CommandOutlined = adapt(Command);
 export const SaveOutlined = adapt(Save);
 export const DownloadOutlined = adapt(Download);
 export const UploadOutlined = adapt(Upload);
@@ -119,12 +128,18 @@ export const EyeOutlined = adapt(Eye);
 export const SettingOutlined = adapt(Settings);
 export const StarOutlined = adapt(Star);
 export const ArrowDownOutlined = adapt(ArrowDown);
+export const ArrowRightOutlined = adapt(ArrowRight);
 export const DownOutlined = adapt(ChevronDown);
+export const RightOutlined = adapt(ChevronRight);
 export const UpOutlined = adapt(ChevronUp);
+export const MenuOutlined = adapt(Menu);
+export const BellOutlined = adapt(Bell);
 export const PanelLeftCloseOutlined = adapt(PanelLeftClose);
 export const PanelLeftOpenOutlined = adapt(PanelLeftOpen);
 export const LikeOutlined = adapt(ThumbsUp);
 export const DislikeOutlined = adapt(ThumbsDown);
+export const MoreOutlined = adapt(Ellipsis);
+export const LayersOutlined = adapt(Layers3);
 
 // ── 领域 / 业务 ──
 export const ApiOutlined = adapt(Webhook);
@@ -149,6 +164,7 @@ export const SafetyCertificateOutlined = adapt(ShieldCheck);
 export const AuditOutlined = adapt(FileSearch);
 export const CodeOutlined = adapt(Code);
 export const BuildOutlined = adapt(Hammer);
+export const HistoryOutlined = adapt(History);
 export const Building2Outlined = adapt(Building2);
 export const BarChartOutlined = adapt(BarChart3);
 export const TagOutlined = adapt(Tag);
@@ -157,6 +173,7 @@ export const PlayCircleOutlined = adapt(CirclePlay);
 export const PlayCircleFilled = adapt(CirclePlay, true);
 export const CheckCircleFilled = adapt(CheckCircle2, true);
 export const CloseCircleFilled = adapt(XCircle, true);
+export const CloseCircleOutlined = adapt(XCircle);
 export const PencilOutlined = adapt(PencilLine);
 
 /** 始终旋转的加载图标 */

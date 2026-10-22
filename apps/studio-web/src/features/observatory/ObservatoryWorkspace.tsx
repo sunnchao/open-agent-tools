@@ -786,8 +786,14 @@ export function ObservatoryWorkspace() {
               sourceId={selectedSourceId}
             />
           ) : (
-            <Flex gap={12} align="flex-start" style={{ flex: 1, minHeight: 480 }}>
+            <Flex
+              className="studio-split-layout studio-split-layout--nested"
+              gap={12}
+              align="flex-start"
+              style={{ flex: 1, minHeight: 480 }}
+            >
               <Card
+                className="studio-split-layout__aside"
                 size="small"
                 title="问运营数据"
                 style={{ width: 330, flex: "0 0 auto", maxHeight: "100%", overflowY: "auto" }}
@@ -904,6 +910,7 @@ export function ObservatoryWorkspace() {
               </Card>
 
               <Card
+                className="studio-split-layout__main"
                 size="small"
                 title={
                   <Flex gap={8} align="center">
@@ -934,6 +941,7 @@ export function ObservatoryWorkspace() {
               </Card>
 
               <Card
+                className="studio-split-layout__detail"
                 size="small"
                 title="Selected schema"
                 extra={

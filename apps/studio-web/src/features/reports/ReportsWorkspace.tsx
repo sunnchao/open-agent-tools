@@ -310,11 +310,13 @@ export function ReportsWorkspace() {
       extra={<StudioNotice notice={notice} />}
     >
       <Flex
+        className="studio-split-layout"
         gap={12}
         align="flex-start"
         style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}
       >
         <Card
+          className="studio-split-layout__aside"
           size="small"
           title="报表清单"
           extra={<Tag>{reports.length}</Tag>}
@@ -342,7 +344,7 @@ export function ReportsWorkspace() {
                     cursor: "pointer",
                     borderRadius: 8,
                     padding: "8px 10px",
-                    background: report.id === selectedId ? "#f0f5ff" : undefined,
+                    background: report.id === selectedId ? "var(--studio-selected)" : undefined,
                   }}
                 >
                   <List.Item.Meta
@@ -363,6 +365,7 @@ export function ReportsWorkspace() {
         </Card>
 
         <Flex
+          className="studio-split-layout__main"
           vertical
           gap={12}
           style={{ flex: 1, minWidth: 0, minHeight: 0, alignSelf: "stretch", overflowY: "auto" }}

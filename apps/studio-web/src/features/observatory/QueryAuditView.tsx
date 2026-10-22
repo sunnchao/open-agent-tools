@@ -448,7 +448,7 @@ export function QueryAuditView({ sourceId }: { sourceId: string }) {
               onClick: () => setSelectedId(item.id),
               style: {
                 cursor: "pointer",
-                background: selectedId === item.id ? "#f0f5ff" : undefined,
+                background: selectedId === item.id ? "var(--studio-selected)" : undefined,
               },
             })}
             locale={{ emptyText: <Empty description="暂无匹配的查询记录" /> }}

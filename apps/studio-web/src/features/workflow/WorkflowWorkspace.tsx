@@ -41,10 +41,21 @@ import type { WorkflowSnapshot } from "./types.js";
 
 type WorkflowScreen = "library" | "editor" | "access";
 
-export function WorkflowWorkspace() {
+interface WorkflowWorkspaceProps {
+  /** 路由里的工作流 ID（`#/workflow/<workflowId>`）。 */
+  workflowId: string | null;
+  /** 子页面标记：`access` 表示访问点页（`#/workflow/<workflowId>/access`）。 */
+  subScreen: string | null;
+  /** 打开 / 返回某个工作流时回写路由，地址栏立即带上对应 ID。 */
+  onRouteChange: (segments: string[]) => void;
+}
+
+export function WorkflowWorkspace({
+  workflowId,
+  subScreen,
+  onRouteChange,
+}: WorkflowWorkspaceProps) {
   const { message } = App.useApp();
-  const [screen, setScreen] = useState<WorkflowScreen>("library");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowAppRecord[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -60,6 +71,14 @@ export function WorkflowWorkspace() {
     graph: WorkflowSnapshot;
     slug: string;
   } | null>(null);
+
+  // 当前界面由路由推导：带 ID 即进入详情页，第二段 `access` 表示访问点页。
+  const selectedId = workflowId;
+  const screen: WorkflowScreen = workflowId
+    ? subScreen === "access"
+      ? "access"
+      : "editor"
+    : "library";
 
   const importFile = async (file: File) => {
     setImporting(true);
@@ -112,9 +131,15 @@ export function WorkflowWorkspace() {
     );
   }, [query, workflows]);
 
-  const open = (workflowId: string, next: Exclude<WorkflowScreen, "library">) => {
-    setSelectedId(workflowId);
-    setScreen(next);
+  /** 打开某个工作流详情页 / 访问点页：把 ID 写进路由。 */
+  const open = (id: string, next: Exclude<WorkflowScreen, "library">) => {
+    onRouteChange(next === "access" ? [id, "access"] : [id]);
+  };
+
+  /** 返回工作流列表：清掉路由里的工作流 ID。 */
+  const backToLibrary = () => {
+    onRouteChange([]);
+    void refresh();
   };
 
   const closeCreateDialog = () => {
@@ -148,11 +173,8 @@ export function WorkflowWorkspace() {
     return (
       <WorkflowEditor
         workflowId={selectedId}
-        onBack={() => {
-          setScreen("library");
-          void refresh();
-        }}
-        onOpenAccess={() => setScreen("access")}
+        onBack={backToLibrary}
+        onOpenAccess={() => open(selectedId, "access")}
       />
     );
   }
@@ -161,7 +183,7 @@ export function WorkflowWorkspace() {
     return (
       <WorkflowAccess
         workflowId={selectedId}
-        onBack={() => setScreen("editor")}
+        onBack={() => open(selectedId, "editor")}
         onChanged={() => void refresh()}
       />
     );

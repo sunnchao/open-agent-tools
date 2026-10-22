@@ -1,5 +1,5 @@
 import { Layout, Button, Typography } from "antd";
-import { PlusOutlined } from "../lib/icons.js";
+import { HistoryOutlined, PlusOutlined } from "../lib/icons.js";
 import type { Session } from "../types.js";
 import { SessionList } from "./SessionList.js";
 
@@ -38,14 +38,14 @@ export function Sidebar({
     >
       <div className="chat-session-panel">
         <div className="chat-session-panel__head">
-          <Text
-            type="secondary"
-            className="chat-session-panel__eyebrow"
-          >
-            Agent Chat
-          </Text>
+          <div className="chat-session-panel__title">
+            <span>
+              会话 · <b>{sessions.length}</b>
+            </span>
+            <HistoryOutlined />
+          </div>
           <Button type="primary" block icon={<PlusOutlined />} onClick={onNewChat}>
-            New chat
+            新建对话
           </Button>
         </div>
 
@@ -59,7 +59,7 @@ export function Sidebar({
 
         <div className="chat-session-panel__foot">
           <Text type="secondary">
-            local sessions · v1
+            本地会话 · SQLite
           </Text>
         </div>
       </div>

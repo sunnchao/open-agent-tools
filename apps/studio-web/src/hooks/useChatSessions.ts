@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   emptyChatResources,
   type ChatResourceBinding,
@@ -33,9 +33,14 @@ function autoTitle(content: string): string {
   return trimmed.length > 32 ? trimmed.slice(0, 32) + "…" : trimmed || "New chat";
 }
 
-export function useChatSessions() {
+/**
+ * 会话列表与当前会话。
+ *
+ * 当前会话由 hash 路由决定（`#/chat/<sessionId>`）：路由里的 ID 命中会话列表时
+ * 直接切到该会话，否则回落到第一条。这样刷新页面或直接粘贴地址都能回到同一段对话。
+ */
+export function useChatSessions(routeSessionId: string | null) {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeId, setActiveId] = useState<string>("");
   const [ready, setReady] = useState(false);
   const bootstrapped = useRef(false);
 
@@ -52,7 +57,6 @@ export function useChatSessions() {
         const local = loadSessions();
         if (local.length > 0) {
           setSessions(local);
-          setActiveId(local[0]!.id);
           setReady(true);
           return;
         }
@@ -67,13 +71,11 @@ export function useChatSessions() {
         }
         loaded = loaded.map(normalizeSession);
         setSessions(loaded);
-        setActiveId(loaded[0]!.id);
         saveSessions(loaded);
       } catch (err) {
         console.warn("Failed to load sessions; using local fallback.", err);
         const local = createLocalSession();
         setSessions([local]);
-        setActiveId(local.id);
         saveSessions([local]);
       } finally {
         setReady(true);
@@ -97,25 +99,28 @@ export function useChatSessions() {
           const created = await createSessionApi();
           const normalized = normalizeSession(created);
           setSessions([normalized]);
-          setActiveId(created.id);
           saveSessions([normalized]);
         } catch {
           const local = createLocalSession();
           setSessions([local]);
-          setActiveId(local.id);
           saveSessions([local]);
         }
       })();
-      return;
     }
-    if (!sessions.some((s) => s.id === activeId)) {
-      setActiveId(sessions[0]!.id);
+  }, [sessions, ready]);
+
+  // 路由优先：命中会话列表就用路由里的会话，否则回落到第一条。
+  const activeId = useMemo(() => {
+    if (routeSessionId && sessions.some((session) => session.id === routeSessionId)) {
+      return routeSessionId;
     }
-  }, [sessions, activeId, ready]);
+    return sessions[0]?.id ?? "";
+  }, [routeSessionId, sessions]);
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
-  const newChat = useCallback(async () => {
+  /** 新建会话并返回它的 ID（调用方负责把 ID 写进路由）。 */
+  const newChat = useCallback(() => {
     const s: Session = {
       id: newId(),
       title: "New chat",
@@ -126,14 +131,10 @@ export function useChatSessions() {
       model: undefined,
     };
     setSessions((prev) => [s, ...prev]);
-    setActiveId(s.id);
     saveSessions([s, ...sessions]);
     void createSessionApi({ id: s.id, title: s.title }).catch(() => {});
+    return s.id;
   }, [sessions]);
-
-  const selectSession = useCallback((id: string) => {
-    setActiveId(id);
-  }, []);
 
   const deleteSession = useCallback(
     async (id: string) => {
@@ -149,19 +150,14 @@ export function useChatSessions() {
           void createSessionApi({ id: fresh.id }).then((created) => {
             const normalized = normalizeSession(created);
             setSessions([normalized]);
-            setActiveId(created.id);
             saveSessions([normalized]);
           });
-          setActiveId(fresh.id);
           return [fresh];
-        }
-        if (id === activeId) {
-          setActiveId(next[0]!.id);
         }
         return next;
       });
     },
-    [activeId],
+    [],
   );
 
   const renameSession = useCallback(async (id: string, title: string) => {
@@ -338,7 +334,6 @@ export function useChatSessions() {
     activeId,
     activeSession,
     newChat,
-    selectSession,
     deleteSession,
     renameSession,
     addMessage,

@@ -40,16 +40,42 @@ export class GraphRetriever {
     this.embeddings = opts.embeddings;
   }
 
-  /** 从查询文本中拆分候选词。 */
+  /** 候选词上限：滑窗会放大中文片段数量，避免长问句把定位退化成全库扫描。 */
+  private static readonly MAX_QUERY_TERMS = 64;
+
+  /** 向量兜底的入池门槛：低于此值视为「问句与图谱无关」，宁可零命中也不塞噪声。 */
+  private static readonly MIN_VECTOR_SEED_SCORE = 0.55;
+
+  /** 向量兜底的相对带宽：只保留与最高分相差不超过该值的实体。 */
+  private static readonly VECTOR_SEED_SCORE_BAND = 0.12;
+
+  /**
+   * 从查询文本中拆分候选词（英文 token + 中文 2-4 字重叠片段）。
+   *
+   * 中文必须用重叠滑窗而不是贪婪切块：`/[\u4e00-\u9fff]{2,4}/g` 会把
+   * 「卡莎有哪些技能」切成「卡莎有哪」「些技能」，跨过实体名边界后一个都命中不了，
+   * 而滑窗能同时产出「卡莎」。长词优先，兼顾精确度。
+   */
   private static splitQueryTerms(query: string): string[] {
-    const terms = new Set<string>();
+    const terms: string[] = [];
+    const seen = new Set<string>();
+    const add = (term: string) => {
+      if (!term || seen.has(term) || terms.length >= GraphRetriever.MAX_QUERY_TERMS) return;
+      seen.add(term);
+      terms.push(term);
+    };
     for (const match of query.matchAll(/[A-Za-z][A-Za-z0-9_]*/g)) {
-      if (match[0]!.length >= 2) terms.add(match[0]!);
+      if (match[0]!.length >= 2) add(match[0]!);
     }
-    for (const match of query.matchAll(/[\u4e00-\u9fff]{2,4}/g)) {
-      terms.add(match[0]!);
+    for (const match of query.matchAll(/[\u4e00-\u9fff]{2,}/g)) {
+      const run = match[0]!;
+      for (const size of [4, 3, 2]) {
+        for (let index = 0; index + size <= run.length; index += 1) {
+          add(run.slice(index, index + size));
+        }
+      }
     }
-    return [...terms];
+    return terms;
   }
 
   /** 种子定位：返回去重后的候选实体。 */
@@ -110,8 +136,15 @@ export class GraphRetriever {
           .map((entity, index) => ({ entity, score: cosine(q, entityVectors[index] ?? []) }))
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
-        for (const hit of ranked) {
-          if (hit.score > 0.3) add(hit.entity); // 阈值以下视为不相关
+        // 阈值必须够高：短中文串在通用 embedding 上的基线余弦就有 0.4-0.6，
+        // 旧阈值 0.3 会让「今天天气怎么样」也命中 20 个实体，把噪声当检索结果。
+        // 只保留接近最高分的命中，避免长尾弱相关实体把子图灌满。
+        const top = ranked[0]?.score ?? 0;
+        if (top >= GraphRetriever.MIN_VECTOR_SEED_SCORE) {
+          for (const hit of ranked) {
+            if (hit.score < top - GraphRetriever.VECTOR_SEED_SCORE_BAND) break;
+            add(hit.entity);
+          }
         }
       }
     }
@@ -164,19 +197,25 @@ export class GraphRetriever {
       }
     };
 
-    for (const seedId of seedIds) collect(seedId, 0);
-    // 确保种子必然出现在子图（即使被 maxNodes 截断）
+    // 种子先占预算再出发：否则种子重加会突破 maxNodes（曾实测 64 上限返回 76 个实体）。
+    // 种子是本次检索的锚点，必须优先保证它们出现在子图里；标记 visited 会阻断扩展，
+    // 所以这里只入图、随后仍交给 collect 正常展开。
     for (const seedId of seedIds) {
+      if (entityMap.size >= maxNodes) break;
       const entity = this.store.findEntityById(seedId);
-      if (entity && isAllowedEntity(seedId) && !entityMap.has(seedId)) {
-        entityMap.set(seedId, entity);
-      }
+      if (entity && isAllowedEntity(seedId)) entityMap.set(seedId, entity);
     }
+    for (const seedId of seedIds) collect(seedId, 0);
+    // maxNodes 会截断邻居实体，但关系是按邻居查询批量收集的：
+    // 不闭合就会把被截断的一端序列化成裸 40 位实体 id，检索文本直接失去可读性。
+    // 只保留两端都在子图内的关系，保证每条三元组都能解析出实体名。
+    const relations = [...relationMap.values()].filter(
+      (relation) => entityMap.has(relation.srcId) && entityMap.has(relation.dstId),
+    );
     return {
       entities: [...entityMap.values()],
-      relations: [...relationMap.values()],
-      formatted: () =>
-        serializeSubgraphEntities([...entityMap.values()], [...relationMap.values()]),
+      relations,
+      formatted: () => serializeSubgraphEntities([...entityMap.values()], relations),
     };
   }
 
@@ -210,5 +249,24 @@ function serializeSubgraphEntities(entities: Entity[], relations: Relation[]): s
   if (entities.length > 0) {
     lines.push(`涉及实体: ${entities.map((e) => `${e.name}(${e.type})`).join("、")}`);
   }
+  // 实体属性是抽取阶段花 LLM 成本换来的事实（称号/英文名/类别…）。
+  // 只给名字和关系等于把它们丢掉，问「XX 有哪些技能」这类问题就永远答不出来。
+  const described = entities.filter((entity) => entityProps(entity).length > 0);
+  if (described.length > 0) {
+    lines.push("实体属性:");
+    for (const entity of described) {
+      lines.push(`- ${entity.name}: ${entityProps(entity).join("；")}`);
+    }
+  }
   return lines.join("\n");
+}
+
+/** 实体的非空字符串属性，按 key 排序保证输出稳定可比对。 */
+function entityProps(entity: Entity): string[] {
+  const props = entity.props;
+  if (!props || typeof props !== "object") return [];
+  return Object.entries(props)
+    .filter(([, value]) => typeof value === "string" && value.trim().length > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}: ${String(value).trim()}`);
 }

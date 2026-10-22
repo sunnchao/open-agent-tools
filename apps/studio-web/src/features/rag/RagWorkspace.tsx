@@ -416,11 +416,13 @@ export function RagWorkspace() {
         </div>
       ) : (
         <Flex
+          className="studio-split-layout"
           gap={12}
           align="flex-start"
           style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}
         >
           <Card
+            className="studio-split-layout__aside"
             size="small"
             title="知识来源"
             extra={<Tag>{stats?.sources.length ?? 0}</Tag>}
@@ -487,7 +489,8 @@ export function RagWorkspace() {
                   },
                   style: {
                     cursor: "pointer",
-                    background: record.source === selectedSource ? "#f0f5ff" : undefined,
+                    background:
+                      record.source === selectedSource ? "var(--studio-selected)" : undefined,
                   },
                 })}
                 locale={{ emptyText: <Empty description="拖入文档以创建知识来源" /> }}
@@ -496,6 +499,7 @@ export function RagWorkspace() {
           </Card>
 
           <Flex
+            className="studio-split-layout__main"
             vertical
             gap={12}
             style={{
@@ -550,6 +554,7 @@ export function RagWorkspace() {
           </Flex>
 
           <Card
+            className="studio-split-layout__detail"
             size="small"
             title={
               <Flex gap={8} align="center">

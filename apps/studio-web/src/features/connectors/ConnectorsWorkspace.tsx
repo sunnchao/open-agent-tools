@@ -292,11 +292,13 @@ export function ConnectorsWorkspace() {
       extra={<StudioNotice notice={notice} />}
     >
       <Flex
+        className="studio-split-layout"
         gap={12}
         align="flex-start"
         style={{ flex: 1, minHeight: 0, padding: 16, overflow: "hidden" }}
       >
         <Card
+          className="studio-split-layout__aside"
           size="small"
           title="连接器"
           extra={<Tag>{connectors.length}</Tag>}
@@ -324,7 +326,7 @@ export function ConnectorsWorkspace() {
                     cursor: "pointer",
                     borderRadius: 8,
                     padding: "8px 10px",
-                    background: record.id === selectedId ? "#f0f5ff" : undefined,
+                    background: record.id === selectedId ? "var(--studio-selected)" : undefined,
                   }}
                 >
                   <List.Item.Meta
@@ -345,7 +347,12 @@ export function ConnectorsWorkspace() {
           )}
         </Card>
 
-        <Flex vertical gap={12} style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+        <Flex
+          className="studio-split-layout__main"
+          vertical
+          gap={12}
+          style={{ flex: 1, minWidth: 0, overflowY: "auto" }}
+        >
           <Card
             size="small"
             title={

@@ -407,6 +407,12 @@ export function VariableBindingsEditor({
                 。删除后引用将标记为失效。
               </Typography.Text>
             )}
+            {/* 未被消费的输出此前完全静默：节点正常运行、结果却进不了最终输出。 */}
+            {uses.length === 0 && node.data.kind !== "end" && (
+              <Typography.Text className="variable-help">
+                尚未被任何下游节点引用：该输出不会进入最终结果。请在下一个节点把它绑定为输入。
+              </Typography.Text>
+            )}
           </Flex>
         );
       })}

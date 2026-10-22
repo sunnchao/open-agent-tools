@@ -1,6 +1,7 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App as AntApp, ConfigProvider, theme } from "antd";
+import "./styles/global.css";
 import { App } from "./App.js";
 import { EmployeeApp } from "./features/apps/EmployeeApp.js";
 import { applyBranding } from "./features/branding/applyBranding.js";
@@ -9,7 +10,6 @@ import {
   fetchPublicBranding,
   type BrandingConfig,
 } from "./features/branding/api.js";
-import "./styles/global.css";
 
 const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("#root element not found");
@@ -53,23 +53,24 @@ function StudioRoot() {
       theme={{
         algorithm: theme.defaultAlgorithm,
         token: {
-          colorPrimary: branding.primaryColor,
-          colorInfo: branding.accentColor,
-          colorSuccess: "#2f9e6e",
-          colorWarning: "#d98a2b",
-          colorError: "#d64545",
-          colorTextBase: "#1d2024",
-          colorBgBase: "#f6f5f1",
+          colorPrimary: "#0f513f",
+          colorInfo: "#0b6e63",
+          colorSuccess: "#0b6e63",
+          colorWarning: "#9a5a09",
+          colorError: "#a92d24",
+          colorTextBase: "#111a15",
+          colorBgBase: "#eef1ee",
           colorBgContainer: "#ffffff",
           colorBgElevated: "#ffffff",
-          colorBgLayout: "#f0efea",
-          colorBorder: "#dfddd6",
-          colorBorderSecondary: "#e8e6df",
-          colorTextSecondary: "#6b7077",
-          colorTextTertiary: "#9a9ea5",
+          colorBgLayout: "#eef1ee",
+          colorBorder: "#c8d2cb",
+          colorBorderSecondary: "#dde4df",
+          colorTextSecondary: "#5b6861",
+          colorTextTertiary: "#68756d",
           borderRadius: 8,
-          fontFamily: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif',
-          fontSize: 14,
+          fontFamily:
+            '"Instrument Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
+          fontSize: 13,
         },
         components: {
           Button: {
@@ -87,13 +88,13 @@ function StudioRoot() {
             headerPadding: 16,
           },
           Table: {
-            headerBg: "#faf9f6",
+            headerBg: "#f6f8f6",
           },
           Tabs: {
-            inkBarColor: branding.primaryColor,
+            inkBarColor: "#0f513f",
           },
           Segmented: {
-            trackBg: "#f0efea",
+            trackBg: "#edf1ee",
           },
           Alert: {},
           Modal: {},
