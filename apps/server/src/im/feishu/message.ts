@@ -34,6 +34,7 @@ export function parseFeishuMessageEvent(data: unknown): ImMessageEvent {
     chatId: message.chat_id ?? "",
     chatType: message.chat_type === "group" ? "group" : "p2p",
     senderOpenId: event.sender?.sender_id?.open_id ?? null,
+    senderIdType: "feishu_open_id",
     // 飞书事件本身不带昵称；bot 层按 open_id 调通讯录解析（无权限/超时则留空）。
     senderName: null,
     text: message.message_type === "text" ? parseFeishuTextContent(message.content ?? "") : null,

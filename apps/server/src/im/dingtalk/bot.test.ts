@@ -138,7 +138,8 @@ describe("startDingTalkBot", () => {
     const handle = await startDingTalkBot(config(), {
       createStreamClient: stream.create,
       askChat: async (params) => {
-        calls.push(params);
+        const { onProgress: _onProgress, ...rest } = params;
+        calls.push(rest);
         return { content: "回答内容", toolCalls: [], toolResultCount: 0, citations: 0 };
       },
     });

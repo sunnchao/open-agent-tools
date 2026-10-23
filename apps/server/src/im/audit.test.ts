@@ -152,6 +152,104 @@ describe("im chat audit", () => {
     assert.equal(listImChatAudits({ keyword: "不存在的人" }).total, 0);
   });
 
+  it("records token usage and detailed model data", () => {
+    const created = recordImChatAudit({
+      platform: "dingtalk",
+      actor: "staff_1",
+      question: "上季度营收多少",
+      answer: "1234 万",
+      providerId: "provider_1",
+      providerName: "主 Provider",
+      providerFormat: "openai-chat",
+      model: "gpt-4o-mini",
+      llmRequests: 3,
+      inputTokens: 1200,
+      outputTokens: 300,
+      totalTokens: 1500,
+      models: [
+        {
+          providerId: "provider_1",
+          model: "gpt-4o-mini",
+          requests: 2,
+          inputTokens: 1000,
+          outputTokens: 250,
+          totalTokens: 1250,
+          durationMs: 1800,
+          failed: false,
+        },
+        {
+          providerId: "provider_sql",
+          model: "sql-model",
+          requests: 1,
+          inputTokens: 200,
+          outputTokens: 50,
+          totalTokens: 250,
+          durationMs: 600,
+          failed: false,
+        },
+      ],
+    });
+    assert.ok(created);
+    const loaded = getImChatAudit(created.id);
+    assert.ok(loaded);
+    assert.equal(loaded.providerId, "provider_1");
+    assert.equal(loaded.providerName, "主 Provider");
+    assert.equal(loaded.providerFormat, "openai-chat");
+    assert.equal(loaded.model, "gpt-4o-mini");
+    assert.equal(loaded.llmRequests, 3);
+    assert.equal(loaded.inputTokens, 1200);
+    assert.equal(loaded.outputTokens, 300);
+    assert.equal(loaded.totalTokens, 1500);
+    assert.deepEqual(loaded.models, [
+      {
+        providerId: "provider_1",
+        model: "gpt-4o-mini",
+        requests: 2,
+        inputTokens: 1000,
+        outputTokens: 250,
+        totalTokens: 1250,
+        durationMs: 1800,
+        failed: false,
+      },
+      {
+        providerId: "provider_sql",
+        model: "sql-model",
+        requests: 1,
+        inputTokens: 200,
+        outputTokens: 50,
+        totalTokens: 250,
+        durationMs: 600,
+        failed: false,
+      },
+    ]);
+  });
+
+  it("sanitizes model details and derives total tokens when absent", () => {
+    const created = recordImChatAudit({
+      platform: "feishu",
+      question: "hi",
+      inputTokens: 10,
+      outputTokens: 5,
+      models: [
+        {
+          providerId: "p",
+          model: "m",
+          requests: 1,
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 0,
+          durationMs: 0,
+          failed: false,
+        },
+      ],
+    });
+    assert.ok(created);
+    assert.equal(created.totalTokens, 15);
+    assert.equal(created.models[0]?.totalTokens, 15);
+    assert.equal(created.models[0]?.durationMs, 0);
+    assert.equal(created.models[0]?.failed, false);
+  });
+
   it("truncates overlong actor names to 200 chars", () => {
     const created = recordImChatAudit({
       platform: "dingtalk",

@@ -7,9 +7,11 @@ import { closeDb, openDb } from "./db.js";
 import { listRecentUsage, summarizeUsage } from "./usage.js";
 import {
   currentUsage,
+  currentUsageModels,
   recordToolCall,
   trackLlmRequest,
   trackUsage,
+  type UsageModelDetail,
   type UsageSnapshot,
 } from "./usageTracking.js";
 
@@ -74,6 +76,53 @@ describe("request usage tracking", () => {
       "sql_query",
       "web_chat",
     ]);
+  });
+
+  it("snapshots per-model usage across nested scopes", async () => {
+    let snapshot: UsageModelDetail[] = [];
+    await trackUsage(
+      {
+        source: "web_chat",
+        onUsage: (_usage, models) => {
+          snapshot = models;
+        },
+      },
+      async () => {
+        await trackLlmRequest("chat-provider", "chat-model", complete(100, 20));
+        await trackUsage({ source: "sql_query" }, async () => {
+          await trackLlmRequest("sql-provider", "sql-model", complete(200, 30));
+          // 嵌套链路复用同一模型时，明细按模型合并而不是按链路拆分。
+          await trackLlmRequest("chat-provider", "chat-model", complete(50, 10));
+        });
+        // 耗时随机器波动，断言前归零。
+        const inside = currentUsageModels().map((entry) => ({ ...entry, durationMs: 0 }));
+        assert.deepEqual(inside, [
+          {
+            providerId: "chat-provider",
+            model: "chat-model",
+            requests: 2,
+            inputTokens: 150,
+            outputTokens: 30,
+            totalTokens: 180,
+            durationMs: 0,
+            failed: false,
+          },
+          {
+            providerId: "sql-provider",
+            model: "sql-model",
+            requests: 1,
+            inputTokens: 200,
+            outputTokens: 30,
+            totalTokens: 230,
+            durationMs: 0,
+            failed: false,
+          },
+        ]);
+      },
+    );
+    // 作用域结束后仍保留最后一次发布的快照。
+    assert.equal(snapshot.length, 2);
+    assert.deepEqual(currentUsageModels(), []);
   });
 
   it("counts requests without usage metadata and preserves successful tokens on later failure", async () => {

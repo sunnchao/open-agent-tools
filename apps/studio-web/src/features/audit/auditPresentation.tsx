@@ -50,6 +50,11 @@ export function formatTime(value: string): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
+/** Token 数量展示：0/缺失显示 0，其余按千分位。 */
+export function formatTokens(value: number): string {
+  return Number.isFinite(value) && value > 0 ? value.toLocaleString() : "0";
+}
+
 export function excerptColumn<T>(options: {
   title: string;
   dataIndex: Extract<keyof T, string>;

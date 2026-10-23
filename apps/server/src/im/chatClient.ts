@@ -7,6 +7,37 @@
 
 import { logTrace } from "../trace.js";
 
+/** 一轮问答的 token 用量（服务端 `usage` 帧）。 */
+export interface ChatUsage {
+  /** 模型调用次数（不是对话轮次）。 */
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  toolCalls: number;
+  toolErrors: number;
+}
+
+/** 单个模型的用量明细（服务端 `models` 帧，含嵌套 SQL 等子链路）。 */
+export interface ChatModelUsage {
+  providerId: string;
+  model: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  durationMs: number;
+  failed: boolean;
+}
+
+/** 本轮实际使用的 Provider / 模型（服务端 `model` 帧）。 */
+export interface ChatModelInfo {
+  providerId: string;
+  providerName: string;
+  providerFormat: string;
+  model: string;
+}
+
 export interface ChatAnswer {
   content: string;
   /** 本轮触发的工具名（按出现顺序去重前的原始列表）。 */
@@ -15,6 +46,27 @@ export interface ChatAnswer {
   toolResultCount: number;
   /** 本轮引用的知识片段数。 */
   citations: number;
+  /** 本轮 token 用量；服务端未上报时为 null。 */
+  usage?: ChatUsage | null;
+  /** 逐模型用量明细；服务端未上报时为空数组。 */
+  models?: ChatModelUsage[];
+  /** 本轮实际使用的 Provider / 模型；服务端未上报时为 null。 */
+  model?: ChatModelInfo | null;
+}
+
+/**
+ * `/api/chat` 流内错误：附带出错前已累计的回答与用量。
+ *
+ * IM 审计在失败路径据此记录 token / 模型，而不是把用量丢成 0。
+ */
+export class ChatRequestError extends Error {
+  constructor(
+    message: string,
+    readonly partial?: Partial<ChatAnswer>,
+  ) {
+    super(message);
+    this.name = "ChatRequestError";
+  }
 }
 
 /** IM 渠道绑定的 MCP 工具；与 /api/chat 的 resources.mcpTools 结构一致。 */
@@ -47,19 +99,106 @@ export function parseUnavailableTool(error: unknown): ChatMcpToolBinding | null 
 /**
  * 解析一条 SSE 帧（`data: {...}`）。
  *
- * 返回 delta 增量 / error / 工具调用与引用计数；非数据帧与坏帧返回 null。
+ * 返回 delta 增量 / error / 检索评估 / 工具调用与引用计数；非数据帧与坏帧返回 null。
  * 未知事件（如 done、usage、assistantMessageId）一律忽略，向后兼容旧服务端。
  */
 export interface ChatSseEvent {
   delta?: string;
   error?: string;
+  /** 收到知识库检索评估（crag_assessment）帧。 */
+  assessment?: boolean;
   /** 工具名。 */
   toolCall?: string;
   /** 工具结果条数（每次 tool_result 事件 +1）。 */
   toolResult?: boolean;
+  /** tool_result 帧里回显的工具展示名；缺失时为 null。 */
+  toolResultName?: string | null;
   /** 引用片段数（rag_citations 数组长度）。 */
   citations?: number;
+  /** 本轮累计 token 用量（usage 帧）。 */
+  usage?: ChatUsage;
+  /** 逐模型用量明细（usage/models 帧）。 */
+  models?: ChatModelUsage[];
+  /** 本轮 Provider / 模型信息（model 帧）。 */
+  model?: ChatModelInfo;
 }
+
+function nonNegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+/** 归一化服务端 `usage` 对象；非对象返回 null。 */
+export function parseChatUsage(raw: unknown): ChatUsage | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const data = raw as Record<string, unknown>;
+  const inputTokens = nonNegativeInteger(data.inputTokens);
+  const outputTokens = nonNegativeInteger(data.outputTokens);
+  return {
+    requests: nonNegativeInteger(data.requests),
+    inputTokens,
+    outputTokens,
+    totalTokens: nonNegativeInteger(data.totalTokens) || inputTokens + outputTokens,
+    toolCalls: nonNegativeInteger(data.toolCalls),
+    toolErrors: nonNegativeInteger(data.toolErrors),
+  };
+}
+
+/** 归一化服务端 `models` 数组；缺失/非法条目丢弃。 */
+export function parseChatModels(raw: unknown): ChatModelUsage[] {
+  if (!Array.isArray(raw)) return [];
+  const models: ChatModelUsage[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const data = item as Record<string, unknown>;
+    const providerId = nonEmptyString(data.providerId) ?? "";
+    const model = nonEmptyString(data.model) ?? "";
+    if (!providerId && !model) continue;
+    const inputTokens = nonNegativeInteger(data.inputTokens);
+    const outputTokens = nonNegativeInteger(data.outputTokens);
+    models.push({
+      providerId,
+      model,
+      requests: nonNegativeInteger(data.requests),
+      inputTokens,
+      outputTokens,
+      totalTokens: nonNegativeInteger(data.totalTokens) || inputTokens + outputTokens,
+      durationMs: nonNegativeInteger(data.durationMs),
+      failed: data.failed === true,
+    });
+  }
+  return models;
+}
+
+/** 归一化服务端 `model` 对象；缺失/非法返回 null。 */
+export function parseChatModelInfo(raw: unknown): ChatModelInfo | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const data = raw as Record<string, unknown>;
+  const providerId = nonEmptyString(data.providerId);
+  const model = nonEmptyString(data.model);
+  if (!providerId && !model) return null;
+  return {
+    providerId: providerId ?? "",
+    providerName: nonEmptyString(data.providerName) ?? "",
+    providerFormat: nonEmptyString(data.providerFormat) ?? "",
+    model: model ?? "",
+  };
+}
+
+/** IM 等待期进度事件：answerMessage 据此发送阶段状态，失败时汇总已完成步骤。 */
+export type ChatProgressEvent =
+  | { type: "retrieval" }
+  | { type: "citations"; count: number }
+  | { type: "tool_call"; toolName: string }
+  | { type: "tool_result"; toolName: string | null }
+  | { type: "delta" };
+
+export type ChatProgressHandler = (event: ChatProgressEvent) => void | Promise<void>;
 
 export function parseChatSseEvent(line: string): ChatSseEvent | null {
   const trimmed = line.trim();
@@ -70,12 +209,30 @@ export function parseChatSseEvent(line: string): ChatSseEvent | null {
     const data = JSON.parse(payload) as Record<string, unknown>;
     if (typeof data.delta === "string") return { delta: data.delta };
     if (typeof data.error === "string") return { error: data.error };
+    if (data.crag_assessment !== undefined) return { assessment: true };
     const toolCall = data.tool_call as { name?: unknown } | undefined;
     if (toolCall && typeof toolCall.name === "string") {
       return { toolCall: toolCall.name };
     }
-    if (data.tool_result !== undefined) return { toolResult: true };
+    if (data.tool_result !== undefined) {
+      const result = data.tool_result as { name?: unknown } | undefined;
+      const toolResultName = result && typeof result.name === "string" ? result.name : null;
+      return { toolResult: true, toolResultName };
+    }
     if (Array.isArray(data.rag_citations)) return { citations: data.rag_citations.length };
+    // usage 帧可能同时带 models；done 帧则 usage + models + model 一起下发。
+    const usage = parseChatUsage(data.usage);
+    if (usage) {
+      const models = parseChatModels(data.models);
+      const model = parseChatModelInfo(data.model);
+      return {
+        usage,
+        ...(models.length > 0 ? { models } : {}),
+        ...(model ? { model } : {}),
+      };
+    }
+    const model = parseChatModelInfo(data.model);
+    if (model) return { model };
   } catch {
     // 忽略无法解析的帧
   }
@@ -86,6 +243,9 @@ interface ChatRequest {
   baseUrl: string;
   question: string;
   sessionId: string;
+  /** 账号级模型绑定；仅 Provider 与模型同时存在时写入请求体。 */
+  providerId?: string;
+  model?: string;
   resources: {
     rag: { sources: string[]; topK: number };
     sqlSources?: string[];
@@ -96,6 +256,8 @@ interface ChatRequest {
   /** IM 来源标识（渠道/用户/会话类型），服务端据此给会话打 source='im'。 */
   im?: { channelId?: string; actor?: string; chatType?: string };
   signal?: AbortSignal;
+  /** 流式进度回调：检索/工具/首个 delta 到达时触发，用于 IM 等待期状态提示。 */
+  onProgress?: ChatProgressHandler;
 }
 
 /** 按 serviceSlug:toolName 去重，保留首次出现顺序。 */
@@ -112,7 +274,18 @@ function dedupeTools(tools: ChatMcpToolBinding[]): ChatMcpToolBinding[] {
 
 /** 发起一次 /api/chat 请求并聚合 SSE delta 与工具/引用计数。 */
 async function requestChat(request: ChatRequest): Promise<ChatAnswer> {
-  const { baseUrl, question, sessionId, resources, workspaceId, im, signal } = request;
+  const {
+    baseUrl,
+    question,
+    sessionId,
+    providerId: requestProviderId,
+    model: requestModel,
+    resources,
+    workspaceId,
+    im,
+    signal,
+    onProgress,
+  } = request;
   const headers: Record<string, string> = { "content-type": "application/json" };
   // 工作区归属：渠道配置的 workspace 决定会话与用量的归集空间。
   if (workspaceId) headers["x-workspace-id"] = workspaceId;
@@ -126,6 +299,9 @@ async function requestChat(request: ChatRequest): Promise<ChatAnswer> {
     body: JSON.stringify({
       messages: [{ role: "user", content: question }],
       sessionId,
+      ...(requestProviderId && requestModel
+        ? { providerId: requestProviderId, model: requestModel }
+        : {}),
       resources,
     }),
     signal,
@@ -141,6 +317,10 @@ async function requestChat(request: ChatRequest): Promise<ChatAnswer> {
   const toolCalls: string[] = [];
   let toolResultCount = 0;
   let citations = 0;
+  let deltaNotified = false;
+  let usage: ChatUsage | null = null;
+  let models: ChatModelUsage[] = [];
+  let model: ChatModelInfo | null = null;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   for (;;) {
@@ -153,15 +333,47 @@ async function requestChat(request: ChatRequest): Promise<ChatAnswer> {
       buffer = buffer.slice(sepIndex + 2);
       const event = parseChatSseEvent(frame);
       if (!event) continue;
-      if (event.error) throw new Error(event.error);
-      if (event.delta) content += event.delta;
-      if (event.toolCall) toolCalls.push(event.toolCall);
-      if (event.toolResult) toolResultCount += 1;
-      if (typeof event.citations === "number") citations += event.citations;
+      if (event.error) {
+        // 带上已累计的内容与用量：失败审计仍能记录本轮已消耗的 token / 模型。
+        throw new ChatRequestError(event.error, {
+          content: content.trim(),
+          toolCalls: [...toolCalls],
+          toolResultCount,
+          citations,
+          usage,
+          models,
+          model,
+        });
+      }
+      if (event.model) model = event.model;
+      if (event.usage) usage = event.usage;
+      if (event.models) models = event.models;
+      if (event.assessment) {
+        await onProgress?.({ type: "retrieval" });
+      }
+      if (event.delta) {
+        content += event.delta;
+        if (!deltaNotified) {
+          deltaNotified = true;
+          await onProgress?.({ type: "delta" });
+        }
+      }
+      if (event.toolCall) {
+        toolCalls.push(event.toolCall);
+        await onProgress?.({ type: "tool_call", toolName: event.toolCall });
+      }
+      if (event.toolResult) {
+        toolResultCount += 1;
+        await onProgress?.({ type: "tool_result", toolName: event.toolResultName ?? null });
+      }
+      if (typeof event.citations === "number") {
+        citations += event.citations;
+        if (event.citations > 0) await onProgress?.({ type: "citations", count: event.citations });
+      }
     }
   }
 
-  return { content: content.trim(), toolCalls, toolResultCount, citations };
+  return { content: content.trim(), toolCalls, toolResultCount, citations, usage, models, model };
 }
 
 export async function askChat(params: {
@@ -176,11 +388,28 @@ export async function askChat(params: {
   mcpTools?: ChatMcpToolBinding[];
   /** 渠道所属工作区；透传为 x-workspace-id 头。 */
   workspaceId?: string;
+  /** 账号绑定的 Provider / 模型；缺省时服务端使用系统默认。 */
+  providerId?: string;
+  model?: string;
   /** IM 来源标识（渠道/用户/会话类型），透传为 x-im-* 头。 */
   im?: { channelId?: string; actor?: string; chatType?: string };
   signal?: AbortSignal;
+  /** 流式进度回调：检索/工具/首个 delta 到达时触发，用于 IM 等待期状态提示。 */
+  onProgress?: ChatProgressHandler;
 }): Promise<ChatAnswer> {
-  const { baseUrl, question, sessionId, sources, topK, sqlSources, mcpTools, signal } = params;
+  const {
+    baseUrl,
+    question,
+    sessionId,
+    sources,
+    topK,
+    sqlSources,
+    mcpTools,
+    providerId,
+    model,
+    signal,
+    onProgress,
+  } = params;
   // 去重：同一 serviceSlug:toolName 只保留一次，避免重复声明同一工具。
   let activeTools = dedupeTools(mcpTools ?? []);
   let degraded = 0;
@@ -196,10 +425,12 @@ export async function askChat(params: {
         baseUrl,
         question,
         sessionId,
+        ...(providerId && model ? { providerId, model } : {}),
         resources,
         ...(params.workspaceId ? { workspaceId: params.workspaceId } : {}),
         ...(params.im ? { im: params.im } : {}),
         signal,
+        ...(onProgress ? { onProgress } : {}),
       });
     } catch (error) {
       const missing = parseUnavailableTool(error);

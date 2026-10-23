@@ -249,6 +249,54 @@ describe("audit api", () => {
     });
   });
 
+  it("normalizes token usage and per-model details", () => {
+    const record = normalizeImChatAudit({
+      platform: "dingtalk",
+      provider_id: "provider-1",
+      provider_name: "主 Provider",
+      provider_format: "openai-chat",
+      model: "model-1",
+      llm_requests: 2,
+      input_tokens: 100,
+      output_tokens: 20,
+      total_tokens: 120,
+      models: JSON.stringify([
+        {
+          providerId: "provider-1",
+          model: "model-1",
+          requests: 2,
+          inputTokens: 100,
+          outputTokens: 20,
+          totalTokens: 120,
+          durationMs: 800,
+          failed: false,
+        },
+      ]),
+    });
+    expect(record).toMatchObject({
+      providerId: "provider-1",
+      providerName: "主 Provider",
+      providerFormat: "openai-chat",
+      model: "model-1",
+      llmRequests: 2,
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+    });
+    expect(record.models).toEqual([
+      {
+        providerId: "provider-1",
+        model: "model-1",
+        requests: 2,
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        durationMs: 800,
+        failed: false,
+      },
+    ]);
+  });
+
   it("loads the audit overview sections and keeps the control plane note", async () => {
     const fetchMock = vi.fn(
       async (_url: string) =>

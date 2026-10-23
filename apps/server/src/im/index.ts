@@ -46,8 +46,8 @@ export async function startImIfConfigured(): Promise<void> {
   }
 }
 
-export function getImStatus(): ImStatus {
-  const channels = getChannelStatuses();
+export function getImStatus(workspaceId?: string): ImStatus {
+  const channels = getChannelStatuses(workspaceId);
   const first = channels[0];
   const errored = channels.find((channel) => channel.error);
   return {

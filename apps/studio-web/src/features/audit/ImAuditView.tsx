@@ -28,6 +28,7 @@ import {
   durationColumn,
   excerptColumn,
   formatTime,
+  formatTokens,
   platformLabel,
   statusColor,
   statusLabel,
@@ -213,6 +214,39 @@ export function ImAuditView({
       width: 90,
       render: (value: number) => (
         <Typography.Text style={{ fontSize: 12 }}>{value}</Typography.Text>
+      ),
+    },
+    {
+      title: "模型",
+      key: "model",
+      width: 150,
+      render: (_: unknown, item: ImChatAuditRecord) => (
+        <Flex vertical gap={0}>
+          <Typography.Text style={{ fontSize: 12 }} ellipsis title={item.model ?? undefined}>
+            {item.model || "—"}
+          </Typography.Text>
+          {item.providerName || item.providerId ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis>
+              {item.providerName || item.providerId}
+            </Typography.Text>
+          ) : null}
+        </Flex>
+      ),
+    },
+    {
+      title: "Token",
+      key: "tokens",
+      width: 100,
+      render: (_: unknown, item: ImChatAuditRecord) => (
+        <Tooltip
+          title={`输入 ${formatTokens(item.inputTokens)} / 输出 ${formatTokens(
+            item.outputTokens,
+          )}${item.llmRequests > 0 ? ` · ${item.llmRequests} 次模型调用` : ""}`}
+        >
+          <Typography.Text style={{ fontSize: 12 }}>
+            {item.totalTokens > 0 ? item.totalTokens.toLocaleString() : "—"}
+          </Typography.Text>
+        </Tooltip>
       ),
     },
     detailColumn(viewDetails),

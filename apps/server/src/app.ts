@@ -11,6 +11,7 @@ import { chatRouter } from "./routes/chat.js";
 import { workflowRouter } from "./routes/workflow.js";
 import { imRouter } from "./routes/im.js";
 import { imChannelsRouter } from "./routes/imChannels.js";
+import { imAccountsRouter } from "./routes/imAccounts.js";
 import { aiQueryRouter } from "./routes/aiQuery.js";
 import { oneapiDemoRouter } from "./routes/oneapiDemo.js";
 import { observatoryRouter } from "./routes/observatory.js";
@@ -80,6 +81,7 @@ export function createApp(options: CreateAppOptions = {}): express.Express {
   app.use(workflowsRouter);
   app.use(imRouter);
   app.use(imChannelsRouter);
+  app.use(imAccountsRouter);
   app.use(aiQueryRouter);
   app.use(schemaSourcesRouter);
   app.use(mcpGatewayRouter);

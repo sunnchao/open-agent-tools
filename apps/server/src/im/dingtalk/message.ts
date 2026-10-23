@@ -60,13 +60,19 @@ export function parseDingTalkMessagePayload(data: unknown): DingTalkMessagePaylo
   const text = isText ? stripDingTalkMentionPrefix(rawContent) || null : null;
   const expired = Number(event.sessionWebhookExpiredTime);
   const atUsers = Array.isArray(event.atUsers) ? event.atUsers : [];
+  const senderId = event.senderStaffId ?? event.senderId ?? null;
   return {
     event: {
       platform: "dingtalk",
       messageId: event.msgId ?? "",
       chatId: event.conversationId ?? "",
       chatType: event.conversationType === "1" ? "p2p" : "group",
-      senderOpenId: event.senderStaffId ?? event.senderId ?? null,
+      senderOpenId: senderId,
+      senderIdType: event.senderStaffId
+        ? "dingtalk_staff_id"
+        : senderId
+          ? "dingtalk_sender_id"
+          : null,
       senderName: normalizeSenderName(event.senderNick),
       text,
       mentioned: event.isInAtList === true || atUsers.length > 0,

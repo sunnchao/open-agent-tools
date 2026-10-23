@@ -96,15 +96,17 @@ export async function restartChannel(id: string): Promise<void> {
   }
 }
 
-export function getChannelStatuses(): ImChannelStatus[] {
-  return listChannels({ includeDisabled: true }).map((channel) => {
-    const status = running.get(channel.id)?.status();
-    return {
-      ...channel,
-      connected: status?.connected ?? false,
-      ...(status?.error ? { error: status.error } : {}),
-    };
-  });
+export function getChannelStatuses(workspaceId?: string): ImChannelStatus[] {
+  return listChannels({ includeDisabled: true })
+    .filter((channel) => !workspaceId || channel.workspaceId === workspaceId)
+    .map((channel) => {
+      const status = running.get(channel.id)?.status();
+      return {
+        ...channel,
+        connected: status?.connected ?? false,
+        ...(status?.error ? { error: status.error } : {}),
+      };
+    });
 }
 
 export function stopAllChannels(): void {

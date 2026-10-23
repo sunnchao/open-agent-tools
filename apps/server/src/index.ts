@@ -7,6 +7,7 @@ import { createApp } from "./app.js";
 import { port } from "./config.js";
 import { getDbPath, openDb } from "./db.js";
 import { initializeProviders } from "./providers/store.js";
+import { initializeImAccounts } from "./im/accounts/store.js";
 import { logTrace } from "./trace.js";
 import { startImIfConfigured } from "./im/index.js";
 import { startReportScheduler } from "./reports/scheduler.js";
@@ -16,6 +17,7 @@ loadEnv({ path: resolve(import.meta.dirname, "../.env.local"), override: true })
 
 openDb();
 initializeProviders();
+initializeImAccounts();
 
 const app = createApp();
 

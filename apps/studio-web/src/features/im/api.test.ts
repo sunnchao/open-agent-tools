@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchImSqlSourceOptions, mcpToolKey, parseMcpToolKey, saveImChannel } from "./api.js";
+import {
+  fetchImAccounts,
+  fetchImSqlSourceOptions,
+  mcpToolKey,
+  parseMcpToolKey,
+  saveImChannel,
+  updateImAccount,
+} from "./api.js";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.unstubAllGlobals());
@@ -123,5 +130,71 @@ describe("IM channel api", () => {
     expect(mcpToolKey(binding)).toBe("docs-mcp::search");
     expect(parseMcpToolKey("docs-mcp::search")).toEqual(binding);
     expect(parseMcpToolKey("no-separator")).toBeNull();
+  });
+
+  it("lists IM accounts with server-side filters and pagination", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            items: [],
+            total: 0,
+            limit: 20,
+            offset: 40,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchImAccounts({
+        channelId: "channel / 1",
+        platform: "feishu",
+        keyword: "alice",
+        channelState: "deleted",
+        limit: 20,
+        offset: 40,
+      }),
+    ).resolves.toMatchObject({ total: 0 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/im/accounts?channelId=channel+%2F+1&platform=feishu&keyword=alice&channelState=deleted&limit=20&offset=40",
+      undefined,
+    );
+  });
+
+  it("patches editable account fields and supports clearing a binding", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            account: {
+              id: "account-1",
+              bindingStatus: "unbound",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await updateImAccount("account / 1", {
+      displayName: "VIP Alice",
+      remark: "Priority",
+      providerId: null,
+      model: null,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/admin/im/accounts/account%20%2F%201",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          displayName: "VIP Alice",
+          remark: "Priority",
+          providerId: null,
+          model: null,
+        }),
+      }),
+    );
   });
 });

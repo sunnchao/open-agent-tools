@@ -15,6 +15,7 @@ import {
   Select,
   Switch,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -44,6 +45,7 @@ import {
   type ImSqlSourceOption,
 } from "./api.js";
 import { fetchResourceCatalog, type McpServiceResource } from "../resources/api.js";
+import { ImAccountsSection } from "./ImAccountsSection.js";
 
 type Draft = {
   id?: string;
@@ -75,6 +77,26 @@ const emptyDraft = (): Draft => ({
 });
 
 export function ImChannelsSection() {
+  return (
+    <Tabs
+      defaultActiveKey="channels"
+      items={[
+        {
+          key: "channels",
+          label: "渠道配置",
+          children: <ImChannelsConfigSection />,
+        },
+        {
+          key: "accounts",
+          label: "账号列表",
+          children: <ImAccountsSection />,
+        },
+      ]}
+    />
+  );
+}
+
+function ImChannelsConfigSection() {
   const { message } = App.useApp();
   const [channels, setChannels] = useState<ImChannelMetadata[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -346,7 +368,7 @@ export function ImChannelsSection() {
             </Tooltip>
             <Popconfirm
               title={`删除渠道「${record.name}」？`}
-              description="机器人连接将立即断开，该操作不可恢复。"
+              description="机器人连接将立即断开；账号与对话历史会保留，可在「账号列表」继续查看和编辑。"
               okText="确认删除"
               cancelText="取消"
               okButtonProps={{ danger: true }}

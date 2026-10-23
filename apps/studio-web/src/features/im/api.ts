@@ -66,6 +66,60 @@ export interface ImStatus {
   channels: ImChannelMetadata[];
 }
 
+export type ImExternalUserIdType =
+  "feishu_open_id" | "dingtalk_staff_id" | "dingtalk_sender_id" | "dingtalk_user_id";
+
+export type ImAccountBindingStatus = "unbound" | "valid" | "invalid";
+export type ImAccountChannelState = "all" | "existing" | "deleted";
+
+export interface ImChannelAccount {
+  id: string;
+  workspaceId: string;
+  channelId: string;
+  channelName: string;
+  platform: ImPlatform;
+  externalUserId: string;
+  externalUserIdType: ImExternalUserIdType | null;
+  externalName: string | null;
+  displayName: string | null;
+  remark: string | null;
+  providerId: string | null;
+  providerName: string | null;
+  model: string | null;
+  bindingStatus: ImAccountBindingStatus;
+  firstInteractedAt: number;
+  lastInteractedAt: number;
+  lastConversationId: string | null;
+  lastChatType: "p2p" | "group" | null;
+  channelDeleted: boolean;
+  channelDeletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImAccountListFilters {
+  channelId?: string;
+  platform?: ImPlatform;
+  keyword?: string;
+  channelState?: ImAccountChannelState;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ImAccountListResult {
+  items: ImChannelAccount[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ImAccountUpdateInput {
+  displayName?: string | null;
+  remark?: string | null;
+  providerId?: string | null;
+  model?: string | null;
+}
+
 export async function fetchImChannels(): Promise<ImChannelMetadata[]> {
   const response = await studioFetch("/api/admin/im/channels");
   if (!response.ok) throw new Error(await parseError(response));
@@ -133,6 +187,33 @@ export async function restartImChannel(id: string): Promise<ImStatus> {
   if (!response.ok) throw new Error(await parseError(response));
   const body = (await response.json()) as ImStatus;
   return body;
+}
+
+export async function fetchImAccounts(
+  filters: ImAccountListFilters = {},
+): Promise<ImAccountListResult> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  const query = params.toString();
+  const response = await studioFetch(`/api/admin/im/accounts${query ? `?${query}` : ""}`);
+  if (!response.ok) throw new Error(await parseError(response));
+  return (await response.json()) as ImAccountListResult;
+}
+
+export async function updateImAccount(
+  id: string,
+  input: ImAccountUpdateInput,
+): Promise<ImChannelAccount> {
+  const response = await studioFetch(`/api/admin/im/accounts/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await parseError(response));
+  const body = (await response.json()) as { account: ImChannelAccount };
+  return body.account;
 }
 
 export async function fetchImStatus(): Promise<ImStatus> {

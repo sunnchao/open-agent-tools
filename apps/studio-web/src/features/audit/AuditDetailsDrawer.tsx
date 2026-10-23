@@ -33,6 +33,7 @@ import {
 import {
   chatTypeLabel,
   formatTime,
+  formatTokens,
   platformLabel,
   statusColor,
   statusLabel,
@@ -191,7 +192,47 @@ function ImDetails({ record }: { record: ImChatAuditDetail }) {
         <Descriptions.Item label="耗时">{formatDuration(record.durationMs)}</Descriptions.Item>
         <Descriptions.Item label="工具调用数">{record.toolCalls}</Descriptions.Item>
         <Descriptions.Item label="引用数">{record.citationCount}</Descriptions.Item>
+        <Descriptions.Item label="Provider">
+          {record.providerName || record.providerId
+            ? `${record.providerName || record.providerId}${
+                record.providerFormat ? `（${record.providerFormat}）` : ""
+              }`
+            : "—"}
+        </Descriptions.Item>
+        <Descriptions.Item label="模型">{record.model || "—"}</Descriptions.Item>
+        <Descriptions.Item label="Token 用量">
+          {`输入 ${formatTokens(record.inputTokens)} / 输出 ${formatTokens(
+            record.outputTokens,
+          )} / 合计 ${formatTokens(record.totalTokens)}`}
+          {record.llmRequests > 0 ? ` · 模型调用 ${record.llmRequests} 次` : ""}
+        </Descriptions.Item>
       </Descriptions>
+      {record.models.length > 0 ? (
+        <Card size="small" title="逐模型用量">
+          <Flex vertical gap={6}>
+            {record.models.map((entry, index) => (
+              <Flex
+                key={`${entry.providerId}:${entry.model}:${index}`}
+                justify="space-between"
+                gap={12}
+              >
+                <Typography.Text style={{ fontSize: 12 }}>
+                  {entry.model || "—"}
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {entry.providerId ? ` · ${entry.providerId}` : ""}
+                  </Typography.Text>
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {`输入 ${formatTokens(entry.inputTokens)} / 输出 ${formatTokens(
+                    entry.outputTokens,
+                  )} · ${entry.requests} 次 · ${formatDuration(entry.durationMs)}`}
+                  {entry.failed ? " · 含失败调用" : ""}
+                </Typography.Text>
+              </Flex>
+            ))}
+          </Flex>
+        </Card>
+      ) : null}
       {record.error ? <Alert type="error" showIcon title={record.error} /> : null}
       <Card size="small" title="问题">
         <Typography.Paragraph className="audit-detail__text" copyable={Boolean(record.question)}>

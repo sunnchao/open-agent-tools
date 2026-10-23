@@ -10,6 +10,7 @@ import { logDebugDuration, logTrace, truncate } from "../trace.js";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
 import { writeSseData } from "../sse.js";
 import { ChatTurnError, streamChatTurn, usageSnapshot, type ChatTurnUsage } from "./chatCore.js";
+import type { UsageModelDetail } from "../usageTracking.js";
 import { IM_ACTOR_HEADER, IM_CHANNEL_HEADER } from "../im/types.js";
 
 export const chatRouter: ReturnType<typeof Router> = Router();
@@ -68,6 +69,13 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
 
   const llm = createLlmClient(selectedProvider);
   const selectedModel = model || selectedProvider.models[0] || "gpt-4o-mini";
+  // 模型元数据随 SSE 下发：IM 审计据此记录"由哪个 Provider/模型回答"。
+  const modelInfo = {
+    providerId: selectedProvider.id,
+    providerName: selectedProvider.name,
+    providerFormat: selectedProvider.format,
+    model: selectedModel,
+  };
 
   let bindings: ReturnType<typeof normalizeResourceBindings>;
   try {
@@ -94,6 +102,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
   let assistantMessageId: string | null = null;
   let toolRounds = 0;
   let turnUsage: ChatTurnUsage | null = null;
+  let turnModels: UsageModelDetail[] = [];
 
   const schemaSources: SqlQuestionSource[] =
     bindings.sqlSources.length > 0
@@ -161,6 +170,8 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
   if (assistantMessageId) {
     send({ assistantMessageId });
   }
+  // 先于生成下发模型信息：即使本轮后续失败，调用方（IM 审计）也能记录模型归属。
+  send({ model: modelInfo });
 
   let fullContent = "";
   let outcome: "complete" | "error" = "complete";
@@ -202,8 +213,9 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
               send,
               span,
               schemaSources,
-              onUsage: (usage) => {
+              onUsage: (usage, models) => {
                 turnUsage = usage;
+                turnModels = models;
               },
             });
             fullContent = result.fullContent;
@@ -265,7 +277,13 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
       status: outcome,
       totalTokens: snapshot?.totalTokens ?? 0,
     });
-    send({ done: true, status: outcome, ...(snapshot ? { usage: snapshot } : {}) });
+    send({
+      done: true,
+      status: outcome,
+      ...(snapshot ? { usage: snapshot } : {}),
+      ...(turnModels.length > 0 ? { models: turnModels } : {}),
+      model: modelInfo,
+    });
     res.end();
   }
 });

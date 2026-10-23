@@ -115,6 +115,42 @@ export function openDb(path = getDbPath()): DatabaseSync {
       updated_at TEXT NOT NULL
     );
 
+    -- IM 对话账号：按渠道保存全部曾参与对话的外部用户。
+    -- 故意不对 im_channels 建外键：渠道删除后账号与审计历史仍需保留。
+    CREATE TABLE IF NOT EXISTS im_channel_accounts (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'default',
+      channel_id TEXT NOT NULL,
+      channel_name TEXT NOT NULL DEFAULT '',
+      platform TEXT NOT NULL,
+      external_user_id TEXT NOT NULL,
+      external_user_id_type TEXT,
+      external_name TEXT,
+      display_name TEXT,
+      remark TEXT,
+      provider_id TEXT,
+      model TEXT,
+      first_interacted_at INTEGER NOT NULL,
+      last_interacted_at INTEGER NOT NULL,
+      last_conversation_id TEXT,
+      last_chat_type TEXT,
+      channel_deleted_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_im_channel_accounts_identity
+      ON im_channel_accounts(channel_id, external_user_id);
+    CREATE INDEX IF NOT EXISTS idx_im_channel_accounts_workspace
+      ON im_channel_accounts(workspace_id, last_interacted_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_im_channel_accounts_channel
+      ON im_channel_accounts(channel_id, last_interacted_at DESC);
+
+    CREATE TABLE IF NOT EXISTS im_account_migrations (
+      key TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS schema_sources (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

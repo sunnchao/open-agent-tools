@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { after, before, describe, it } from "node:test";
-import { askChat, parseChatSseEvent } from "./chatClient.js";
+import { askChat, ChatRequestError, parseChatSseEvent } from "./chatClient.js";
 import { chunkText } from "./text.js";
 
 describe("parseChatSseEvent", () => {
@@ -20,6 +20,61 @@ describe("parseChatSseEvent", () => {
     assert.equal(parseChatSseEvent(""), null);
     assert.equal(parseChatSseEvent("data: not-json"), null);
     assert.equal(parseChatSseEvent('data: {"foo":1}'), null);
+  });
+
+  it("parses usage, per-model usage and model frames", () => {
+    const usage = {
+      requests: 2,
+      inputTokens: 100,
+      outputTokens: 20,
+      totalTokens: 120,
+      toolCalls: 1,
+      toolErrors: 0,
+    };
+    const models = [
+      {
+        providerId: "provider-1",
+        model: "model-1",
+        requests: 2,
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+        durationMs: 800,
+        failed: false,
+      },
+    ];
+    const model = {
+      providerId: "provider-1",
+      providerName: "主 Provider",
+      providerFormat: "openai-chat",
+      model: "model-1",
+    };
+    assert.deepEqual(parseChatSseEvent(`data: ${JSON.stringify({ usage, models })}`), {
+      usage,
+      models,
+    });
+    assert.deepEqual(parseChatSseEvent(`data: ${JSON.stringify({ model })}`), { model });
+    // done 帧同时携带三者。
+    assert.deepEqual(
+      parseChatSseEvent(
+        `data: ${JSON.stringify({ done: true, status: "complete", usage, models, model })}`,
+      ),
+      { usage, models, model },
+    );
+  });
+
+  it("tolerates missing or malformed usage fields", () => {
+    assert.deepEqual(parseChatSseEvent('data: {"usage":{"inputTokens":"bad"}}'), {
+      usage: {
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        toolCalls: 0,
+        toolErrors: 0,
+      },
+    });
+    assert.equal(parseChatSseEvent('data: {"model":{}}'), null);
   });
 });
 
@@ -130,6 +185,25 @@ describe("askChat", () => {
         rag: { sources: [], topK: 5 },
         mcpTools: [{ serviceSlug: "docs", toolName: "search" }],
       },
+    });
+  });
+
+  it("passes an account model binding in the chat request body", async () => {
+    await askChat({
+      baseUrl,
+      question: "使用绑定模型",
+      sessionId: "feishu:oc_model",
+      sources: [],
+      topK: 5,
+      providerId: "provider-account",
+      model: "model-account",
+    });
+    assert.deepEqual(received, {
+      messages: [{ role: "user", content: "使用绑定模型" }],
+      sessionId: "feishu:oc_model",
+      providerId: "provider-account",
+      model: "model-account",
+      resources: { rag: { sources: [], topK: 5 } },
     });
   });
 
@@ -298,6 +372,153 @@ describe("askChat tool and citation accounting", () => {
       assert.deepEqual(answer.toolCalls, ["rag"]);
       assert.equal(answer.toolResultCount, 1);
       assert.equal(answer.citations, 2);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("emits progress events for assessment, tools, citations and first delta", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ crag_assessment: { assessment: "ok" } })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({ rag_citations: [{ source: "a" }, { source: "b" }] })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({ tool_call: { id: "c1", name: "mcp/docs.search" } })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({ tool_result: { id: "c1", name: "mcp/docs.search" } })}\n\n`,
+      );
+      res.write(`data: ${JSON.stringify({ delta: "答" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ delta: "案" })}\n\n`);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address();
+    assert.ok(addr && typeof addr === "object");
+    try {
+      const events: unknown[] = [];
+      const answer = await askChat({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        question: "hi",
+        sessionId: "s1",
+        sources: [],
+        topK: 5,
+        onProgress: (event) => {
+          events.push(event);
+        },
+      });
+      assert.equal(answer.content, "答案");
+      assert.deepEqual(events, [
+        { type: "retrieval" },
+        { type: "citations", count: 2 },
+        { type: "tool_call", toolName: "mcp/docs.search" },
+        { type: "tool_result", toolName: "mcp/docs.search" },
+        { type: "delta" },
+      ]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("collects token usage and model metadata from the stream", async () => {
+    const usage = {
+      requests: 2,
+      inputTokens: 120,
+      outputTokens: 30,
+      totalTokens: 150,
+      toolCalls: 1,
+      toolErrors: 0,
+    };
+    const models = [
+      {
+        providerId: "provider-1",
+        model: "model-1",
+        requests: 2,
+        inputTokens: 120,
+        outputTokens: 30,
+        totalTokens: 150,
+        durationMs: 900,
+        failed: false,
+      },
+    ];
+    const model = {
+      providerId: "provider-1",
+      providerName: "主 Provider",
+      providerFormat: "openai-chat",
+      model: "model-1",
+    };
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ model })}\n\n`);
+      res.write(`data: ${JSON.stringify({ delta: "答" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ usage, models })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({ done: true, status: "complete", usage, models, model })}\n\n`,
+      );
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address();
+    assert.ok(addr && typeof addr === "object");
+    try {
+      const answer = await askChat({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        question: "hi",
+        sessionId: "s1",
+        sources: [],
+        topK: 5,
+      });
+      assert.equal(answer.content, "答");
+      assert.deepEqual(answer.usage, usage);
+      assert.deepEqual(answer.models, models);
+      assert.deepEqual(answer.model, model);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("keeps partial usage and model on stream errors", async () => {
+    const usage = {
+      requests: 1,
+      inputTokens: 80,
+      outputTokens: 0,
+      totalTokens: 80,
+      toolCalls: 0,
+      toolErrors: 0,
+    };
+    const model = {
+      providerId: "provider-1",
+      providerName: "主 Provider",
+      providerFormat: "openai-chat",
+      model: "model-1",
+    };
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ model })}\n\n`);
+      res.write(`data: ${JSON.stringify({ delta: "半截" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ usage })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: "provider failed" })}\n\n`);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address();
+    assert.ok(addr && typeof addr === "object");
+    try {
+      await askChat({
+        baseUrl: `http://127.0.0.1:${addr.port}`,
+        question: "hi",
+        sessionId: "s1",
+        sources: [],
+        topK: 5,
+      });
+      assert.fail("expected askChat to throw");
+    } catch (error) {
+      assert.ok(error instanceof ChatRequestError);
+      assert.equal(error.partial?.content, "半截");
+      assert.deepEqual(error.partial?.usage, usage);
+      assert.deepEqual(error.partial?.model, model);
     } finally {
       server.close();
     }

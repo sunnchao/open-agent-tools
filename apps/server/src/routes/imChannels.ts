@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import {
   createChannel,
   deleteChannel,
+  getChannel,
   isImPlatform,
   listChannels,
   updateChannel,
@@ -9,6 +10,8 @@ import {
 } from "../im/channels/store.js";
 import { restartChannel, syncImChannels, getChannelStatuses } from "../im/channels/index.js";
 import { getImStatus } from "../im/index.js";
+import { archiveImChannelAccounts } from "../im/accounts/store.js";
+import { resolveWorkspace } from "../workspace.js";
 
 export const imChannelsRouter: Router = Router();
 
@@ -48,19 +51,41 @@ function channelPayload(body: unknown): Partial<Omit<ImChannelInput, "id">> {
 }
 
 /** 公开列表：只返回启用渠道，供聊天/设置下拉使用（不含任何密钥）。 */
-imChannelsRouter.get("/api/im/channels", (_req: Request, res: Response) => {
-  res.json({ channels: listChannels() });
+imChannelsRouter.get("/api/im/channels", (req: Request, res: Response) => {
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+    return;
+  }
+  res.json({
+    channels: listChannels().filter((channel) => channel.workspaceId === workspace.workspaceId),
+  });
 });
 
 /** 管理列表：含停用渠道与运行连接状态（密钥仅掩码）。 */
-imChannelsRouter.get("/api/admin/im/channels", (_req: Request, res: Response) => {
-  res.json({ channels: getChannelStatuses() });
+imChannelsRouter.get("/api/admin/im/channels", (req: Request, res: Response) => {
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+    return;
+  }
+  res.json({
+    channels: getChannelStatuses(workspace.workspaceId),
+  });
 });
 
 imChannelsRouter.post("/api/admin/im/channels", async (req: Request, res: Response) => {
   try {
+    const workspace = resolveWorkspace(req);
+    if (!workspace.ok) {
+      res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+      return;
+    }
     // 必填字段缺失由 createChannel 内部校验（name/appId/platform 非法即 400）。
-    const channel = createChannel(channelPayload(req.body) as ImChannelInput);
+    const channel = createChannel({
+      ...channelPayload(req.body),
+      workspaceId: workspace.workspaceId,
+    } as ImChannelInput);
     await restartChannel(channel.id);
     res.status(201).json({ channel });
   } catch (error) {
@@ -70,7 +95,21 @@ imChannelsRouter.post("/api/admin/im/channels", async (req: Request, res: Respon
 
 imChannelsRouter.put("/api/admin/im/channels/:id", async (req: Request, res: Response) => {
   try {
-    const channel = updateChannel(req.params.id as string, channelPayload(req.body));
+    const workspace = resolveWorkspace(req);
+    if (!workspace.ok) {
+      res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+      return;
+    }
+    const id = req.params.id as string;
+    const existing = getChannel(id, { includeDisabled: true });
+    if (!existing || existing.workspaceId !== workspace.workspaceId) {
+      res.status(404).json({ error: "IM channel not found" });
+      return;
+    }
+    const channel = updateChannel(id, {
+      ...channelPayload(req.body),
+      workspaceId: workspace.workspaceId,
+    });
     if (!channel) {
       res.status(404).json({ error: "IM channel not found" });
       return;
@@ -83,7 +122,22 @@ imChannelsRouter.put("/api/admin/im/channels/:id", async (req: Request, res: Res
 });
 
 imChannelsRouter.delete("/api/admin/im/channels/:id", async (req: Request, res: Response) => {
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+    return;
+  }
   const id = req.params.id as string;
+  const channel = getChannel(id, { includeDisabled: true });
+  if (!channel || channel.workspaceId !== workspace.workspaceId) {
+    res.status(404).json({ error: "IM channel not found" });
+    return;
+  }
+  archiveImChannelAccounts(id, {
+    name: channel.name,
+    platform: channel.platform,
+    workspaceId: channel.workspaceId,
+  });
   if (!deleteChannel(id)) {
     res.status(404).json({ error: "IM channel not found" });
     return;
@@ -94,6 +148,17 @@ imChannelsRouter.delete("/api/admin/im/channels/:id", async (req: Request, res: 
 
 /** 手动重启渠道（修改开放平台配置后，无需重写凭据）。 */
 imChannelsRouter.post("/api/admin/im/channels/:id/restart", async (req: Request, res: Response) => {
-  await restartChannel(req.params.id as string);
-  res.json(getImStatus());
+  const workspace = resolveWorkspace(req);
+  if (!workspace.ok) {
+    res.status(400).json({ error: `workspace not found: ${workspace.requested}` });
+    return;
+  }
+  const id = req.params.id as string;
+  const channel = getChannel(id, { includeDisabled: true });
+  if (!channel || channel.workspaceId !== workspace.workspaceId) {
+    res.status(404).json({ error: "IM channel not found" });
+    return;
+  }
+  await restartChannel(id);
+  res.json(getImStatus(workspace.workspaceId));
 });

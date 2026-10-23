@@ -14,6 +14,18 @@ import type { QueryAuditDetail, QueryAuditSummary } from "../observatory/api.js"
  * - Control Plane `/mcp-api/audit`（MCP 平台审计，独立进程与鉴权）
  */
 
+/** IM 审计里的逐模型用量明细。 */
+export interface ImChatAuditModelUsage {
+  providerId: string;
+  model: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  durationMs: number;
+  failed: boolean;
+}
+
 /** IM 会话审计记录（前端归一化后的稳定字段）。 */
 export interface ImChatAuditRecord {
   id: string;
@@ -36,6 +48,16 @@ export interface ImChatAuditRecord {
   toolCalls: number;
   citationCount: number;
   error: string | null;
+  /** 本轮 Provider / 模型与 token 用量。 */
+  providerId: string | null;
+  providerName: string | null;
+  providerFormat: string | null;
+  model: string | null;
+  llmRequests: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  models: ImChatAuditModelUsage[];
 }
 
 /** IM 会话审计详情：在摘要基础上补充全文与引用明细。 */
@@ -187,7 +209,50 @@ export function normalizeImChatAudit(raw: unknown): ImChatAuditRecord {
       "reference_count",
     ]),
     error: pickString(merged, ["error", "errorMessage", "error_message"]),
+    providerId: pickString(merged, ["providerId", "provider_id"]),
+    providerName: pickString(merged, ["providerName", "provider_name"]),
+    providerFormat: pickString(merged, ["providerFormat", "provider_format"]),
+    model: pickString(merged, ["model", "modelName", "model_name"]),
+    llmRequests: pickNumber(merged, ["llmRequests", "llm_requests", "requests"]),
+    inputTokens: pickNumber(merged, ["inputTokens", "input_tokens"]),
+    outputTokens: pickNumber(merged, ["outputTokens", "output_tokens"]),
+    totalTokens: pickNumber(merged, ["totalTokens", "total_tokens"]),
+    models: pickModelUsageList(merged.models),
   };
+}
+
+/** 逐模型用量：服务端落库为数组（models）或 JSON 字符串；坏数据返回空数组。 */
+function pickModelUsageList(value: unknown): ImChatAuditModelUsage[] {
+  let rows = value;
+  if (typeof rows === "string") {
+    try {
+      rows = JSON.parse(rows);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((item) => {
+      const entry = asRecord(item);
+      const providerId = pickString(entry, ["providerId", "provider_id"]) ?? "";
+      const model = pickString(entry, ["model", "modelName"]) ?? "";
+      if (!providerId && !model) return null;
+      const inputTokens = pickNumber(entry, ["inputTokens", "input_tokens"]);
+      const outputTokens = pickNumber(entry, ["outputTokens", "output_tokens"]);
+      return {
+        providerId,
+        model,
+        requests: pickNumber(entry, ["requests"]),
+        inputTokens,
+        outputTokens,
+        totalTokens:
+          pickNumber(entry, ["totalTokens", "total_tokens"]) || inputTokens + outputTokens,
+        durationMs: pickNumber(entry, ["durationMs", "duration_ms"]),
+        failed: entry.failed === true,
+      };
+    })
+    .filter((item): item is ImChatAuditModelUsage => item !== null);
 }
 
 /** 服务端 IM 审计时间字段是毫秒时间戳；也兼容 ISO 字符串。 */

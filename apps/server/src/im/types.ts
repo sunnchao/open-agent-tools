@@ -2,6 +2,13 @@
 
 export type ImPlatform = "feishu" | "dingtalk";
 
+/** IM 会话类型；私聊按用户拆会话，群聊共享会话。 */
+export type ImChatType = "p2p" | "group";
+
+/** IM 发送者外部 ID 的来源；用于后台展示，不作为账号唯一键。 */
+export type ImExternalUserIdType =
+  "feishu_open_id" | "dingtalk_staff_id" | "dingtalk_sender_id" | "dingtalk_user_id";
+
 /**
  * IM 来源标识请求头（由本机 IM bot 注入，服务端 chat.ts 读取后给会话打 source='im'）。
  *
@@ -83,8 +90,10 @@ export interface ImMessageEvent {
   platform: "feishu" | "dingtalk";
   messageId: string;
   chatId: string;
-  chatType: "p2p" | "group";
+  chatType: ImChatType;
   senderOpenId: string | null;
+  /** 平台发送者 ID 类型；历史/测试事件缺失时由平台适配层兜底。 */
+  senderIdType?: ImExternalUserIdType | null;
   /** 对话者可读名称（钉钉 senderNick / 飞书通讯录姓名；拿不到时为 null，仅用于审计展示与追溯）。 */
   senderName: string | null;
   /** 非文本消息或解析失败时为 null。 */

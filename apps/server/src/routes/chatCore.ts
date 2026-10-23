@@ -21,7 +21,14 @@ import {
   type UsageSource,
   type UsageToolKind,
 } from "../usage.js";
-import { currentUsage, recordToolCall, trackUsage, type UsageSnapshot } from "../usageTracking.js";
+import {
+  currentUsage,
+  currentUsageModels,
+  recordToolCall,
+  trackUsage,
+  type UsageModelDetail,
+  type UsageSnapshot,
+} from "../usageTracking.js";
 import { logDuration, logTrace, truncate } from "../trace.js";
 import {
   startObservation,
@@ -56,7 +63,8 @@ export interface ChatStreamParams {
   span: ObservationHandle;
   schemaSources: SqlQuestionSource[];
   usageSource?: UsageSource;
-  onUsage?: (usage: UsageSnapshot) => void;
+  /** 用量快照回调：第二参数为逐模型明细（含嵌套 SQL 等子链路）。 */
+  onUsage?: (usage: UsageSnapshot, models: UsageModelDetail[]) => void;
 }
 
 export type ChatTurnUsage = UsageSnapshot;
@@ -73,9 +81,10 @@ export async function streamChatTurn(
       source: params.usageSource ?? "web_chat",
       workspaceId: params.workspaceId,
       sessionId: params.resolvedSessionId,
-      onUsage: (usage) => {
-        params.onUsage?.(usage);
-        params.send({ usage });
+      onUsage: (usage, models) => {
+        params.onUsage?.(usage, models);
+        // models 仅作展示/审计明细，体量很小；旧客户端会忽略该字段。
+        params.send({ usage, ...(models.length > 0 ? { models } : {}) });
       },
     },
     () => streamChatTurnCore(params),
@@ -101,7 +110,7 @@ async function streamChatTurnCore(
   let toolRounds = 0;
   let awaitingSqlClarification = false;
   const usage = currentUsage();
-  params.onUsage?.({ ...usage });
+  params.onUsage?.({ ...usage }, currentUsageModels());
 
   // 历史会话中的 tool 行缺少 OpenAI 要求的 assistant tool_calls 上下文，统一丢弃。
   const completionMessages: LlmMessage[] = messages

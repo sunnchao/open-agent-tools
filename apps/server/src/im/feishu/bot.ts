@@ -4,6 +4,11 @@ import { answerImMessage } from "../answerMessage.js";
 import { parseFeishuMessageEvent } from "./message.js";
 import { resolveFeishuSenderName } from "./senderName.js";
 import { logTrace } from "../../trace.js";
+import {
+  recordImAccountInteraction,
+  resolveImAccountModel,
+  updateImAccountExternalName,
+} from "../accounts/store.js";
 
 export type FeishuBotHandle = ImBotHandle;
 
@@ -83,6 +88,9 @@ export async function startFeishuBot(
     await answerImMessage(config, event, {
       reply: (text) => reply(event.messageId, text),
       resolveSenderName: resolveName,
+      recordAccountInteraction: recordImAccountInteraction,
+      updateAccountExternalName: updateImAccountExternalName,
+      resolveAccountModel: resolveImAccountModel,
     });
   }
 

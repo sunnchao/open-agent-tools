@@ -4,6 +4,11 @@ import { askChat } from "../chatClient.js";
 import { logTrace } from "../../trace.js";
 import { parseDingTalkMessagePayload, type DingTalkMessagePayload } from "./message.js";
 import { DingTalkStreamClient, type DingTalkStreamClientOptions } from "./streamClient.js";
+import {
+  recordImAccountInteraction,
+  resolveImAccountModel,
+  updateImAccountExternalName,
+} from "../accounts/store.js";
 
 /** 机器人 webhook 回复超时（毫秒）。 */
 const WEBHOOK_TIMEOUT_MS = 10_000;
@@ -77,6 +82,9 @@ export async function startDingTalkBot(
     await answerImMessage(config, event, {
       askChat: ask,
       reply: (text) => reply(payload, text),
+      recordAccountInteraction: recordImAccountInteraction,
+      updateAccountExternalName: updateImAccountExternalName,
+      resolveAccountModel: resolveImAccountModel,
     });
   }
 
