@@ -25,6 +25,8 @@ import { fetchImChatAudits, type ImChatAuditRecord, type AuditDetailSelection } 
 import {
   chatTypeLabel,
   detailColumn,
+  durationColumn,
+  excerptColumn,
   formatTime,
   platformLabel,
   statusColor,
@@ -185,28 +187,12 @@ export function ImAuditView({
       width: 90,
       render: (value: string) => <Tag variant="filled">{chatTypeLabel(value)}</Tag>,
     },
-    {
-      title: "问题摘要",
-      dataIndex: "question",
-      key: "question",
-      ellipsis: true,
-      render: (value: string) => (
-        <Typography.Text style={{ fontSize: 12 }} ellipsis title={value}>
-          {value || "—"}
-        </Typography.Text>
-      ),
-    },
-    {
+    excerptColumn<ImChatAuditRecord>({ title: "问题摘要", dataIndex: "question" }),
+    excerptColumn<ImChatAuditRecord>({
       title: "回答摘要",
       dataIndex: "answer",
-      key: "answer",
-      ellipsis: true,
-      render: (value: string) => (
-        <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis title={value}>
-          {value || "—"}
-        </Typography.Text>
-      ),
-    },
+      secondary: true,
+    }),
     {
       title: "状态",
       dataIndex: "status",
@@ -219,15 +205,7 @@ export function ImAuditView({
         />
       ),
     },
-    {
-      title: "耗时",
-      dataIndex: "durationMs",
-      key: "durationMs",
-      width: 90,
-      render: (value: number) => (
-        <Typography.Text style={{ fontSize: 12 }}>{formatDuration(value)}</Typography.Text>
-      ),
-    },
+    durationColumn<ImChatAuditRecord>(formatDuration),
     {
       title: "工具调用",
       dataIndex: "toolCalls",

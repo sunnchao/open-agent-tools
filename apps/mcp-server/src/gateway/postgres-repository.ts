@@ -18,6 +18,7 @@ import type {
   ToolCallReservationResult,
   ToolCallSettlement,
 } from "./repository.js";
+import { retryAfterSeconds } from "./retry.js";
 
 const ClientStatusSchema = z.enum(["ACTIVE", "REVOKED"]);
 const KeyStatusSchema = z.enum(["ACTIVE", "REVOKED"]);
@@ -308,7 +309,7 @@ export class PostgresGatewayRepository implements GatewayRepository {
           const oldest = usage?.oldest ? new Date(usage.oldest).getTime() : now.getTime();
           return {
             reserved: false,
-            retryAfterSeconds: retryAfter(oldest + 1_000, now.getTime()),
+            retryAfterSeconds: retryAfterSeconds(oldest + 1_000, now.getTime()),
           };
         }
       }
@@ -325,7 +326,7 @@ export class PostgresGatewayRepository implements GatewayRepository {
           await client.query("ROLLBACK");
           return {
             reserved: false,
-            retryAfterSeconds: retryAfter(Date.parse(nextDay), now.getTime()),
+            retryAfterSeconds: retryAfterSeconds(Date.parse(nextDay), now.getTime()),
           };
         }
       }
@@ -362,10 +363,6 @@ export class PostgresGatewayRepository implements GatewayRepository {
       [input.requestId, input.status, input.durationMs, input.finishedAt],
     );
   }
-}
-
-function retryAfter(at: number, now: number): number {
-  return Math.max(1, Math.ceil((at - now) / 1_000));
 }
 
 export function createPostgresGatewayRepository(connectionString: string): {

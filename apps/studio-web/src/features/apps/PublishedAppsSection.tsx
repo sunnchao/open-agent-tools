@@ -18,6 +18,7 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { parseDelimitedStringList } from "@open-agent-tools/api-contracts/values";
 import { CopyOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined } from "../../lib/icons.js";
 import { useResourceCatalog } from "../resources/useResourceCatalog.js";
 import {
@@ -58,12 +59,7 @@ export function PublishedAppsSection() {
   const [quotaForm] = Form.useForm();
   const catalog = useResourceCatalog();
 
-  const parseGroups = (value: string): string[] =>
-    value
-      .split(/[,，\n]/)
-      .map((group) => group.trim())
-      .filter((group, index, all) => Boolean(group) && all.indexOf(group) === index)
-      .slice(0, 50);
+  const parseGroups = (value: string): string[] => parseDelimitedStringList(value).slice(0, 50);
 
   const refresh = async () => {
     setLoading(true);
@@ -219,133 +215,133 @@ export function PublishedAppsSection() {
   };
 
   const columns: ColumnsType<PublishedAppRecord> = [
-      {
-        title: "应用",
-        dataIndex: "name",
-        key: "name",
-        render: (_: unknown, app: PublishedAppRecord) => (
-          <Flex vertical gap={0}>
-            <Typography.Text strong>{app.name}</Typography.Text>
+    {
+      title: "应用",
+      dataIndex: "name",
+      key: "name",
+      render: (_: unknown, app: PublishedAppRecord) => (
+        <Flex vertical gap={0}>
+          <Typography.Text strong>{app.name}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {app.slug}
+          </Typography.Text>
+        </Flex>
+      ),
+    },
+    {
+      title: "入口",
+      dataIndex: "slug",
+      key: "entry",
+      render: (_: unknown, app: PublishedAppRecord) => (
+        <Flex align="center" gap={4}>
+          <Typography.Text code ellipsis style={{ maxWidth: 220 }} title={entryUrl(app)}>
+            {employeeEntryPath(app.slug, freshTokens[app.id] ?? null)}
+          </Typography.Text>
+          <Button
+            type="text"
+            size="small"
+            icon={<CopyOutlined />}
+            aria-label="复制员工入口链接"
+            title="复制员工入口链接"
+            onClick={() => copyEntry(app)}
+          />
+        </Flex>
+      ),
+    },
+    {
+      title: "访问",
+      dataIndex: "accessMode",
+      key: "access",
+      render: (_: unknown, app: PublishedAppRecord) => (
+        <Flex vertical gap={4} align="flex-start">
+          <Tag color={app.accessMode === "token" ? "red" : "default"}>
+            {app.accessMode === "token" ? "口令" : "公开"}
+          </Tag>
+          {app.accessMode === "token" ? (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {app.slug}
+              {freshTokens[app.id] ?? app.accessTokenHint ?? "已设置"}
             </Typography.Text>
-          </Flex>
-        ),
-      },
-      {
-        title: "入口",
-        dataIndex: "slug",
-        key: "entry",
-        render: (_: unknown, app: PublishedAppRecord) => (
-          <Flex align="center" gap={4}>
-            <Typography.Text
-              code
-              ellipsis
-              style={{ maxWidth: 220 }}
-              title={entryUrl(app)}
-            >
-              {employeeEntryPath(app.slug, freshTokens[app.id] ?? null)}
-            </Typography.Text>
+          ) : null}
+          <Button type="link" size="small" onClick={() => void toggleAccess(app)}>
+            {app.accessMode === "token" ? "撤销口令" : "加口令"}
+          </Button>
+        </Flex>
+      ),
+    },
+    {
+      title: "配额",
+      key: "quota",
+      render: (_: unknown, app: PublishedAppRecord) => (
+        <Flex vertical gap={2} align="flex-start">
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            每分钟 {app.rateLimitPerMinute || "不限"} 次
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            每日 {app.dailyTokenBudget ? `${app.dailyTokenBudget} tokens` : "不限"}
+          </Typography.Text>
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: 0, height: 18 }}
+            onClick={() => openQuota(app)}
+          >
+            调整配额
+          </Button>
+        </Flex>
+      ),
+    },
+    {
+      title: "能力",
+      key: "capabilities",
+      render: (_: unknown, app: PublishedAppRecord) => (
+        <Flex gap={4} wrap>
+          <Tag color="orange">知识库 {app.resources.rag?.sources?.length ?? 0}</Tag>
+          <Tag color="blue">问数 {app.resources.sqlSources?.length ?? 0}</Tag>
+          <Tag color={app.allowedGroups.length > 0 ? "green" : "default"}>
+            分组 {app.allowedGroups.length > 0 ? app.allowedGroups.join(", ") : "仅公开"}
+          </Tag>
+        </Flex>
+      ),
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      key: "status",
+      render: (value: PublishedAppRecord["status"]) => (
+        <Badge
+          status={value === "ACTIVE" ? "success" : "default"}
+          text={value === "ACTIVE" ? "已上线" : "已下线"}
+        />
+      ),
+    },
+    {
+      title: "操作",
+      key: "actions",
+      render: (_: unknown, app: PublishedAppRecord) => (
+        <Flex gap={4} align="center">
+          <Button type="link" size="small" onClick={() => void toggleStatus(app)}>
+            {app.status === "ACTIVE" ? "下线" : "上线"}
+          </Button>
+          <Popconfirm
+            title={`删除发布应用「${app.name}」？`}
+            description="员工入口将立即失效，该操作不可恢复。"
+            okText="确认删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => void remove(app)}
+          >
             <Button
               type="text"
               size="small"
-              icon={<CopyOutlined />}
-              aria-label="复制员工入口链接"
-              title="复制员工入口链接"
-              onClick={() => copyEntry(app)}
+              danger
+              icon={<DeleteOutlined />}
+              aria-label={`删除发布应用 ${app.name}`}
+              title="删除"
             />
-          </Flex>
-        ),
-      },
-      {
-        title: "访问",
-        dataIndex: "accessMode",
-        key: "access",
-        render: (_: unknown, app: PublishedAppRecord) => (
-          <Flex vertical gap={4} align="flex-start">
-            <Tag color={app.accessMode === "token" ? "red" : "default"}>
-              {app.accessMode === "token" ? "口令" : "公开"}
-            </Tag>
-            {app.accessMode === "token" ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {freshTokens[app.id] ?? app.accessTokenHint ?? "已设置"}
-              </Typography.Text>
-            ) : null}
-            <Button type="link" size="small" onClick={() => void toggleAccess(app)}>
-              {app.accessMode === "token" ? "撤销口令" : "加口令"}
-            </Button>
-          </Flex>
-        ),
-      },
-      {
-        title: "配额",
-        key: "quota",
-        render: (_: unknown, app: PublishedAppRecord) => (
-          <Flex vertical gap={2} align="flex-start">
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              每分钟 {app.rateLimitPerMinute || "不限"} 次
-            </Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              每日 {app.dailyTokenBudget ? `${app.dailyTokenBudget} tokens` : "不限"}
-            </Typography.Text>
-            <Button type="link" size="small" style={{ padding: 0, height: 18 }} onClick={() => openQuota(app)}>
-              调整配额
-            </Button>
-          </Flex>
-        ),
-      },
-      {
-        title: "能力",
-        key: "capabilities",
-        render: (_: unknown, app: PublishedAppRecord) => (
-          <Flex gap={4} wrap>
-            <Tag color="orange">知识库 {app.resources.rag?.sources?.length ?? 0}</Tag>
-            <Tag color="blue">问数 {app.resources.sqlSources?.length ?? 0}</Tag>
-            <Tag color={app.allowedGroups.length > 0 ? "green" : "default"}>
-              分组 {app.allowedGroups.length > 0 ? app.allowedGroups.join(", ") : "仅公开"}
-            </Tag>
-          </Flex>
-        ),
-      },
-      {
-        title: "状态",
-        dataIndex: "status",
-        key: "status",
-        render: (value: PublishedAppRecord["status"]) => (
-          <Badge
-            status={value === "ACTIVE" ? "success" : "default"}
-            text={value === "ACTIVE" ? "已上线" : "已下线"}
-          />
-        ),
-      },
-      {
-        title: "操作",
-        key: "actions",
-        render: (_: unknown, app: PublishedAppRecord) => (
-          <Flex gap={4} align="center">
-            <Button type="link" size="small" onClick={() => void toggleStatus(app)}>
-              {app.status === "ACTIVE" ? "下线" : "上线"}
-            </Button>
-            <Popconfirm
-              title={`删除发布应用「${app.name}」？`}
-              description="员工入口将立即失效，该操作不可恢复。"
-              okText="确认删除"
-              cancelText="取消"
-              okButtonProps={{ danger: true }}
-              onConfirm={() => void remove(app)}
-            >
-              <Button
-                type="text"
-                size="small"
-                danger
-                icon={<DeleteOutlined />}
-                aria-label={`删除发布应用 ${app.name}`}
-                title="删除"
-              />
-            </Popconfirm>
-          </Flex>
-        ),
-      },
+          </Popconfirm>
+        </Flex>
+      ),
+    },
   ];
 
   return (
@@ -458,8 +454,12 @@ export function PublishedAppsSection() {
           <Typography.Text style={{ fontSize: 12 }}>
             请求头：{identity?.assertionHeader ?? "X-Viewer-Assertion"}
           </Typography.Text>
-          <Typography.Text style={{ fontSize: 12 }}>Key ID：{identity?.keyId ?? "—"}</Typography.Text>
-          <Typography.Text style={{ fontSize: 12 }}>Issuer：{identity?.issuer ?? "—"}</Typography.Text>
+          <Typography.Text style={{ fontSize: 12 }}>
+            Key ID：{identity?.keyId ?? "—"}
+          </Typography.Text>
+          <Typography.Text style={{ fontSize: 12 }}>
+            Issuer：{identity?.issuer ?? "—"}
+          </Typography.Text>
           <Typography.Text style={{ fontSize: 12 }}>
             Audience：{identity?.audience ?? "—"}
           </Typography.Text>
@@ -509,7 +509,12 @@ export function PublishedAppsSection() {
             extra="0 = 不限"
             rules={[{ required: true, message: "请填写每分钟请求上限" }]}
           >
-            <InputNumber aria-label="每分钟请求上限" min={0} precision={0} style={{ width: "100%" }} />
+            <InputNumber
+              aria-label="每分钟请求上限"
+              min={0}
+              precision={0}
+              style={{ width: "100%" }}
+            />
           </Form.Item>
           <Form.Item
             label="每日 token 预算"
@@ -517,7 +522,12 @@ export function PublishedAppsSection() {
             extra="0 = 不限"
             rules={[{ required: true, message: "请填写每日 token 预算" }]}
           >
-            <InputNumber aria-label="每日 token 预算" min={0} precision={0} style={{ width: "100%" }} />
+            <InputNumber
+              aria-label="每日 token 预算"
+              min={0}
+              precision={0}
+              style={{ width: "100%" }}
+            />
           </Form.Item>
         </Form>
       </Modal>

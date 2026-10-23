@@ -1,4 +1,5 @@
 import { studioFetch } from "../../lib/client.js";
+import { parseHttpError as parseError } from "@open-agent-tools/studio-client";
 export type ProviderFormat = "openai-chat" | "openai-response" | "anthropic-message";
 
 export const PROVIDER_FORMATS: ProviderFormat[] = [
@@ -24,11 +25,6 @@ export interface ProviderMetadata {
   format: ProviderFormat;
   createdAt: string;
   updatedAt: string;
-}
-
-async function parseError(response: Response): Promise<string> {
-  const body = (await response.json().catch(() => ({}))) as { error?: string };
-  return body.error ?? `HTTP ${response.status}`;
 }
 
 export async function fetchProviders(options?: {

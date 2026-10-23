@@ -6,6 +6,7 @@ import {
   type ConnectorDocument,
   type HttpFetchLike,
 } from "./types.js";
+import { firstString } from "./shared.js";
 
 /**
  * 通用 JSON/REST 连接器。
@@ -65,14 +66,6 @@ function extractItems(body: unknown): unknown[] {
     }
   }
   throw new Error("http connector response must be a JSON array or { documents: [] }");
-}
-
-function firstString(record: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
 }
 
 export function mapItem(item: unknown, index: number): ConnectorDocument {

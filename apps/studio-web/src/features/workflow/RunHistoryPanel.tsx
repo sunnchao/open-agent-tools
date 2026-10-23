@@ -6,13 +6,8 @@ import {
   type WorkflowRunHistory,
   type WorkflowRunRecord,
 } from "./api.js";
-import { replayWorkflowRun } from "./runHistory.js";
+import { createResumeCheckpoint, replayWorkflowRun } from "./runHistory.js";
 import { RunPreview } from "./RunPreview.js";
-import {
-  cachedNodesFromEvents,
-  prepareResumeCheckpoint,
-} from "@open-agent-tools/workflow-contracts";
-import { variableNodes } from "./variables.js";
 import type { WorkflowSnapshot } from "./types.js";
 
 const statusLabels = { running: "运行中", succeeded: "成功", failed: "失败", stopped: "已停止" };
@@ -85,24 +80,7 @@ export function RunHistoryPanel({
       ? new Map(
           replay?.log.map((item) => {
             try {
-              prepareResumeCheckpoint(
-                {
-                  nodes: variableNodes(currentGraph.nodes),
-                  edges: currentGraph.edges.map((edge) => ({
-                    ...edge,
-                    label: typeof edge.label === "string" ? edge.label : undefined,
-                  })),
-                },
-                {
-                  nodes: variableNodes(history.graph.nodes),
-                  edges: history.graph.edges.map((edge) => ({
-                    ...edge,
-                    label: typeof edge.label === "string" ? edge.label : undefined,
-                  })),
-                },
-                item.id,
-                cachedNodesFromEvents(history.events),
-              );
+              createResumeCheckpoint(currentGraph, history, item.id);
               return [item.id, null] as const;
             } catch (reason) {
               return [item.id, reason instanceof Error ? reason.message : "缓存不可用"] as const;

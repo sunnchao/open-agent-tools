@@ -1760,11 +1760,6 @@ select:focus-visible {
   background: #fff4f4;
 }
 
-.resource-check-row.is-missing small,
-.workflow-resource-options > label.is-missing small {
-  color: var(--studio-danger);
-}
-
 .mcp-tool-group > p {
   margin: 10px 2px 2px;
   color: var(--studio-mcp);
@@ -2418,12 +2413,6 @@ select:focus-visible {
     display: none;
   }
 
-  .studio-nav-items {
-    flex-direction: row;
-    gap: 3px;
-    margin: 0;
-  }
-
   .studio-nav-item {
     min-height: 48px;
   }
@@ -2562,22 +2551,11 @@ select:focus-visible {
   margin-bottom: 24px;
   align-items: flex-start;
 }
-.msg-row--user {
-  justify-content: flex-end;
-}
-.msg-row--assistant,
-.msg-row--tool {
-  justify-content: flex-start;
-}
 .msg-body {
   min-width: 0;
   display: flex;
   flex-direction: column;
   max-width: min(680px, 82%);
-}
-.msg-row--user .msg-body {
-  align-items: flex-end;
-  order: 0;
 }
 .msg-row--assistant .msg-body,
 .msg-row--tool .msg-body {
@@ -2596,10 +2574,6 @@ select:focus-visible {
   user-select: none;
   border-radius: 50%;
 }
-.msg-avatar--user {
-  order: 1;
-}
-
 /* ── 对话工作区（chat 布局修复） ── */
 .chat-workspace {
   height: 100%;

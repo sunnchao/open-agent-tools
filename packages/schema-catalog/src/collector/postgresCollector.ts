@@ -1,3 +1,4 @@
+import { groupByTable, matchesAny, isSensitive, columnTier, commentEnum } from "./shared.js";
 import { createPostgresPool, type PostgresPool } from "@open-agent-tools/database/postgres";
 import type {
   CollectOptions,
@@ -8,6 +9,7 @@ import type {
   SchemaCatalog,
   TableMeta,
 } from "../types.js";
+import { quotePostgresIdentifier } from "../sql.js";
 
 interface TableRow {
   table_schema: string;
@@ -226,38 +228,41 @@ async function collectWithPool(
     tables: [],
   };
 
+  const columnsByTable = groupByTable(columns, tableKeyForRow);
+  const relationsByTable = groupByTable(relations, tableKeyForRow);
   for (const table of tables) {
     const tableKey = tableKeyForRow(table);
-    const tableColumns: ColumnMeta[] = columns
-      .filter((column) => tableKeyForRow(column) === tableKey)
-      .map((column) => {
-        const key = tableColumnKey(column.table_schema, column.table_name, column.column_name);
-        const isPrimary = primaryKeys.has(key);
-        const isUnique = uniqueKeys.has(key);
-        return {
-          table: column.table_name,
-          schema: column.table_schema,
-          name: column.column_name,
-          columnType: column.column_type,
-          nullable: column.is_nullable === "YES",
-          isPrimary,
-          isUnique,
-          hasIndex: indexedColumns.has(key),
-          comment: column.column_comment || undefined,
-          defaultValue: column.column_default ?? undefined,
-          sensitivity: isSensitive(column.column_name, column.column_comment ?? undefined),
-          tier: tierOf(column.column_name, column.column_type, isPrimary, isUnique),
-        };
-      });
-    const tableRelations: RelationMeta[] = relations
-      .filter((relation) => tableKeyForRow(relation) === tableKey)
-      .map((relation) => ({
+    const tableColumns: ColumnMeta[] = (columnsByTable.get(tableKey) ?? []).map((column) => {
+      const key = tableColumnKey(column.table_schema, column.table_name, column.column_name);
+      const isPrimary = primaryKeys.has(key);
+      const isUnique = uniqueKeys.has(key);
+      return {
+        table: column.table_name,
+        schema: column.table_schema,
+        name: column.column_name,
+        columnType: column.column_type,
+        nullable: column.is_nullable === "YES",
+        isPrimary,
+        isUnique,
+        hasIndex: indexedColumns.has(key),
+        comment: column.column_comment || undefined,
+        defaultValue: column.column_default ?? undefined,
+        sensitivity: isSensitive(column.column_name, column.column_comment ?? undefined),
+        tier: columnTier(column.column_name, column.column_type, isPrimary, isUnique, "postgresql"),
+      };
+    });
+    const tableRelations: RelationMeta[] = (relationsByTable.get(tableKey) ?? []).map(
+      (relation) => ({
         fromTable: relation.table_name,
         fromColumn: relation.column_name,
         toTable: relation.foreign_table_name,
         toColumn: relation.foreign_column_name,
-      }));
-    const tableEnums: EnumMeta[] = collectCommentEnums(tableColumns);
+      }),
+    );
+    const tableEnums: EnumMeta[] = tableColumns.flatMap((column) => {
+      const parsed = commentEnum(column);
+      return parsed ? [parsed] : [];
+    });
     const tableSamples: SampleMeta[] = skipSamples
       ? []
       : await collectSamples(pool, table, tableColumns, options);
@@ -304,74 +309,6 @@ function tableColumnKey(schema: string, table: string, column: string): string {
   return `${schema}.${table}.${column}`;
 }
 
-function matchesAny(name: string, filters: string[]): boolean {
-  return filters.some((filter) => {
-    if (!filter.includes("*")) return filter === name;
-    const re = new RegExp(`^${filter.split("*").map(escapeRe).join(".*")}$`);
-    return re.test(name);
-  });
-}
-
-function escapeRe(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isSensitive(column: string, comment?: string): "sensitive" | "normal" {
-  const text = `${column} ${comment ?? ""}`.toLowerCase();
-  return /(password|passwd|pwd|secret|token|api_?key|private_?key|id_card|身份证|手机号|mobile|phone|手机|密码|密钥)/.test(
-    text,
-  )
-    ? "sensitive"
-    : "normal";
-}
-
-function tierOf(
-  column: string,
-  type: string,
-  isPrimary: boolean,
-  isUnique: boolean,
-): ColumnMeta["tier"] {
-  if (isPrimary || isUnique) return "required";
-  const name = column.toLowerCase();
-  const normalizedType = type.toLowerCase();
-  if (/^(created|updated|submitted|approved|status|state|type|org|dept|is_|has_)/.test(name))
-    return "required";
-  if (
-    /^(username|user_name|account|login|login_name|nickname|nick_name|display_name|real_name)$/.test(
-      name,
-    )
-  )
-    return "common";
-  if (/(_at|_on|_id|_no|_code|_name|_type|_status)/.test(name)) return "common";
-  if (
-    /^(smallint|integer|bigint|numeric|decimal|real|double precision|character varying|character|text|date|timestamp|boolean)/.test(
-      normalizedType,
-    )
-  ) {
-    if (/(^|_)(id|no|code|name|status|type|time|date)(_|$)/.test(name)) return "common";
-    return "full";
-  }
-  return "full";
-}
-
-function collectCommentEnums(columns: ColumnMeta[]): EnumMeta[] {
-  const result: EnumMeta[] = [];
-  for (const column of columns) {
-    const pairs = (column.comment ?? "").match(/(\d+)\s*=\s*([^;，,]+)/g);
-    if (pairs && pairs.length >= 2) {
-      result.push({
-        table: column.table,
-        column: column.name,
-        values: pairs.map((pair) => {
-          const [value, ...meaning] = pair.split("=");
-          return { value: value!.trim(), meaning: meaning.join("=").trim() };
-        }),
-      });
-    }
-  }
-  return result;
-}
-
 async function collectSamples(
   pool: PostgresPool,
   table: TableRow,
@@ -389,8 +326,8 @@ async function collectSamples(
   });
   const results: SampleMeta[] = [];
   for (const column of candidates.slice(0, options.sampleTableLimit ?? 20)) {
-    const identifier = quoteIdentifier(column.name);
-    const tableIdentifier = `${quoteIdentifier(table.table_schema)}.${quoteIdentifier(table.table_name)}`;
+    const identifier = quotePostgresIdentifier(column.name);
+    const tableIdentifier = `${quotePostgresIdentifier(table.table_schema)}.${quotePostgresIdentifier(table.table_name)}`;
     try {
       const result = await pool.pool.query<{ v: unknown; cnt: number | string }>(
         `SELECT ${identifier} AS v, COUNT(*) AS cnt
@@ -418,8 +355,4 @@ async function collectSamples(
     }
   }
   return results;
-}
-
-function quoteIdentifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
 }

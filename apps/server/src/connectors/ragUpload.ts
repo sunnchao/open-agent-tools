@@ -1,4 +1,5 @@
 import { type HttpFetchLike } from "./types.js";
+import { ragConfig } from "../ragConfig.js";
 
 export interface RagUploadInput {
   /** rag-server 的文档来源名,即上传文件名;同一外部 id 必须稳定复用同名以幂等覆盖。 */
@@ -11,14 +12,6 @@ export interface RagUploadInput {
 /** 上传器抽象:同步引擎只依赖这个接口,测试可注入假实现。 */
 export interface ConnectorDocumentUploader {
   upload(input: RagUploadInput, deps: { fetch?: HttpFetchLike }): Promise<void>;
-}
-
-/** 与 `routes/ragAdmin.ts` 共用同一套 RAG 配置来源,凭据永远留在服务端。 */
-export function ragConfig(): { baseUrl: string; token: string } {
-  return {
-    baseUrl: (process.env.RAG_API_URL ?? "http://localhost:4001/api").replace(/\/$/, ""),
-    token: process.env.RAG_ADMIN_TOKEN?.trim() ?? "",
-  };
 }
 
 /**

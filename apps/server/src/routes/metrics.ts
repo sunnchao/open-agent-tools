@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { httpErrorStatus as errorStatus } from "../httpErrors.js";
 import { METRIC_STATUSES, type MetricStatus } from "../metrics/caliber.js";
 import { renderMetricPromptBlock, selectMetrics } from "../metrics/select.js";
 import {
@@ -46,11 +47,6 @@ function metricPayload(body: unknown): Partial<MetricDefinitionInput> {
       ? { owner: value.owner as string | null }
       : {}),
   };
-}
-
-function errorStatus(error: unknown): number {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("not found") ? 404 : 400;
 }
 
 metricsRouter.get("/api/metrics", (req: Request, res: Response) => {

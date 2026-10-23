@@ -19,12 +19,7 @@ import {
   TextInput,
   useTheme,
 } from "react-native-paper";
-import {
-  createSessionApi,
-  deleteSessionApi,
-  fetchSessions,
-  streamChat,
-} from "../api/chat";
+import { createSessionApi, deleteSessionApi, fetchSessions, streamChat } from "../api/chat";
 import {
   fetchResourceCatalog,
   fetchProviderModels,
@@ -43,16 +38,13 @@ import { newId } from "../lib/ids";
 import { storageGet, storageSet } from "../lib/storage";
 import { Btn, ErrorText, Loading, OptionBar } from "../components/ui";
 import { ChatResourceSheet } from "../components/ChatResourceSheet";
+import { errorMessage } from "@open-agent-tools/api-contracts/values";
 
 const CACHE_KEY = "open-agent-tools.chat.v1";
 
 function autoTitle(content: string): string {
   const t = content.trim().replace(/\n/g, " ");
   return t.length > 32 ? `${t.slice(0, 32)}…` : t || "New chat";
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function emptySession(): Session {
@@ -628,10 +620,7 @@ export function ChatScreen() {
           <Modal
             visible={modelOpen}
             onDismiss={() => setModelOpen(false)}
-            contentContainerStyle={[
-              styles.modelModal,
-              { backgroundColor: theme.colors.surface },
-            ]}
+            contentContainerStyle={[styles.modelModal, { backgroundColor: theme.colors.surface }]}
           >
             <Text variant="titleLarge" style={styles.modelTitle}>
               模型通道

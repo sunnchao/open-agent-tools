@@ -1,0 +1,46 @@
+{
+  "name": "@open-agent-tools/api-contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./chat": {
+      "types": "./dist/chat.d.ts",
+      "import": "./dist/chat.js"
+    },
+    "./rag": {
+      "types": "./dist/rag.d.ts",
+      "import": "./dist/rag.js"
+    },
+    "./observatory": {
+      "types": "./dist/observatory.d.ts",
+      "import": "./dist/observatory.js"
+    },
+    "./graph": {
+      "types": "./dist/graph.d.ts",
+      "import": "./dist/graph.js"
+    },
+    "./resources": {
+      "types": "./dist/resources.d.ts",
+      "import": "./dist/resources.js"
+    },
+    "./report": {
+      "types": "./dist/report.d.ts",
+      "import": "./dist/report.js"
+    },
+    "./values": {
+      "types": "./dist/values.d.ts",
+      "import": "./dist/values.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test src/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

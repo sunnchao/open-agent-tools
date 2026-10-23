@@ -25,6 +25,10 @@
     "./elasticsearch": {
       "types": "./dist/elasticsearch/index.d.ts",
       "import": "./dist/elasticsearch/index.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite/index.d.ts",
+      "import": "./dist/sqlite/index.js"
     }
   },
   "scripts": {

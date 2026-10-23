@@ -49,6 +49,8 @@ export function createRuntime(config: ServerConfig) {
   const graph = new KnowledgeGraph({
     dbPath: config.graphDbPath,
     embeddings,
+    extractConcurrency: config.graphExtractConcurrency,
+    gleaningRounds: config.graphGleaningRounds,
     llmChat: llm
       ? async (system, user) => {
           const response = await trackRagLlm("rag_graph", llm.model, () =>

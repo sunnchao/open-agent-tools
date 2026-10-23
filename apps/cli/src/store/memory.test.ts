@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, {
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { MemoryStore, buildMemoryContext } from "./memory.ts";
 
 const cleanups: string[] = [];
@@ -24,6 +34,112 @@ afterEach(() => {
 });
 
 describe("MemoryStore", () => {
+  it("avoids per-entry SQL and repeated Markdown reads during search", (t) => {
+    const store = createStore();
+    t.after(() => store.close());
+    for (let i = 0; i < 40; i += 1) {
+      store.write({
+        slug: `entry-${i}`,
+        scope: i % 2 === 0 ? "project" : "global",
+        type: "project",
+        description: "记忆索引",
+        body: `包含中文规则和 keyword ${i}`,
+        actor: "user",
+      });
+    }
+    const reads = t.mock.method(fs, "readFileSync");
+    const prepares = t.mock.method(DatabaseSync.prototype, "prepare");
+    syncBuiltinESMExports();
+    t.after(() => {
+      reads.mock.restore();
+      syncBuiltinESMExports();
+    });
+    t.mock.method(Date, "now", () => 1_800_000_000_000);
+    const markdownReads = () =>
+      reads.mock.calls.filter((call) => String(call.arguments[0]).endsWith(".md")).length;
+
+    const cold = store.search("keyword", { limit: 40 });
+    assert.equal(cold.length, 40);
+    assert.equal(markdownReads(), 40);
+    const warm = store.search("keyword", { limit: 40 });
+    assert.deepEqual(warm, cold);
+    assert.equal(markdownReads(), 40, "unchanged entries should reuse parsed Markdown");
+    const chinese = store.search("中文", { limit: 40 });
+    assert.equal(chinese.length, 40);
+    assert.ok(chinese.every((match) => match.matchedBy.includes("body")));
+    assert.equal(markdownReads(), 40);
+    assert.equal(
+      prepares.mock.calls.filter((call) => String(call.arguments[0]).includes("slug = ?")).length,
+      0,
+    );
+  });
+
+  it("refreshes cached entries after same-size edits, replacement, deletion and repair", (t) => {
+    const store = createStore();
+    t.after(() => store.close());
+    const written = store.write({
+      slug: "editable",
+      scope: "project",
+      type: "project",
+      description: "文件编辑",
+      body: "旧版正文",
+      actor: "user",
+    });
+    const path = written.meta.filePath;
+    const original = readFileSync(path, "utf8");
+    assert.equal(store.read("editable")?.body, "旧版正文");
+    const oldStat = statSync(path);
+    writeFileSync(path, original.replace("旧版正文", "新版正文"));
+    utimesSync(path, oldStat.atime, oldStat.mtime);
+    assert.equal(store.search("新版")[0]?.body, "新版正文");
+
+    const replacement = `${path}.replacement`;
+    writeFileSync(replacement, original.replace("旧版正文", "替换正文"));
+    utimesSync(replacement, oldStat.atime, oldStat.mtime);
+    renameSync(replacement, path);
+    assert.equal(store.search("替换")[0]?.body, "替换正文");
+    writeFileSync(path, "invalid markdown");
+    assert.equal(store.read("editable"), null);
+    writeFileSync(path, original);
+    assert.equal(store.read("editable")?.body, "旧版正文");
+    rmSync(path);
+    assert.equal(store.read("editable"), null);
+    assert.deepEqual(store.search("正文"), []);
+    writeFileSync(path, original);
+    assert.equal(store.read("editable")?.body, "旧版正文");
+  });
+
+  it("does not expose cached metadata to caller mutations and refreshes internal writes", (t) => {
+    const store = createStore();
+    t.after(() => store.close());
+    const input = {
+      slug: "mutable",
+      scope: "project",
+      type: "project",
+      description: "原始说明",
+      body: "原始正文",
+      actor: "user",
+      links: ["reference"],
+    } as const;
+    store.write({ ...input, links: [...input.links] });
+    const entry = store.read(input.slug);
+    assert.ok(entry);
+    entry.body = "污染正文";
+    entry.meta.links.push("polluted");
+    entry.meta.source.actor = "tool";
+    assert.equal(store.read(input.slug)?.body, "原始正文");
+    assert.deepEqual(store.read(input.slug)?.meta.links, ["reference"]);
+    assert.equal(store.read(input.slug)?.meta.source.actor, "user");
+    store.write({ ...input, links: [], body: "修改正文" });
+    assert.equal(store.read(input.slug)?.body, "修改正文");
+    store.remove(input.slug);
+    assert.equal(store.read(input.slug), null);
+    store.write({ ...input, links: [], body: "重建正文" });
+    assert.equal(store.read(input.slug)?.body, "重建正文");
+    store.wipeAll("project");
+    assert.equal(store.read(input.slug), null);
+  });
+
   it("persists a proposal and only recalls it after acceptance", () => {
     const store = createStore();
     const result = store.write({

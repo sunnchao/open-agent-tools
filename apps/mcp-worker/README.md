@@ -148,7 +148,7 @@ export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcp_management
 pnpm --filter @open-agent-tools/mcp-worker db:migrate
 ```
 
-Schema 变更后生成新迁移使用 `pnpm --filter @open-agent-tools/mcp-worker db:generate`。旧 `apps/mcp-control-plane` 不再是工作区包或源码树，只保留 README 跳转和 `drizzle -> ../mcp-worker/drizzle` 兼容链接，确保旧迁移路径消费者无需改动；不要修改 `apps/mcp-server`。
+Schema 变更后生成新迁移使用 `pnpm --filter @open-agent-tools/mcp-worker db:generate`。旧 `apps/mcp-control-plane` 目录和兼容链接已移除，迁移历史统一位于 `apps/mcp-worker/drizzle/`；Gateway 的进程和权限边界保持不变。
 
 ## 启动
 

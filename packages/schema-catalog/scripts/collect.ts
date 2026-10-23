@@ -4,6 +4,7 @@
  */
 import { writeFile } from "node:fs/promises";
 import { collectMysqlCatalog } from "../src/collector/mysqlCollector.js";
+import { argValue } from "./args.js";
 
 function env(name: string): string {
   const v = process.env[name];
@@ -31,11 +32,6 @@ async function main() {
   );
   const tables = catalog.tables.map((t) => t.table.name).join(", ");
   console.log(`[collect] 表清单：${tables || "(空)"}`);
-}
-
-function argValue(args: string[], key: string): string | undefined {
-  const i = args.indexOf(key);
-  return i >= 0 ? args[i + 1] : undefined;
 }
 
 main().catch((err) => {

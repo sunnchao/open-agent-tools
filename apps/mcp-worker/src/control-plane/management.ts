@@ -18,6 +18,7 @@ import {
   type RemoteServiceConfigPublic,
   type RenderedPrompt,
 } from "@open-agent-tools/mcp-contracts";
+import { parseMcpResponseBody } from "@open-agent-tools/mcp-contracts/response";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { z } from "zod";
@@ -26,6 +27,12 @@ import {
   RepositoryNotFoundError,
   type McpManagementRepository,
 } from "./repository.js";
+import {
+  ManagementError,
+  requireAdmin,
+  requireEditor,
+  type ManagementErrorCode,
+} from "./authorization.js";
 import type {
   Actor,
   BuildJobRecord,
@@ -38,29 +45,10 @@ import type {
 } from "./types.js";
 
 export type { Actor } from "./types.js";
+export { ManagementError };
+export type { ManagementErrorCode };
 
 export type IdGenerator = () => string;
-
-export type ManagementErrorCode =
-  | "CONFLICT"
-  | "FORBIDDEN"
-  | "IMMUTABLE_VERSION"
-  | "INVALID_STATE"
-  | "NOT_FOUND"
-  | "UPSTREAM_ERROR"
-  | "VALIDATION_ERROR";
-
-export class ManagementError extends Error {
-  readonly code: ManagementErrorCode;
-  readonly details?: unknown;
-
-  constructor(code: ManagementErrorCode, message: string, details?: unknown) {
-    super(message);
-    this.name = "ManagementError";
-    this.code = code;
-    this.details = details;
-  }
-}
 
 const CreateServiceSchema = z
   .object({
@@ -122,18 +110,6 @@ function mapRepositoryError(error: unknown): never {
     throw new ManagementError("NOT_FOUND", error.message);
   }
   throw error;
-}
-
-function requireEditor(actor: Actor): void {
-  if (actor.role === "auditor") {
-    throw new ManagementError("FORBIDDEN", "This operation requires admin or operator access");
-  }
-}
-
-function requireAdmin(actor: Actor): void {
-  if (actor.role !== "admin") {
-    throw new ManagementError("FORBIDDEN", "This operation requires admin access");
-  }
 }
 
 function requireDraft(version: McpServiceVersionRecord): void {
@@ -1133,7 +1109,7 @@ async function probeRemoteToolsOverStreamableHttp(
       if (sid) sessionId = sid;
       const text = await response.text();
       if (!response.ok) throw new Error(`upstream responded with status ${response.status}`);
-      const body = parseJsonRpcBody(text, response.headers.get("content-type"));
+      const body = parseMcpResponseBody(text, response.headers.get("content-type"));
       const envelope = body as { error?: { message?: string }; result?: unknown };
       if (envelope !== null && typeof envelope === "object" && envelope.error) {
         throw new Error(envelope.error.message ?? "upstream returned an error");
@@ -1183,24 +1159,6 @@ async function probeRemoteToolsOverStreamableHttp(
       name: tool.name,
       ...(typeof tool.description === "string" ? { description: tool.description } : {}),
     }));
-}
-
-function parseJsonRpcBody(text: string, contentType: string | null): unknown {
-  if (text.length === 0) return null;
-  if (
-    contentType?.includes("text/event-stream") ||
-    text.startsWith("event:") ||
-    text.startsWith("data:")
-  ) {
-    const payloads = text
-      .split("\n")
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice("data:".length).trim())
-      .filter((line) => line.length > 0);
-    if (payloads.length === 0) return null;
-    return JSON.parse(payloads[payloads.length - 1]!);
-  }
-  return JSON.parse(text);
 }
 
 /** SSE 探测：经 SDK Client 建连并拉取 tools/list，与网关 SSE 路径同一协议。 */

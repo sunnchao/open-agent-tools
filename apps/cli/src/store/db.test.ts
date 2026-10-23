@@ -4,7 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { addMessage, addSessionUsage, closeDb, createSession, getSession, openDb } from "./db.ts";
+import {
+  addMessage,
+  addSessionUsage,
+  closeDb,
+  createSession,
+  deleteSession,
+  getSession,
+  openDb,
+  renameSession,
+  updateMessage,
+} from "./db.ts";
 
 /** 用临时 SQLITE_PATH 隔离单例数据库，测试结束清理。 */
 async function withTempDb<T>(fn: (path: string) => Promise<T> | T): Promise<T> {
@@ -53,6 +63,49 @@ it("reasoning 角色消息可落库并按顺序回读", async () => {
         ["assistant", "好的"],
       ],
     );
+  });
+});
+
+it("重复消息 ID 保留报错且不改写原记录", async () => {
+  await withTempDb(() => {
+    const session = createSession();
+    const first = addMessage(session.id, {
+      id: "duplicate",
+      role: "reasoning",
+      content: "original",
+    });
+    assert.throws(
+      () => addMessage(session.id, { id: "duplicate", role: "reasoning", content: "retry" }),
+      /UNIQUE/,
+    );
+    assert.deepEqual(getSession(session.id)?.messages, [first]);
+  });
+});
+
+it("会话回读只查两次并保留用量、消息元数据和级联删除", async (t) => {
+  await withTempDb(() => {
+    const db = openDb();
+    const session = createSession();
+    addSessionUsage(session.id, { inputTokens: 4, outputTokens: 3, reasoningTokens: 2 });
+    const message = addMessage(session.id, {
+      role: "tool",
+      content: "",
+      status: "streaming",
+      tool_call_id: "call",
+      tool_name: "search",
+    });
+    assert.ok(message);
+    updateMessage(message.id, { content: "result", status: "complete" });
+    renameSession(session.id, "Renamed");
+    const prepares = t.mock.method(db, "prepare");
+    const loaded = getSession(session.id);
+    assert.equal(prepares.mock.callCount(), 2);
+    assert.equal(loaded?.title, "Renamed");
+    assert.deepEqual(loaded?.usage, { inputTokens: 4, outputTokens: 3, reasoningTokens: 2 });
+    assert.deepEqual(loaded?.messages, [{ ...message, content: "result", status: "complete" }]);
+    assert.equal(deleteSession(session.id), true);
+    assert.equal(getSession(session.id), null);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM messages").get()?.n, 0);
   });
 });
 

@@ -19,12 +19,11 @@ import {
 import { getDbPath } from "../db.js";
 import { logTrace } from "../trace.js";
 import {
-  getDefaultSchemaSource,
-  getSchemaSource,
   type SchemaSemanticProfile,
   type SchemaSourceWithSecret,
   updateSchemaSourceSyncState,
 } from "./store.js";
+import { resolveSchemaSource } from "./resolve.js";
 
 interface RuntimeState {
   catalog?: SchemaCatalog;
@@ -52,17 +51,6 @@ const ONEAPI_ALIASES: Record<string, string[]> = {
   channel_keys: ["渠道密钥"],
 };
 
-function resolveSource(sourceId?: string): SchemaSourceWithSecret {
-  const source = sourceId
-    ? getSchemaSource(sourceId, { requireEnabled: true })
-    : getDefaultSchemaSource({ requireEnabled: true });
-  if (!source)
-    throw new Error(
-      sourceId ? "schema source not found or disabled" : "no enabled schema source configured",
-    );
-  return source;
-}
-
 function runtimeFor(sourceId: string): RuntimeState {
   const current = states.get(sourceId) ?? {};
   states.set(sourceId, current);
@@ -70,7 +58,7 @@ function runtimeFor(sourceId: string): RuntimeState {
 }
 
 export async function loadSchemaCatalog(sourceId?: string): Promise<SchemaCatalog> {
-  const source = resolveSource(sourceId);
+  const source = resolveSchemaSource(sourceId);
   const state = runtimeFor(source.id);
   if (state.catalog) return state.catalog;
   const collect = source.connector === "postgresql" ? collectPostgresCatalog : collectMysqlCatalog;
@@ -93,7 +81,7 @@ export function schemaGraphDbPath(sourceId: string): string {
 }
 
 export async function getSchemaGraph(sourceId?: string): Promise<KnowledgeGraph> {
-  const source = resolveSource(sourceId);
+  const source = resolveSchemaSource(sourceId);
   const state = runtimeFor(source.id);
   if (state.graph) return state.graph;
   state.buildPromise ??= buildSchemaGraph(source).catch((error) => {
@@ -120,7 +108,7 @@ export function removeSchemaSourceRuntime(sourceId: string): void {
 }
 
 export async function rebuildSchemaGraph(sourceId?: string): Promise<KnowledgeGraph> {
-  const source = resolveSource(sourceId);
+  const source = resolveSchemaSource(sourceId);
   invalidateSchemaSource(source.id);
   return getSchemaGraph(source.id);
 }

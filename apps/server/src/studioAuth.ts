@@ -1,4 +1,8 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  normalizeOptionalToken,
+  parseBearerToken,
+  tokensEqual,
+} from "@open-agent-tools/mcp-auth/primitives";
 import type { NextFunction, Request, Response } from "express";
 import type { JWTVerifyGetKey } from "jose";
 import {
@@ -94,24 +98,6 @@ const DEFAULT_MANAGE_PREFIXES = [
 
 const DEFAULT_RUN_PREFIXES = ["/api/"];
 
-function normalizeToken(value: string | undefined): string | null {
-  const token = value?.trim();
-  return token ? token : null;
-}
-
-function bearerToken(req: Request): string | null {
-  const authorization = req.header("authorization") ?? "";
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || null;
-}
-
-function tokensEqual(expected: string, actual: string): boolean {
-  // 先做长度无关的 sha256 再做等长比较，避免直接比较变长 token 的时序差异。
-  const expectedDigest = createHash("sha256").update(expected, "utf8").digest();
-  const actualDigest = createHash("sha256").update(actual, "utf8").digest();
-  return timingSafeEqual(expectedDigest, actualDigest);
-}
-
 function isPublicPath(path: string): boolean {
   // 健康检查、工作流对外 API、发布应用的终端用户入口走各自的鉴权通道，不受部署 token 约束。
   // `/api/apps/*` 只暴露 slug 级公开信息与按 slug 的对话，资源范围由发布配置决定，不接受请求方指定。
@@ -126,9 +112,9 @@ function isPublicPath(path: string): boolean {
 
 export function resolveStudioAuth(options?: StudioAuthOptions): StudioAuthResolution {
   const token =
-    normalizeToken(options?.token) ??
-    normalizeToken(process.env.STUDIO_API_TOKEN) ??
-    normalizeToken(process.env.SERVER_API_TOKEN);
+    normalizeOptionalToken(options?.token) ??
+    normalizeOptionalToken(process.env.STUDIO_API_TOKEN) ??
+    normalizeOptionalToken(process.env.SERVER_API_TOKEN);
   const managePrefixes = options?.managePrefixes ?? DEFAULT_MANAGE_PREFIXES;
   const runPrefixes = options?.runPrefixes ?? DEFAULT_RUN_PREFIXES;
   const openDevelopment = !token && !options?.oidc && !options?.oidcVerifier;
@@ -215,7 +201,7 @@ export function resolveStudioAuth(options?: StudioAuthOptions): StudioAuthResolu
         next();
         return Promise.resolve();
       }
-      const presented = bearerToken(req);
+      const presented = parseBearerToken(req.header("authorization"));
       if (!presented) {
         logTrace("studio.auth_rejected", { method: req.method, path: req.path, scope }, "warn");
         res.status(401).json({ error: "studio authentication is required" });

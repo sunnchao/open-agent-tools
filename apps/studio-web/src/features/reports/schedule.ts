@@ -3,9 +3,8 @@
  *
  * 服务端用 HH:MM + daily/weekly 描述周期,这里的措辞与它保持一致。
  */
-import type { ReportRunStatus, ReportSchedule } from "./api.js";
-
-export const WEEKDAY_LABELS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"] as const;
+import type { ReportRunStatus } from "./api.js";
+export { WEEKDAY_LABELS, describeSchedule } from "@open-agent-tools/api-contracts/report";
 
 export const REPORT_STATUS_LABELS: Record<ReportRunStatus, string> = {
   running: "执行中",
@@ -18,12 +17,6 @@ const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 export function isValidTimeOfDay(value: string): boolean {
   return TIME_PATTERN.test(value.trim());
-}
-
-export function describeSchedule(schedule: ReportSchedule): string {
-  const prefix =
-    schedule.frequency === "weekly" ? `每${WEEKDAY_LABELS[schedule.weekday ?? 0]}` : "每天";
-  return `${prefix} ${schedule.time}`;
 }
 
 /** 本地时区展示,避免把 UTC ISO 串直接糊到界面上。 */

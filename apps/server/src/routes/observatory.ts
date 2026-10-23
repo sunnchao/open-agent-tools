@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { optionalString as nonEmptyString } from "@open-agent-tools/api-contracts/values";
 import { logTrace, truncate } from "../trace.js";
 import {
   exportTableGraph,
@@ -6,11 +7,8 @@ import {
   loadSchemaCatalog,
   rebuildSchemaGraph,
 } from "../schemaSources/runtime.js";
-import {
-  getDefaultSchemaSource,
-  getSchemaSource,
-  type SchemaSourceWithSecret,
-} from "../schemaSources/store.js";
+import type { SchemaSourceWithSecret } from "../schemaSources/store.js";
+import { resolveSchemaSource } from "../schemaSources/resolve.js";
 import { runSchemaText2Sql, type HistoryTurn } from "../oneapiDemo/text2sql.js";
 import {
   getQueryAudit,
@@ -26,6 +24,7 @@ import {
 import { resolveWorkspace } from "../workspace.js";
 import { AUDIT_EXPORT_COLUMNS, listAuditExportRows } from "../export/auditExport.js";
 import { parseExportFormat, sendExport } from "../export/respond.js";
+import { writeSseData } from "../sse.js";
 
 export const observatoryRouter: Router = Router();
 
@@ -186,12 +185,6 @@ function optionalTimestamp(value: unknown): string | undefined {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
 }
 
-function nonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function normalizedSql(sql: string | null | undefined): string {
   return (sql ?? "")
     .trim()
@@ -225,17 +218,6 @@ function requestedSourceId(req: Request): string | undefined {
   return undefined;
 }
 
-function resolveSource(sourceId?: string): SchemaSourceWithSecret {
-  const source = sourceId
-    ? getSchemaSource(sourceId, { requireEnabled: true })
-    : getDefaultSchemaSource({ requireEnabled: true });
-  if (!source)
-    throw new Error(
-      sourceId ? "schema source not found or disabled" : "no enabled schema source configured",
-    );
-  return source;
-}
-
 function publicSource(source: SchemaSourceWithSecret) {
   return {
     id: source.id,
@@ -257,7 +239,7 @@ observatoryRouter.get(
   ["/api/observatory/graph", "/api/oneapi-demo/graph"],
   async (req: Request, res: Response) => {
     try {
-      const source = resolveSource(requestedSourceId(req));
+      const source = resolveSchemaSource(requestedSourceId(req));
       const [catalog, graph] = await Promise.all([
         loadSchemaCatalog(source.id),
         getSchemaGraph(source.id),
@@ -295,7 +277,7 @@ observatoryRouter.post(
   ["/api/observatory/rebuild", "/api/oneapi-demo/rebuild"],
   async (req: Request, res: Response) => {
     try {
-      const source = resolveSource(requestedSourceId(req));
+      const source = resolveSchemaSource(requestedSourceId(req));
       const graph = await rebuildSchemaGraph(source.id);
       res.json({
         ok: true,
@@ -349,7 +331,7 @@ observatoryRouter.post(
         req.get("accept")?.includes("text/event-stream");
       const send = (event: unknown) => {
         if (!res.destroyed && !res.writableEnded) {
-          res.write(`data: ${JSON.stringify(event)}\n\n`);
+          writeSseData(res, event);
         }
       };
       let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -401,7 +383,7 @@ observatoryRouter.post(
       logTrace("observatory.query", { error: truncate(message, 200) }, "warn");
       if (res.headersSent) {
         if (!res.destroyed) {
-          res.write(`data: ${JSON.stringify({ type: "error", error: message })}\n\n`);
+          writeSseData(res, { type: "error", error: message });
           res.end();
         }
       } else {
@@ -471,7 +453,7 @@ observatoryRouter.post("/api/observatory/query/rerun", async (req: Request, res:
     req.get("accept")?.includes("text/event-stream");
   const send = (event: unknown) => {
     if (!res.destroyed && !res.writableEnded) {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      writeSseData(res, event);
     }
   };
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -523,7 +505,7 @@ observatoryRouter.post("/api/observatory/query/rerun", async (req: Request, res:
     const message = error instanceof Error ? error.message : String(error);
     if (res.headersSent) {
       if (!res.destroyed) {
-        res.write(`data: ${JSON.stringify({ type: "error", error: message })}\n\n`);
+        writeSseData(res, { type: "error", error: message });
         res.end();
       }
     } else {

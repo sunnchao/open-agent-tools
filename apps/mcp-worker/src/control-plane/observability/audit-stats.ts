@@ -1,4 +1,5 @@
 import type { AuditEventSummary } from "../audit-repository.js";
+import { roundTwoDecimals as round } from "./round.js";
 
 /** 单个 action 的聚合统计。 */
 export interface AuditActionStat {
@@ -48,10 +49,6 @@ export function percentile(values: number[], p: number): number {
   if (lower === upper) return sorted[lower]!;
   const weight = rank - lower;
   return sorted[lower]! * (1 - weight) + sorted[upper]! * weight;
-}
-
-function round(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 /** 汇总审计事件为看板指标：成功率、时延分位、Top action、最近失败。 */
@@ -111,7 +108,8 @@ export function summarizeAuditEvents(
     succeeded: successCount,
     failed: failed.length,
     failureRate: total === 0 ? 0 : round(failed.length / total),
-    avgDurationMs: total === 0 ? 0 : round(durations.reduce((sum, value) => sum + value, 0) / total),
+    avgDurationMs:
+      total === 0 ? 0 : round(durations.reduce((sum, value) => sum + value, 0) / total),
     p95DurationMs: round(percentile(durations, 0.95)),
     maxDurationMs: durations.length === 0 ? 0 : Math.max(...durations),
     topActions,

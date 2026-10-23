@@ -5,6 +5,18 @@ packages:
   - "!packages/function-tools"
   - "runtimes/*/*"
 
+allowBuilds:
+  "@google/genai": false
+  cpu-features: false
+  esbuild: true
+  msgpackr-extract: false
+  protobufjs: false
+  ssh2: false
+
+overrides:
+  "@types/react": 19.2.17
+  "@types/react-dom": 19.2.3
+
 catalog:
   "@aws-sdk/client-s3": ^3.883.0
   "@aws-sdk/s3-request-presigner": ^3.883.0
@@ -33,4 +45,4 @@ catalog:
   pg: ^8.16.3
   zod: ^4.4.3
 patchedDependencies:
-  '@expo/cli@0.24.24': patches/@expo__cli@0.24.24.patch
+  "@expo/cli@0.24.24": patches/@expo__cli@0.24.24.patch

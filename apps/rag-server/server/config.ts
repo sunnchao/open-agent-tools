@@ -84,6 +84,11 @@ export function readServerConfig(env: NodeJS.ProcessEnv = process.env) {
     retentionDays: Number(env.RAG_QUERY_RETENTION_DAYS) || 90,
     graphRetrieval: env.RAG_GRAPH_RETRIEVAL !== "false",
     autoExtract: env.RAG_AUTO_EXTRACT !== "false",
+    // 抽取是 LLM 往返，串行会让大文档建图极慢；并发只作用于抽取调用，写库仍串行。
+    // 单块抽取 30s+ / 4000+ 输出 token，并发过高会撞上游 QPM 限流（实测 429 达 48%）。
+    graphExtractConcurrency: Number(env.RAG_GRAPH_EXTRACT_CONCURRENCY) || 2,
+    // Gleaning 补充轮数（含首轮），1 表示关闭。提升召回但线性增加 token 成本。
+    graphGleaningRounds: Number(env.RAG_GRAPH_GLEANING_ROUNDS) || 1,
     chunk,
     ocr: {
       decision: normalizeOcrDecision({

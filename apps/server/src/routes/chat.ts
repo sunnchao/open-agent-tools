@@ -8,8 +8,9 @@ import { normalizeResourceBindings, type McpToolBinding } from "../resources.js"
 import { resolveWorkspace } from "../workspace.js";
 import { logDebugDuration, logTrace, truncate } from "../trace.js";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
+import { writeSseData } from "../sse.js";
 import { ChatTurnError, streamChatTurn, usageSnapshot, type ChatTurnUsage } from "./chatCore.js";
-import { IM_ACTOR_HEADER, IM_CHANNEL_HEADER, IM_CHAT_TYPE_HEADER } from "../im/types.js";
+import { IM_ACTOR_HEADER, IM_CHANNEL_HEADER } from "../im/types.js";
 
 export const chatRouter: ReturnType<typeof Router> = Router();
 
@@ -154,7 +155,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
   });
 
   const send = (data: Record<string, unknown>) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    writeSseData(res, data);
   };
 
   if (assistantMessageId) {

@@ -28,6 +28,24 @@ describe("workflow api", () => {
       removeItem: async () => {},
     });
   });
+  it("uses current server URL, token and workspace after settings change", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ workflows: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    setAuthMemory({ agentUrl: "http://first:3000", token: "token-1", workspaceId: "ws-1" });
+    await fetchWorkflows();
+    setAuthMemory({ agentUrl: "http://second:3000", token: "token-2", workspaceId: "ws-2" });
+    await fetchWorkflows();
+    for (const [index, host, token, workspace] of [
+      [0, "first", "token-1", "ws-1"],
+      [1, "second", "token-2", "ws-2"],
+    ] as const) {
+      expect(fetchMock.mock.calls[index]?.[0]).toBe(`http://${host}:3000/api/workflows`);
+      const headers = new Headers(fetchMock.mock.calls[index]?.[1]?.headers);
+      expect(headers.get("authorization")).toBe(`Bearer ${token}`);
+      expect(headers.get("x-workspace-id")).toBe(workspace);
+    }
+  });
+
   it("covers CRUD/publish/runs/test", async () => {
     setAuthMemory({ agentUrl: "http://a:3000" });
     const fetchMock = vi

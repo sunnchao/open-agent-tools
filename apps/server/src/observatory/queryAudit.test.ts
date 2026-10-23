@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, before, test } from "node:test";
 import { closeDb } from "../db.js";
+import { listAuditExportRows } from "../export/auditExport.js";
+import type { QueryAuditFilters } from "./queryAudit.js";
 import {
   createQueryAudit,
   getQueryAudit,
@@ -130,4 +132,41 @@ test("resolveOperatorActor ignores spoofed explicit operators when disabled", ()
     ),
     "operator:deployment",
   );
+});
+
+test("审计列表和导出共用筛选，保持 workspace、SQL 来源和搜索结果一致", () => {
+  for (const workspace of ["workspace-a", "workspace-b"]) {
+    const audit = createQueryAudit("source-parity", "筛选一致性", [], undefined, {
+      actor: "operator:reviewer",
+      entrypoint: "observatory",
+      source: "rerun",
+      workspace,
+      parentAuditId: "parent-parity",
+      sqlSource: "edited",
+    });
+    audit.patch({ generatedSql: "SELECT parity_column", executedSql: "SELECT parity_column" });
+    audit.finish("succeeded");
+  }
+  const filters: QueryAuditFilters[] = [
+    { workspace: "workspace-a" },
+    { sourceId: "source-parity" },
+    { actor: "operator:reviewer" },
+    { entrypoint: "observatory", status: "succeeded" },
+    { source: "rerun", sqlSource: "edited" },
+    { parentAuditId: "parent-parity" },
+    { search: "parity_column" },
+    { search: "一致性", workspace: "workspace-b" },
+    { from: "2000-01-01", to: "2999-12-31" },
+    { workspace: "no-access" },
+  ];
+  for (const filter of filters) {
+    const list = listQueryAudits({ ...filter, limit: 100 });
+    const exported = listAuditExportRows(filter, 100);
+    assert.equal(exported.truncated, false);
+    assert.equal(list.total, exported.rows.length);
+    assert.deepEqual(
+      list.records.map((record) => record.id),
+      exported.rows.map((row) => row.id),
+    );
+  }
 });

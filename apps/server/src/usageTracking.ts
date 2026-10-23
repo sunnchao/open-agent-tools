@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { nonNegativeInteger } from "@open-agent-tools/api-contracts/values";
 import { recordUsageEvent, type UsageSource } from "./usage.js";
 
 export interface UsageSnapshot {
@@ -126,10 +127,8 @@ export async function trackLlmRequest<
   const startedAt = Date.now();
   try {
     const result = await run();
-    const finite = (value: number | undefined) =>
-      Number.isFinite(value) && (value ?? 0) > 0 ? Math.floor(value!) : 0;
-    const inputTokens = finite(result.tokenUsage?.inputTokens);
-    const outputTokens = finite(result.tokenUsage?.outputTokens);
+    const inputTokens = nonNegativeInteger(result.tokenUsage?.inputTokens);
+    const outputTokens = nonNegativeInteger(result.tokenUsage?.outputTokens);
     entry.inputTokens += inputTokens;
     entry.outputTokens += outputTokens;
     for (let scope: UsageContext | undefined = context; scope; scope = scope.parent) {

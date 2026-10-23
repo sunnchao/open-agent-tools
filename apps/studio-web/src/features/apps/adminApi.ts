@@ -1,4 +1,6 @@
 import { studioFetch } from "../../lib/client.js";
+import { parseHttpError as parseError } from "@open-agent-tools/studio-client";
+export { employeeEntryPath } from "@open-agent-tools/studio-client";
 
 export interface PublishedAppResources {
   rag?: { sources?: string[]; topK?: number };
@@ -34,11 +36,6 @@ export interface PublishedAppIdentity {
   audience: string;
   identityMode: "optional" | "required" | "required_for_groups";
   assertionHeader: "X-Viewer-Assertion";
-}
-
-async function parseError(response: Response): Promise<string> {
-  const body = (await response.json().catch(() => ({}))) as { error?: string };
-  return body.error ?? `HTTP ${response.status}`;
 }
 
 export async function fetchPublishedApps(): Promise<PublishedAppRecord[]> {
@@ -122,10 +119,4 @@ export async function deletePublishedApp(id: string): Promise<void> {
     method: "DELETE",
   });
   if (!response.ok && response.status !== 404) throw new Error(await parseError(response));
-}
-
-/** 员工入口链接（相对当前站点）。口令模式下附带 access_token。 */
-export function employeeEntryPath(slug: string, accessToken?: string | null): string {
-  const base = `#/app/${slug}`;
-  return accessToken ? `${base}?access_token=${encodeURIComponent(accessToken)}` : base;
 }

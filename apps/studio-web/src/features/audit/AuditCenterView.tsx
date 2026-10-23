@@ -34,7 +34,7 @@ import {
   type AuditDetailSelection,
 } from "./api.js";
 import type { AuditEventSummary } from "../mcp/api.js";
-import { detailColumn } from "./auditPresentation.js";
+import { detailColumn, durationColumn, excerptColumn } from "./auditPresentation.js";
 
 const PAGE_SIZE = 20;
 
@@ -245,17 +245,7 @@ function QueryAuditSection({
         </Typography.Text>
       ),
     },
-    {
-      title: "问题",
-      dataIndex: "question",
-      key: "question",
-      ellipsis: true,
-      render: (value: string) => (
-        <Typography.Text style={{ fontSize: 12 }} ellipsis title={value}>
-          {value || "—"}
-        </Typography.Text>
-      ),
-    },
+    excerptColumn<QueryAuditSummary>({ title: "问题", dataIndex: "question" }),
     {
       title: "数据源",
       key: "source",
@@ -275,15 +265,7 @@ function QueryAuditSection({
         <Tag color={auditStatusTag(value)}>{AUDIT_STATUS_LABELS[value]}</Tag>
       ),
     },
-    {
-      title: "耗时",
-      dataIndex: "durationMs",
-      key: "durationMs",
-      width: 90,
-      render: (value: number) => (
-        <Typography.Text style={{ fontSize: 12 }}>{formatDuration(value)}</Typography.Text>
-      ),
-    },
+    durationColumn<QueryAuditSummary>(formatDuration),
     detailColumn(viewDetails),
   ];
 

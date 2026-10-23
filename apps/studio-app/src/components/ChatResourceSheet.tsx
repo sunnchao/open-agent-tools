@@ -3,11 +3,8 @@ import { View } from "react-native";
 import { Divider, Text, useTheme } from "react-native-paper";
 import type { ChatResourceBinding, McpToolBinding } from "../lib/types";
 import type { ResourceCatalog } from "../api/misc";
+import { sameMcpToolBinding as sameTool } from "@open-agent-tools/api-contracts/chat";
 import { Btn, CheckRow, ErrorText, Loading, Sheet, Stepper, Sub } from "./ui";
-
-function sameTool(left: McpToolBinding, right: McpToolBinding): boolean {
-  return left.serviceSlug === right.serviceSlug && left.toolName === right.toolName;
-}
 
 export function ChatResourceSheet(props: {
   visible: boolean;

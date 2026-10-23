@@ -16,16 +16,12 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@langchain/anthropic": "^1.5.2",
-    "@langchain/community": "catalog:",
-    "@langchain/core": "catalog:",
-    "@langchain/langgraph": "^1.4.8",
-    "@langchain/openai": "catalog:",
-    "@langchain/textsplitters": "catalog:",
     "@langfuse/core": "catalog:",
     "@larksuiteoapi/node-sdk": "^1.72.0",
     "@modelcontextprotocol/sdk": "catalog:",
+    "@open-agent-tools/api-contracts": "workspace:*",
     "@open-agent-tools/database": "workspace:*",
+    "@open-agent-tools/mcp-auth": "workspace:*",
     "@open-agent-tools/observability": "workspace:*",
     "@open-agent-tools/query-resolver": "workspace:*",
     "@open-agent-tools/rag": "workspace:*",
@@ -36,9 +32,7 @@
     "dotenv": "catalog:",
     "express": "catalog:",
     "jose": "^6.1.0",
-    "langchain": "^1.5.4",
     "openai": "^6.48.0",
-    "pdf-parse": "^1.1.4",
     "zod": "catalog:"
   },
   "devDependencies": {

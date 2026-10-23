@@ -1,16 +1,91 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reciprocalRankFusion, formatChunks } from "../src/retriever.js";
+import { reciprocalRankFusion, formatChunks, retrieve } from "../src/retriever.js";
 import { escapeFtsQuery } from "../src/utils.js";
-import type { ScoredChunk } from "../src/types.js";
+import type { ScoredChunk, VectorStore } from "../src/types.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Rag } from "../src/index.js";
+import { SqliteVectorStore } from "../src/store.js";
+
+test("独立检索通道并行启动，完成顺序不改变融合结果", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started: string[] = [];
+  const channel = async (name: string) => {
+    started.push(name);
+    if (started.length === 3) release();
+    await gate;
+    return [hit("shared", 1)];
+  };
+  const store: VectorStore = new SqliteVectorStore({ dbPath: ":memory:" });
+  try {
+    // 使用现有 SQLite store 提供其余能力，仅替换两个召回通道。
+    store.vectorSearch = () => channel("vector");
+    store.keywordSearch = () => channel("keyword");
+    const result = await retrieve(
+      store,
+      {
+        embedDocuments: async () => [[1, 0]],
+        embedQuery: async () => [1, 0],
+      },
+      "query",
+      {
+        graph: {
+          retrieve: async () => {
+            await channel("graph");
+            return { seeds: [], subgraph: null };
+          },
+        },
+      },
+    );
+    assert.deepEqual(new Set(started), new Set(["vector", "keyword", "graph"]));
+    assert.deepEqual(result.chunks[0]?.debug?.channels, ["vector", "keyword"]);
+    assert.equal(result.chunks[0]?.score, 2 / 61);
+  } finally {
+    await store.close?.();
+  }
+});
 
 function hit(id: string, score: number): ScoredChunk {
   return { id, source: "a.txt", chunkIndex: 0, content: id, score };
 }
+
+test("并行通道全部失败时保留向量优先的错误语义，结束后不留下后台读取", async () => {
+  const store: VectorStore = new SqliteVectorStore({ dbPath: ":memory:" });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let vectorFinished = false;
+  store.keywordSearch = () => {
+    release();
+    throw new Error("keyword failed");
+  };
+  try {
+    await assert.rejects(
+      retrieve(
+        store,
+        {
+          embedDocuments: async () => {
+            await gate;
+            vectorFinished = true;
+            throw new Error("vector failed");
+          },
+          embedQuery: async () => [],
+        },
+        "query",
+      ),
+      /vector failed/,
+    );
+    assert.equal(vectorFinished, true);
+  } finally {
+    await store.close?.();
+  }
+});
 
 test("RRF：只看排名，融合两个列表", () => {
   const listA = [hit("d1", 9), hit("d2", 8), hit("d3", 7)];

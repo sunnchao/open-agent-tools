@@ -4,7 +4,12 @@ import type { ProviderWithKey } from "../store.js";
 import { createLlmClient } from "./index.js";
 import { OpenAIChatClient } from "./openai-chat.js";
 import { OpenAIResponseClient, toResponseInput } from "./openai-response.js";
-import { AnthropicMessageClient, messagesEndpoint, toAnthropicPayload } from "./anthropic-message.js";
+import {
+  AnthropicMessageClient,
+  messagesEndpoint,
+  toAnthropicPayload,
+} from "./anthropic-message.js";
+import { finalizeToolCalls } from "./openai-tool-calls.js";
 import type { LlmMessage } from "./types.js";
 
 function makeProvider(overrides: Partial<ProviderWithKey>): ProviderWithKey {
@@ -31,8 +36,31 @@ describe("createLlmClient", () => {
       createLlmClient(makeProvider({ format: "openai-response" })) instanceof OpenAIResponseClient,
     );
     assert.ok(
-      createLlmClient(makeProvider({ format: "anthropic-message" })) instanceof AnthropicMessageClient,
+      createLlmClient(makeProvider({ format: "anthropic-message" })) instanceof
+        AnthropicMessageClient,
     );
+  });
+});
+
+describe("streamed OpenAI tool calls", () => {
+  it("sorts by index, supplies missing ids and omits unnamed partials", () => {
+    const calls = finalizeToolCalls(
+      new Map([
+        [2, { id: "c2", name: "second", arguments: "{}" }],
+        [0, { id: "c0", name: "first", arguments: '{"value":1}' }],
+        [1, { arguments: "{}" }],
+        [3, { name: "third", arguments: "{}" }],
+      ]),
+    );
+    assert.deepEqual(
+      calls.map(({ name, arguments: args }) => ({ name, arguments: args })),
+      [
+        { name: "first", arguments: '{"value":1}' },
+        { name: "second", arguments: "{}" },
+        { name: "third", arguments: "{}" },
+      ],
+    );
+    assert.match(calls[2]?.id ?? "", /^call_\d+$/);
   });
 });
 
@@ -101,7 +129,10 @@ describe("Anthropic Messages payload mapping", () => {
   });
 
   it("normalizes the baseUrl to the /v1/messages endpoint", () => {
-    assert.equal(messagesEndpoint("https://api.anthropic.com"), "https://api.anthropic.com/v1/messages");
+    assert.equal(
+      messagesEndpoint("https://api.anthropic.com"),
+      "https://api.anthropic.com/v1/messages",
+    );
     assert.equal(
       messagesEndpoint("https://api.anthropic.com/v1"),
       "https://api.anthropic.com/v1/messages",
@@ -115,15 +146,11 @@ describe("Anthropic Messages payload mapping", () => {
   it("maps tools to input_schema", () => {
     const { body } = toAnthropicPayload(
       [{ role: "user", content: "hi" }],
-      [
-        { name: "f", description: "desc", parameters: { type: "object" } },
-      ],
+      [{ name: "f", description: "desc", parameters: { type: "object" } }],
       "claude",
       false,
     );
     const { tools } = body as { tools: Array<{ name: string; input_schema: unknown }> };
-    assert.deepEqual(tools, [
-      { name: "f", description: "desc", input_schema: { type: "object" } },
-    ]);
+    assert.deepEqual(tools, [{ name: "f", description: "desc", input_schema: { type: "object" } }]);
   });
 });

@@ -1,3 +1,5 @@
+import { safeDecodeUriComponent } from "@open-agent-tools/api-contracts/values";
+
 /**
  * Studio 使用 hash 路由（`#/chat`、`#/workflow`）。
  *
@@ -15,15 +17,6 @@ export interface StudioRoute {
   segments: string[];
 }
 
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    // 非法百分号编码时保留原文，避免整条路由解析失败。
-    return value;
-  }
-}
-
 /**
  * 解析 `#/chat/<sessionId>` 形式的 hash 路由。
  * 兼容历史上不带斜杠的写法（`#chat`）。
@@ -34,7 +27,7 @@ export function parseHashRoute(hash: string): StudioRoute {
   const [workspace = "", ...segments] = parts;
   return {
     workspace: workspace.toLowerCase(),
-    segments: segments.map(safeDecode),
+    segments: segments.map(safeDecodeUriComponent),
   };
 }
 

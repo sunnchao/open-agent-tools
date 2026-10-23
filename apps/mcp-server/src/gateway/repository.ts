@@ -4,6 +4,7 @@ import type {
   PromptDefinition,
   RemoteServiceConfig,
 } from "@open-agent-tools/mcp-contracts";
+import { retryAfterSeconds } from "./retry.js";
 
 export type McpScope = "mcp:connect" | "tools:list" | "tools:call" | "prompts:list" | "prompts:get";
 
@@ -206,7 +207,7 @@ export class InMemoryGatewayRepository implements GatewayRepository {
         const oldest = recent[0];
         return {
           reserved: false,
-          retryAfterSeconds: retryAfter(oldest ? Date.parse(oldest.now) + 1_000 : now, now),
+          retryAfterSeconds: retryAfterSeconds(oldest ? Date.parse(oldest.now) + 1_000 : now, now),
         };
       }
     }
@@ -224,7 +225,7 @@ export class InMemoryGatewayRepository implements GatewayRepository {
           Date.parse(event.now) < nextDay,
       ).length;
       if (used >= dailyLimit) {
-        return { reserved: false, retryAfterSeconds: retryAfter(nextDay, now) };
+        return { reserved: false, retryAfterSeconds: retryAfterSeconds(nextDay, now) };
       }
     }
 
@@ -251,8 +252,4 @@ function quotaKey(clientId: string, serviceId: string | null): string {
 function utcDayStart(value: number): number {
   const date = new Date(value);
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-}
-
-function retryAfter(at: number, now: number): number {
-  return Math.max(1, Math.ceil((at - now) / 1_000));
 }

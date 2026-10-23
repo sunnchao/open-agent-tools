@@ -5,6 +5,43 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("chat 和 workflow 的终止事件只回调一次，并取消、释放 CRLF 响应流", async () => {
+  for (const workflow of [false, true]) {
+    let cancelled = false;
+    const terminal = workflow ? { type: "run_done", outputs: {}, nodeOutputs: {} } : { done: true };
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const event = `data: ${JSON.stringify(terminal)}\r\n\r\n`;
+        controller.enqueue(new TextEncoder().encode(event + event));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(stream)),
+    );
+    const onDone = vi.fn();
+    const onError = vi.fn();
+    if (workflow) {
+      streamWorkflow(
+        { nodes: [], edges: [], input: {} },
+        { onNodeStart: () => {}, onNodeResult: () => {}, onDone, onError },
+      );
+    } else {
+      streamChat([], undefined, { onDelta: () => {}, onDone, onError });
+    }
+    await vi.waitFor(() => {
+      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(stream.locked).toBe(false);
+    });
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(cancelled).toBe(true);
+  }
+});
+
 describe("parseSseBuffer", () => {
   it("parses a single complete SSE event", () => {
     const { events, rest } = parseSseBuffer('data: {"delta":"hi"}\n\n');

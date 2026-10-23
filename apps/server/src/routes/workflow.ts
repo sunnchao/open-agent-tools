@@ -10,6 +10,7 @@ import {
   type WorkflowRunRequest,
 } from "../workflow/executor.js";
 import { logTrace } from "../trace.js";
+import { writeSseData } from "../sse.js";
 import { workflowRedactor } from "../workflow/redaction.js";
 import {
   getWorkflow,
@@ -108,7 +109,7 @@ workflowRouter.post("/api/workflow/run", async (req: Request, res: Response) => 
   });
   const send = (event: WorkflowEvent) => {
     if (res.writableEnded || res.destroyed) return;
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    writeSseData(res, event);
   };
   const controller = new AbortController();
   let finished = false;

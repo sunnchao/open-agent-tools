@@ -1,0 +1,23 @@
+{
+  "name": "@open-agent-tools/server-examples",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "langchain": "tsx langchain/index.ts",
+    "langgraph": "tsx langgraph/index.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@langchain/community": "catalog:",
+    "@langchain/core": "catalog:",
+    "@langchain/langgraph": "^1.4.8",
+    "@langchain/openai": "catalog:",
+    "@langchain/textsplitters": "catalog:",
+    "dotenv": "catalog:",
+    "pdf-parse": "^1.1.4",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}

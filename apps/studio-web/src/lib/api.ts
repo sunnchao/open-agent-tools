@@ -9,6 +9,8 @@ import type {
 } from "../types.js";
 import type { ConditionWarning } from "@open-agent-tools/workflow-contracts";
 import { studioFetch } from "./client.js";
+import { consumeSse, parseHttpError as parseError } from "@open-agent-tools/studio-client";
+export { parseSseBuffer } from "@open-agent-tools/studio-client";
 
 interface StreamCallbacks {
   onDelta: (delta: string) => void;
@@ -30,11 +32,6 @@ interface StreamCallbacks {
     ui?: UiBlock;
     error?: string;
   }) => void;
-}
-
-async function parseError(res: Response): Promise<string> {
-  const body = (await res.json().catch(() => ({}))) as { error?: string };
-  return body.error ?? `HTTP ${res.status}`;
 }
 
 export async function fetchSessions(): Promise<Session[]> {
@@ -81,40 +78,6 @@ export async function deleteMessageApi(id: string): Promise<void> {
 }
 
 /**
- * 把 SSE 缓冲按事件边界（`\n\n`）切分，返回解析出的事件对象与剩余的（不完整的）缓冲。
- * 每个事件可能包含多行字段（如 `event:` + `data:`），这里只提取 `data:` 字段并解析 JSON。
- * 提取为纯函数以便单元测试。
- */
-export function parseSseBuffer(buffer: string): {
-  events: Array<Record<string, unknown>>;
-  rest: string;
-} {
-  const rawEvents = buffer.split("\n\n");
-  const rest = rawEvents.pop() ?? "";
-  const events: Array<Record<string, unknown>> = [];
-
-  for (const event of rawEvents) {
-    let dataValue = "";
-    let hasData = false;
-    for (const line of event.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const value = trimmed.slice("data:".length).replace(/^ /, "");
-      dataValue += (hasData ? "\n" : "") + value;
-      hasData = true;
-    }
-    if (!hasData) continue;
-    try {
-      events.push(JSON.parse(dataValue) as Record<string, unknown>);
-    } catch {
-      // 跨 chunk 的半包 JSON —— 忽略，等待后续拼齐。
-    }
-  }
-
-  return { events, rest };
-}
-
-/**
  * POST 到 /api/chat 并解析 SSE 流。
  * 返回 AbortController 以便调用方取消。
  */
@@ -153,61 +116,51 @@ export function streamChat(
         return;
       }
 
-      const reader = res.body?.getReader();
-      if (!reader) {
+      if (!res.body?.getReader) {
         callbacks.onError("No response body");
         return;
       }
-
-      const decoder = new TextDecoder();
-      let buffer = "";
       let assistantMessageId: string | undefined;
       let usage: MessageUsage | undefined;
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const { events, rest } = parseSseBuffer(buffer);
-        buffer = rest;
-
-        for (const data of events) {
-          if (typeof data.assistantMessageId === "string") {
-            assistantMessageId = data.assistantMessageId;
-            callbacks.onAssistantMessageId?.(assistantMessageId);
-          }
-          if (data.tool_call) {
-            callbacks.onToolCall?.(data.tool_call as ToolCall);
-          }
-          if (Array.isArray(data.rag_citations)) {
-            callbacks.onRagCitations?.(data.rag_citations as RagCitation[]);
-          }
-          // 中途的 usage 事件即时回调；done 携带的终局用量只通过 onDone 给出，避免重复。
-          if (data.usage && typeof data.usage === "object" && !data.done) {
-            usage = data.usage as MessageUsage;
-            callbacks.onUsage?.(usage);
-          }
-          if (data.tool_result) {
-            callbacks.onToolResult?.(
-              data.tool_result as Parameters<NonNullable<StreamCallbacks["onToolResult"]>>[0],
-            );
-          }
-          if (data.error) {
-            callbacks.onError(data.error as string);
-            return;
-          }
-          if (data.done) {
-            const finalUsage =
-              data.usage && typeof data.usage === "object" ? (data.usage as MessageUsage) : usage;
-            callbacks.onDone({ assistantMessageId, ...(finalUsage ? { usage: finalUsage } : {}) });
-            return;
-          }
-          if (data.delta) {
-            callbacks.onDelta(data.delta as string);
-          }
+      let completed = false;
+      await consumeSse(res, (data) => {
+        if (typeof data.assistantMessageId === "string") {
+          assistantMessageId = data.assistantMessageId;
+          callbacks.onAssistantMessageId?.(assistantMessageId);
         }
-      }
+        if (data.tool_call) {
+          callbacks.onToolCall?.(data.tool_call as ToolCall);
+        }
+        if (Array.isArray(data.rag_citations)) {
+          callbacks.onRagCitations?.(data.rag_citations as RagCitation[]);
+        }
+        // 中途的 usage 事件即时回调；done 携带的终局用量只通过 onDone 给出，避免重复。
+        if (data.usage && typeof data.usage === "object" && !data.done) {
+          usage = data.usage as MessageUsage;
+          callbacks.onUsage?.(usage);
+        }
+        if (data.tool_result) {
+          callbacks.onToolResult?.(
+            data.tool_result as Parameters<NonNullable<StreamCallbacks["onToolResult"]>>[0],
+          );
+        }
+        if (data.error) {
+          completed = true;
+          callbacks.onError(data.error as string);
+          return true;
+        }
+        if (data.done) {
+          const finalUsage =
+            data.usage && typeof data.usage === "object" ? (data.usage as MessageUsage) : usage;
+          completed = true;
+          callbacks.onDone({ assistantMessageId, ...(finalUsage ? { usage: finalUsage } : {}) });
+          return true;
+        }
+        if (data.delta) {
+          callbacks.onDelta(data.delta as string);
+        }
+      });
+      if (completed) return;
 
       // 流式连接正常关闭但未收到 done 事件时，兜底结束本次对话，
       // 避免前端一直停留在 loading 状态。
@@ -337,83 +290,77 @@ export function streamWorkflow(
         callbacks.onError(await parseError(response));
         return;
       }
-      const reader = response.body?.getReader();
-      if (!reader) {
+      if (!response.body?.getReader) {
         callbacks.onError("No response body");
         return;
       }
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parsed = parseSseBuffer(buffer);
-        buffer = parsed.rest;
-        for (const event of parsed.events) {
-          if (event.type === "node_start" && typeof event.nodeId === "string")
-            callbacks.onNodeStart(
-              event.nodeId,
-              typeof event.label === "string" ? event.label : undefined,
-              typeof event.kind === "string" ? event.kind : undefined,
-              Array.isArray(event.incomingEdgeIds)
-                ? event.incomingEdgeIds.filter((id): id is string => typeof id === "string")
-                : undefined,
-            );
-          if (
-            (event.type === "node_result" || event.type === "node_cached") &&
-            typeof event.nodeId === "string" &&
-            (event.status === "success" || event.status === "error")
-          )
-            callbacks.onNodeResult(event.nodeId, event.status, {
-              inputs: event.inputs as Record<string, unknown> | undefined,
-              outputs: event.outputs as Record<string, unknown> | undefined,
-              result: event.result,
-              prompt: typeof event.prompt === "string" ? event.prompt : undefined,
-              systemPrompt: typeof event.systemPrompt === "string" ? event.systemPrompt : undefined,
-              error: typeof event.error === "string" ? event.error : undefined,
-              metadata: (() => {
-                const metadata =
-                  event.metadata && typeof event.metadata === "object"
-                    ? (event.metadata as NonNullable<WorkflowNodeRunMeta["metadata"]>)
-                    : ({
-                        durationMs: 0,
-                        tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-                      } satisfies NonNullable<WorkflowNodeRunMeta["metadata"]>);
-                return {
-                  durationMs: metadata.durationMs ?? 0,
-                  tokenUsage: metadata.tokenUsage,
-                  ...(metadata.attempts === undefined ? {} : { attempts: metadata.attempts }),
-                  ...(metadata.cached === undefined ? {} : { cached: metadata.cached }),
-                  ...(metadata.selectedBranchId
-                    ? { selectedBranchId: metadata.selectedBranchId }
-                    : {}),
-                  ...(metadata.selectedBranchLabel
-                    ? { selectedBranchLabel: metadata.selectedBranchLabel }
-                    : {}),
-                  ...(metadata.warnings?.length ? { warnings: metadata.warnings } : {}),
-                  ...(Array.isArray(event.incomingEdgeIds)
-                    ? {
-                        incomingEdgeIds: event.incomingEdgeIds.filter(
-                          (id): id is string => typeof id === "string",
-                        ),
-                      }
-                    : {}),
-                };
-              })(),
-            });
-          if (event.type === "run_done")
-            callbacks.onDone(
-              (event.outputs ?? {}) as Record<string, unknown>,
-              (event.nodeOutputs ?? {}) as Record<string, Record<string, unknown>>,
-            );
-          if (event.type === "run_error")
-            callbacks.onError(
-              typeof event.error === "string" ? event.error : "Workflow execution failed",
-              typeof event.nodeId === "string" ? event.nodeId : undefined,
-            );
+      await consumeSse(response, (event) => {
+        if (event.type === "node_start" && typeof event.nodeId === "string")
+          callbacks.onNodeStart(
+            event.nodeId,
+            typeof event.label === "string" ? event.label : undefined,
+            typeof event.kind === "string" ? event.kind : undefined,
+            Array.isArray(event.incomingEdgeIds)
+              ? event.incomingEdgeIds.filter((id): id is string => typeof id === "string")
+              : undefined,
+          );
+        if (
+          (event.type === "node_result" || event.type === "node_cached") &&
+          typeof event.nodeId === "string" &&
+          (event.status === "success" || event.status === "error")
+        )
+          callbacks.onNodeResult(event.nodeId, event.status, {
+            inputs: event.inputs as Record<string, unknown> | undefined,
+            outputs: event.outputs as Record<string, unknown> | undefined,
+            result: event.result,
+            prompt: typeof event.prompt === "string" ? event.prompt : undefined,
+            systemPrompt: typeof event.systemPrompt === "string" ? event.systemPrompt : undefined,
+            error: typeof event.error === "string" ? event.error : undefined,
+            metadata: (() => {
+              const metadata =
+                event.metadata && typeof event.metadata === "object"
+                  ? (event.metadata as NonNullable<WorkflowNodeRunMeta["metadata"]>)
+                  : ({
+                      durationMs: 0,
+                      tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                    } satisfies NonNullable<WorkflowNodeRunMeta["metadata"]>);
+              return {
+                durationMs: metadata.durationMs ?? 0,
+                tokenUsage: metadata.tokenUsage,
+                ...(metadata.attempts === undefined ? {} : { attempts: metadata.attempts }),
+                ...(metadata.cached === undefined ? {} : { cached: metadata.cached }),
+                ...(metadata.selectedBranchId
+                  ? { selectedBranchId: metadata.selectedBranchId }
+                  : {}),
+                ...(metadata.selectedBranchLabel
+                  ? { selectedBranchLabel: metadata.selectedBranchLabel }
+                  : {}),
+                ...(metadata.warnings?.length ? { warnings: metadata.warnings } : {}),
+                ...(Array.isArray(event.incomingEdgeIds)
+                  ? {
+                      incomingEdgeIds: event.incomingEdgeIds.filter(
+                        (id): id is string => typeof id === "string",
+                      ),
+                    }
+                  : {}),
+              };
+            })(),
+          });
+        if (event.type === "run_done") {
+          callbacks.onDone(
+            (event.outputs ?? {}) as Record<string, unknown>,
+            (event.nodeOutputs ?? {}) as Record<string, Record<string, unknown>>,
+          );
+          return true;
         }
-      }
+        if (event.type === "run_error") {
+          callbacks.onError(
+            typeof event.error === "string" ? event.error : "Workflow execution failed",
+            typeof event.nodeId === "string" ? event.nodeId : undefined,
+          );
+          return true;
+        }
+      });
     } catch (reason) {
       if ((reason as Error).name !== "AbortError")
         callbacks.onError(reason instanceof Error ? reason.message : "Workflow request failed");

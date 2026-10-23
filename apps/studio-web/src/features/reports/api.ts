@@ -4,18 +4,11 @@
  * 全部走 `/api/admin/reports`(服务端 manage 分组),浏览器只携带 Studio 部署 token。
  */
 import { studioFetch } from "../../lib/client.js";
+import type { ReportFrequency, ReportSchedule } from "@open-agent-tools/api-contracts/report";
+export type { ReportFrequency, ReportSchedule } from "@open-agent-tools/api-contracts/report";
 
-export type ReportFrequency = "daily" | "weekly";
 export type ReportRunStatus = "running" | "succeeded" | "failed" | "clarifying";
 export type ReportRunTrigger = "schedule" | "manual";
-
-export interface ReportSchedule {
-  frequency: ReportFrequency;
-  /** HH:MM(24 小时制)。 */
-  time: string;
-  /** weekly 必填:0=周日 .. 6=周六。 */
-  weekday?: number;
-}
 
 export interface ReportCheck {
   code: string;
@@ -117,10 +110,7 @@ export function createReport(draft: ReportDraft): Promise<{ report: ScheduledRep
   return request("/api/admin/reports", jsonInit("POST", draftPayload(draft)));
 }
 
-export function updateReport(
-  id: string,
-  draft: ReportDraft,
-): Promise<{ report: ScheduledReport }> {
+export function updateReport(id: string, draft: ReportDraft): Promise<{ report: ScheduledReport }> {
   return request(
     `/api/admin/reports/${encodeURIComponent(id)}`,
     jsonInit("PUT", draftPayload(draft)),
@@ -131,9 +121,7 @@ export function deleteReport(id: string): Promise<{ ok: true }> {
   return request(`/api/admin/reports/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
-export function runReportNow(
-  id: string,
-): Promise<{ run: ReportRun; report: ScheduledReport }> {
+export function runReportNow(id: string): Promise<{ run: ReportRun; report: ScheduledReport }> {
   return request(`/api/admin/reports/${encodeURIComponent(id)}/run`, { method: "POST" });
 }
 

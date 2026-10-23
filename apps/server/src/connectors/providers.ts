@@ -6,6 +6,7 @@ import {
   type HttpFetchLike,
 } from "./types.js";
 import { requireFetch } from "./httpConnector.js";
+import { asRecord, firstString } from "./shared.js";
 
 /**
  * 飞书 / 语雀 / Confluence 的桩实现。
@@ -28,18 +29,6 @@ async function readJson(
     throw new Error(`connector request failed (${response.status}) ${url}`);
   }
   return (await response.json()) as unknown;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function firstString(record: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
 }
 
 /** 拉起一个数组字段:兼容 `{ items }` / `{ data: { items } }` / `{ results }` 等常见包裹。 */

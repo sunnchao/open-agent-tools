@@ -1,4 +1,16 @@
-import { Alert, Button, Card, Empty, Flex, Form, Input, Select, Segmented, Spin, Typography } from "antd";
+import {
+  Alert,
+  Button,
+  Card,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  Select,
+  Segmented,
+  Spin,
+  Typography,
+} from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CodeOutlined,
@@ -16,6 +28,10 @@ import {
   type McpTool,
   type McpVersion,
 } from "./api.js";
+import {
+  errorMessage as messageFrom,
+  isRecord as isPlainObject,
+} from "@open-agent-tools/api-contracts/values";
 
 /**
  * 在线调试沙箱的纯函数层:参数解析/校验、JSON-RPC 请求体构造、Gateway 发送。
@@ -31,10 +47,6 @@ export interface JsonRpcToolCall {
 
 export type ParsedArguments =
   { ok: true; value: Record<string, unknown> } | { ok: false; error: string };
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** 解析参数 JSON;空输入视为空参数对象。 */
 export function parseArgumentsJson(text: string): ParsedArguments {
@@ -240,18 +252,10 @@ function defaultVersion(
 
 function CodeBlock({ value }: { value: string }) {
   return (
-    <Typography.Paragraph
-      code
-      copyable
-      style={{ whiteSpace: "pre-wrap", marginBottom: 12 }}
-    >
+    <Typography.Paragraph code copyable style={{ whiteSpace: "pre-wrap", marginBottom: 12 }}>
       {value}
     </Typography.Paragraph>
   );
-}
-
-function messageFrom(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason);
 }
 
 export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
@@ -407,11 +411,11 @@ export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
           <Form.Item label="服务" style={{ marginBottom: 0 }}>
             <Select
               aria-label="服务"
-            value={serviceId}
+              value={serviceId}
               onChange={(value) => {
                 setServiceId(value);
-              resetOnSelection();
-            }}
+                resetOnSelection();
+              }}
               placeholder="选择服务"
               allowClear
               options={services.map((candidate) => ({
@@ -424,12 +428,12 @@ export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
           <Form.Item label="版本" style={{ marginBottom: 0 }}>
             <Select
               aria-label="版本"
-            value={versionId}
+              value={versionId}
               onChange={(value) => {
                 setVersionId(value);
-              setAssetId("");
-              resetOnSelection();
-            }}
+                setAssetId("");
+                resetOnSelection();
+              }}
               placeholder="选择版本"
               allowClear
               options={[...versions]
@@ -519,9 +523,17 @@ export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
               />
             </Form.Item>
           ) : null}
-          {!parsed.ok ? <Alert type="error" showIcon message={parsed.error} style={{ marginBottom: 8 }} /> : null}
+          {!parsed.ok ? (
+            <Alert type="error" showIcon message={parsed.error} style={{ marginBottom: 8 }} />
+          ) : null}
           {validationErrors.map((message) => (
-            <Alert key={message} type="error" showIcon message={message} style={{ marginBottom: 8 }} />
+            <Alert
+              key={message}
+              type="error"
+              showIcon
+              message={message}
+              style={{ marginBottom: 8 }}
+            />
           ))}
           {parsed.ok && validationErrors.length === 0 && asset ? (
             <Alert type="success" showIcon message="参数校验通过。" style={{ marginBottom: 8 }} />
@@ -556,10 +568,7 @@ export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
                   placeholder="http://localhost:4100"
                 />
               </Form.Item>
-              <Form.Item
-                label="客户端 API Key · 仅保存在组件内存"
-                style={{ marginBottom: 0 }}
-              >
+              <Form.Item label="客户端 API Key · 仅保存在组件内存" style={{ marginBottom: 0 }}>
                 <Input.Password
                   value={apiKey}
                   autoComplete="off"
@@ -624,7 +633,9 @@ export function DebugSandbox({ services = [] }: { services?: McpService[] }) {
               title={`HTTP ${outcome.status} · ${outcome.durationMs}ms · ${outcome.ok && !callFailed(outcome) ? "执行成功" : "执行失败"}`}
               style={{ marginTop: 12 }}
             >
-              {outcome.error ? <Alert type="error" showIcon message={outcome.error} style={{ marginBottom: 8 }} /> : null}
+              {outcome.error ? (
+                <Alert type="error" showIcon message={outcome.error} style={{ marginBottom: 8 }} />
+              ) : null}
               <CodeBlock value={outcome.bodyText || "(空响应体)"} />
             </Card>
           ) : null}

@@ -6,6 +6,7 @@ import type {
   LlmStreamResult,
   LlmToolDefinition,
 } from "./types.js";
+import { finalizeToolCalls } from "./openai-tool-calls.js";
 
 const DEFAULT_MAX_TOKENS = 4096;
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -175,10 +176,7 @@ export class AnthropicMessageClient implements LlmClient {
 
   constructor(private readonly provider: ProviderWithKey) {}
 
-  private async request(
-    body: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<Response> {
+  private async request(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
     const response = await fetch(messagesEndpoint(this.provider.baseUrl), {
       method: "POST",
       headers: {
@@ -246,10 +244,7 @@ export class AnthropicMessageClient implements LlmClient {
       }
     }
 
-    const toolCalls = [...callsByIndex.entries()]
-      .sort(([left], [right]) => left - right)
-      .map(([, call]) => ({ ...call, id: call.id ?? `call_${Date.now()}` }))
-      .filter((call): call is { id: string; name: string; arguments: string } => Boolean(call.name));
+    const toolCalls = finalizeToolCalls(callsByIndex);
 
     return { content, toolCalls, tokenUsage: { inputTokens, outputTokens } };
   }

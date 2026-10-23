@@ -439,6 +439,7 @@ export class MemoryStore {
   readonly rolloverHour: number;
   private globalIndex: IndexHandle | null = null;
   private projectIndex: IndexHandle | null = null;
+  private entryCache = new Map<string, { signature: string; entry: MemoryEntry }>();
 
   constructor(options: MemoryStoreOptions = {}) {
     this.cwd = resolve(options.cwd ?? process.cwd());
@@ -463,6 +464,7 @@ export class MemoryStore {
     this.projectIndex?.db.close();
     this.globalIndex = null;
     this.projectIndex = null;
+    this.entryCache.clear();
   }
 
   write(input: MemoryWriteInput): MemoryMutationResult {
@@ -540,6 +542,7 @@ export class MemoryStore {
     if (!entry) return false;
     const handle = this.handleForScope(entry.meta.scope);
     if (existsSync(entry.meta.filePath)) rmSync(entry.meta.filePath);
+    this.entryCache.delete(entry.meta.filePath);
     handle.db
       .prepare("DELETE FROM memory_meta WHERE scope = ? AND workdir_hash = ? AND slug = ?")
       .run(entry.meta.scope, entry.meta.workdirHash, entry.meta.slug);
@@ -583,18 +586,8 @@ export class MemoryStore {
         [candidate, hash, normalized],
       )[0];
       if (!row) continue;
-      const meta = rowToMeta(row);
-      if (!existsSync(meta.filePath)) continue;
-      try {
-        const parsed = parseMemoryMarkdown(
-          meta.filePath,
-          readFileSync(meta.filePath, "utf8"),
-          meta.workdirHash,
-        );
-        return { meta: { ...parsed.meta, workdirHash: meta.workdirHash }, body: parsed.body };
-      } catch {
-        continue;
-      }
+      const entry = this.readEntry(rowToMeta(row));
+      if (entry) return entry;
     }
     return null;
   }
@@ -638,7 +631,7 @@ export class MemoryStore {
       limit: this.maxScopeEntries * 2,
       includeUnreviewed: options.includeUnreviewed ?? false,
     })) {
-      const entry = this.read(meta.slug, meta.scope);
+      const entry = this.readEntry(meta);
       if (!entry) continue;
       const headline = meta.headline.toLowerCase();
       const description = meta.description.toLowerCase();
@@ -792,6 +785,7 @@ export class MemoryStore {
       const rows = selectRows(handle, "scope = ? AND workdir_hash = ?", [target, hash]);
       for (const row of rows) {
         if (existsSync(row.filePath)) rmSync(row.filePath);
+        this.entryCache.delete(row.filePath);
         removed += 1;
       }
       const directory =
@@ -837,6 +831,7 @@ export class MemoryStore {
   }
 
   reindex(): void {
+    this.entryCache.clear();
     this.ensureIndexesOnly();
     const globalHandle = this.globalIndex as IndexHandle;
     const projectHandle = this.projectIndex as IndexHandle;
@@ -893,6 +888,33 @@ export class MemoryStore {
     return entry;
   }
 
+  private readEntry(meta: MemoryMeta): MemoryEntry | null {
+    try {
+      // ctime 和 inode 可识别保留 mtime 的同大小编辑及原子替换。
+      const stat = statSync(meta.filePath, { bigint: true });
+      const signature = `${meta.workdirHash}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+      const cached = this.entryCache.get(meta.filePath);
+      let entry = cached?.signature === signature ? cached.entry : undefined;
+      if (!entry) {
+        entry = parseMemoryMarkdown(
+          meta.filePath,
+          readFileSync(meta.filePath, "utf8"),
+          meta.workdirHash,
+        );
+      }
+      this.entryCache.delete(meta.filePath);
+      this.entryCache.set(meta.filePath, { signature, entry });
+      if (this.entryCache.size > Math.max(1, this.maxScopeEntries * 2)) {
+        this.entryCache.delete(this.entryCache.keys().next().value!);
+      }
+      // 与逐次解析文件一样，调用方获得独立对象。
+      return structuredClone(entry);
+    } catch {
+      this.entryCache.delete(meta.filePath);
+      return null;
+    }
+  }
+
   private allRelevantRows(): MetaRow[] {
     this.ensureOpen();
     return [
@@ -905,6 +927,7 @@ export class MemoryStore {
 
   private indexEntry(handle: IndexHandle, parsed: ParsedMemory): void {
     const { meta, body } = parsed;
+    this.entryCache.delete(meta.filePath);
     const stat = statSync(meta.filePath);
     handle.db
       .prepare(

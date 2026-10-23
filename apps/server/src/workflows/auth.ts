@@ -1,38 +1,12 @@
-import { randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { hashSecret, parseBearerToken, verifySecret } from "@open-agent-tools/mcp-auth/primitives";
 import type { Request } from "express";
 import { getWorkflowApiKey, insertWorkflowApiKey, touchWorkflowApiKey } from "./store.js";
 import type { WorkflowApiKeyRecord, WorkflowApiKeyView } from "./types.js";
 
 const KEY_ID_PATTERN = /^[0-9a-f-]{36}$/;
 const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const SCRYPT_COST = 16_384;
-const SCRYPT_BLOCK_SIZE = 8;
-const SCRYPT_PARALLELIZATION = 1;
-const SCRYPT_KEY_LENGTH = 32;
 const rateBuckets = new Map<string, number[]>();
-
-function deriveKey(secret: string, salt: Buffer): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    scrypt(
-      secret,
-      salt,
-      SCRYPT_KEY_LENGTH,
-      {
-        N: SCRYPT_COST,
-        r: SCRYPT_BLOCK_SIZE,
-        p: SCRYPT_PARALLELIZATION,
-        maxmem: 64 * 1024 * 1024,
-      },
-      (error, value) => (error ? reject(error) : resolve(value)),
-    );
-  });
-}
-
-function rawKeyFromRequest(req: Request): string | null {
-  const authorization = req.header("authorization") ?? "";
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || null;
-}
 
 function parseRawKey(rawKey: string): { keyId: string; secret: string } | null {
   const [prefix, keyId, secret, ...rest] = rawKey.split(".");
@@ -47,41 +21,6 @@ function parseRawKey(rawKey: string): { keyId: string; secret: string } | null {
     return null;
   }
   return { keyId, secret };
-}
-
-async function hashSecret(secret: string): Promise<string> {
-  const salt = randomBytes(16);
-  const derived = await deriveKey(secret, salt);
-  return [
-    "scrypt",
-    SCRYPT_COST,
-    SCRYPT_BLOCK_SIZE,
-    SCRYPT_PARALLELIZATION,
-    salt.toString("base64url"),
-    derived.toString("base64url"),
-  ].join("$");
-}
-
-async function verifySecret(secret: string, keyHash: string): Promise<boolean> {
-  const [algorithm, cost, blockSize, parallelization, encodedSalt, encodedHash] =
-    keyHash.split("$");
-  if (
-    algorithm !== "scrypt" ||
-    Number(cost) !== SCRYPT_COST ||
-    Number(blockSize) !== SCRYPT_BLOCK_SIZE ||
-    Number(parallelization) !== SCRYPT_PARALLELIZATION ||
-    !encodedSalt ||
-    !encodedHash
-  ) {
-    return false;
-  }
-  try {
-    const expected = Buffer.from(encodedHash, "base64url");
-    const actual = await deriveKey(secret, Buffer.from(encodedSalt, "base64url"));
-    return expected.length === actual.length && timingSafeEqual(expected, actual);
-  } catch {
-    return false;
-  }
 }
 
 export async function createWorkflowApiKey(input: {
@@ -118,12 +57,13 @@ export async function authorizeWorkflowRequest(
   req: Request,
   workflowId: string,
 ): Promise<WorkflowAuthorization> {
-  const rawKey = rawKeyFromRequest(req);
+  const rawKey = parseBearerToken(req.header("authorization"));
   if (!rawKey) return { ok: false, status: 401, error: "workflow API key is required" };
   const parsed = parseRawKey(rawKey);
   if (!parsed) return { ok: false, status: 401, error: "invalid workflow API key" };
   const key = getWorkflowApiKey(parsed.keyId);
-  if (!key || !(await verifySecret(parsed.secret, key.keyHash))) {
+  // Preserve the workflow verifier's historical handling of trailing hash fields.
+  if (!key || !(await verifySecret(parsed.secret, key.keyHash, { allowTrailingFields: true }))) {
     return { ok: false, status: 401, error: "invalid workflow API key" };
   }
   if (key.status !== "ACTIVE" || (key.expiresAt && Date.parse(key.expiresAt) <= Date.now())) {

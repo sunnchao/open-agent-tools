@@ -116,6 +116,20 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+let dir: string;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "dingtalk-audit-"));
+  process.env.SQLITE_PATH = join(dir, "test.sqlite");
+  closeDb();
+});
+
+afterEach(() => {
+  closeDb();
+  rmSync(dir, { recursive: true, force: true });
+  delete process.env.SQLITE_PATH;
+});
+
 describe("startDingTalkBot", () => {
   it("asks chat with bound RAG + SQL sources and replies via sessionWebhook", async () => {
     received = [];
@@ -335,20 +349,6 @@ describe("startDingTalkBot", () => {
 });
 
 describe("startDingTalkBot audit", () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "dingtalk-audit-"));
-    process.env.SQLITE_PATH = join(dir, "test.sqlite");
-    closeDb();
-  });
-
-  afterEach(() => {
-    closeDb();
-    rmSync(dir, { recursive: true, force: true });
-    delete process.env.SQLITE_PATH;
-  });
-
   it("records an audit row for a successful answer", async () => {
     received = [];
     const stream = makeFakeStream();

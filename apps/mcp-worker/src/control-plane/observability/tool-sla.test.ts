@@ -287,21 +287,47 @@ describe("tool SLA aggregation", () => {
     const management = new McpManagementService(new InMemoryMcpManagementRepository(), {
       createId: sequentialIds(),
     });
-    const audit = {
-      list: async () => [
-        { id: "kept", createdAt: FIXED_NOW.toISOString() },
-        { id: "gone", createdAt: FIXED_NOW.toISOString() },
-      ],
-      get: async (id: string) => {
-        if (id === "gone") throw new Error("Audit event not found: gone");
-        return gatewayEvent({ id: "kept" });
-      },
-    } as unknown as AuditService;
+    const repository = new InMemoryAuditRepository();
+    await repository.create(gatewayEvent({ id: "kept" }));
+    repository.list = async () => [
+      { ...gatewayEvent({ id: "kept" }) },
+      { ...gatewayEvent({ id: "gone" }) },
+    ];
+    // 批量详情中缺失 gone，仍应聚合其余事件。
+    const audit = new AuditService(repository);
+    let batchReads = 0;
+    const getMany = repository.getMany.bind(repository);
+    repository.getMany = async (ids) => {
+      batchReads++;
+      return getMany(ids);
+    };
+    repository.get = async () => {
+      throw new Error("must use batch reads");
+    };
     const service = new ObservabilityService({ management, audit, now: () => FIXED_NOW });
 
     const report = await service.toolSla({ id: "admin-1", role: "admin" }, { window: "24h" });
     assert.equal(report.totals.calls, 1);
     assert.equal(report.services[0]?.tools[0]?.toolName, "search");
+    assert.equal(batchReads, 1);
+    await assert.rejects(
+      audit.getMany(["kept"], { id: "operator", role: "operator" }),
+      /require admin or auditor/,
+    );
+  });
+
+  it("falls back to individual readable events after a batch failure", async () => {
+    const repository = new InMemoryAuditRepository();
+    await repository.create(gatewayEvent({ id: "kept" }));
+    repository.getMany = async () => {
+      throw new Error("batch unavailable");
+    };
+    const audit = new AuditService(repository);
+    const events = await audit.getMany(["gone", "kept"], { id: "auditor", role: "auditor" });
+    assert.deepEqual(
+      events.map((event) => event.id),
+      ["kept"],
+    );
   });
 });
 

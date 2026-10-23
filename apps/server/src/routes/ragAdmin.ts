@@ -3,15 +3,9 @@ import https from "node:https";
 import { Router, type Request, type Response } from "express";
 import { logTrace, truncate } from "../trace.js";
 import { resolveWorkspace } from "../workspace.js";
+import { ragConfig } from "../ragConfig.js";
 
 export const ragAdminRouter: ReturnType<typeof Router> = Router();
-
-function config() {
-  return {
-    baseUrl: (process.env.RAG_API_URL ?? "http://localhost:4001/api").replace(/\/$/, ""),
-    token: process.env.RAG_ADMIN_TOKEN?.trim() ?? "",
-  };
-}
 
 /**
  * Studio 的 RAG/Graph 管理 BFF。
@@ -24,7 +18,7 @@ ragAdminRouter.use("/api/admin/rag", async (req: Request, res: Response) => {
     res.status(404).json({ error: "RAG admin route not found" });
     return;
   }
-  const { baseUrl, token } = config();
+  const { baseUrl, token } = ragConfig();
   const workspace = resolveWorkspace(req);
   if (!workspace.ok) {
     res.status(400).json({ error: `workspace not found: ${workspace.requested}` });

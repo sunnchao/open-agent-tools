@@ -1,0 +1,24 @@
+{
+  "name": "@open-agent-tools/studio-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "sideEffects": false,
+  "dependencies": {
+    "@open-agent-tools/workflow-contracts": "workspace:*",
+    "@open-agent-tools/mcp-contracts": "workspace:*",
+    "@open-agent-tools/api-contracts": "workspace:*"
+  }
+}

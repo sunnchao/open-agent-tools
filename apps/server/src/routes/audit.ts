@@ -9,6 +9,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
+import { optionalString } from "@open-agent-tools/api-contracts/values";
 import { listImChatAudits, getImChatAudit, type ImChatAuditFilters } from "../im/audit.js";
 import { listQueryAudits } from "../observatory/queryAudit.js";
 import { listRecentUsage, summarizeUsage } from "../usage.js";
@@ -42,12 +43,6 @@ function parseOffset(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return Math.max(0, Math.floor(parsed));
-}
-
-function optionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function isoOrUndefined(timestamp: number | undefined): string | undefined {

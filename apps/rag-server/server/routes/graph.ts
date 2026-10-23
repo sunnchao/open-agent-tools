@@ -150,5 +150,32 @@ export function graphRouter(knowledge: KnowledgeBase): Router {
     res.json({ types: graph.store.countRelationsByType() });
   });
 
+  /**
+   * 图谱质量快照：共现边占比、度分布、重复实体、反向边等硬指标。
+   * 用于判断「图有没有被建坏」，不依赖人工翻数据。
+   */
+  router.get("/quality", (_req: Request, res: Response) => {
+    const quality = graph.quality();
+    if (!quality) {
+      res.status(501).json({ error: "graph store does not expose quality metrics" });
+      return;
+    }
+    res.json({ quality, diagnostics: graph.diagnostics() });
+  });
+
+  /**
+   * 同名多 type 实体消解。
+   * `dryRun=true` 只统计不落库，便于先看清影响面再执行。
+   */
+  router.post("/resolve-duplicates", (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as { dryRun?: unknown };
+    try {
+      const result = graph.resolveDuplicateEntities({ dryRun: body.dryRun === true });
+      res.json({ ...result, dryRun: body.dryRun === true, stats: graph.getStats() });
+    } catch (e) {
+      res.status(500).json({ error: String(e) });
+    }
+  });
+
   return router;
 }

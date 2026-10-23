@@ -27,6 +27,12 @@ export interface SyncStatus {
   orphan: string[];
   /** 正在后台抽取中。 */
   building: string[];
+  /**
+   * 卡在 building 超过阈值（进程重启/OOM 后残留）。
+   * 这些来源自己永远不会走出 building，也既不算 missing 也不算 stale，
+   * 必须单独暴露才能被对账重建。
+   */
+  stuck: string[];
   /** 排队等待抽取的来源数。 */
   queued: number;
   sources: GraphSourceState[];
@@ -116,13 +122,16 @@ export class KnowledgeBase {
     const diff = this.graph.diff(ragSources);
     // 内存队列中的来源可能尚未落到 building 状态，补进去避免前端误判为缺失
     const building = [...new Set([...diff.building, ...(this.current ? [this.current] : [])])];
-    const missing = diff.missing.filter((s) => !building.includes(s));
+    const stuck = diff.stuck.filter((source) => !building.includes(source));
+    const missing = diff.missing.filter((s) => !building.includes(s) && !stuck.includes(s));
     return {
-      inSync: diff.inSync && this.queue.length === 0 && this.current === null,
+      // 有僵死来源时不能宣称同步：它们缺图，但不会被自动重建
+      inSync: diff.inSync && this.queue.length === 0 && this.current === null && stuck.length === 0,
       missing,
       stale: diff.stale,
       orphan: diff.orphan,
       building,
+      stuck,
       queued: this.queue.length,
       sources: this.graph.listSources(),
       ragSources,
@@ -131,7 +140,7 @@ export class KnowledgeBase {
   }
 
   /**
-   * 一键对账修复：清理孤儿来源，重建缺失与过期来源。
+   * 一键对账修复：清理孤儿来源，重建缺失与过期来源，并复活僵死的 building 来源。
    * 同步等待完成（前端点「同步」后需要确定性结果），因此单独走串行循环。
    */
   async reconcile(): Promise<ReconcileResult> {
@@ -145,7 +154,13 @@ export class KnowledgeBase {
       removed.push(source);
     }
 
-    for (const source of [...status.missing, ...status.stale]) {
+    // 僵死来源先复位再重建：它们在库里状态是 building，rebuild 会覆盖状态，
+    // 但复位能保证「重建本身失败」时状态落到 failed 而不是继续挂着 building。
+    if (status.stuck.length > 0) {
+      this.graph.resetStuckSources();
+    }
+
+    for (const source of [...status.missing, ...status.stale, ...status.stuck]) {
       try {
         await this.rebuild(source);
         rebuilt.push(source);

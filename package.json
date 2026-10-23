@@ -12,15 +12,15 @@
   },
   "scripts": {
     "dev": "pnpm -r --parallel --if-present run \"/^dev(:admin)?$/\"",
-    "build": "pnpm -r --if-present run build",
+    "build": "pnpm --config.enable-pre-post-scripts=false -r --if-present run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "pnpm -r --if-present run test",
+    "test": "pnpm run build:deps && pnpm --config.enable-pre-post-scripts=false -r --if-present run test",
     "clean": "pnpm -r --if-present run clean",
-    "typecheck": "pnpm -r --if-present run typecheck",
-    "build:deps": "pnpm --filter @open-agent-tools/mcp-auth --filter @open-agent-tools/mcp-contracts --filter @open-agent-tools/database --filter @open-agent-tools/workflow-contracts --filter @open-agent-tools/observability run build"
+    "typecheck": "pnpm run build:deps && pnpm --config.enable-pre-post-scripts=false -r --if-present run typecheck",
+    "build:deps": "pnpm --filter \"./packages/*\" run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

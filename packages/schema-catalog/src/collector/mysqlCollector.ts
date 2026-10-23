@@ -1,3 +1,4 @@
+import { groupByTable, matchesAny, isSensitive, columnTier, commentEnum } from "./shared.js";
 import { createMysqlPool, type MysqlPool } from "@open-agent-tools/database/mysql";
 import type {
   CollectOptions,
@@ -51,7 +52,8 @@ interface IndexRow {
  * 注意：本函数不 `close` 连接池——由调用方负责（方便多次采集复用）。
  */
 export async function collectMysqlCatalog(options: CollectOptions): Promise<SchemaCatalog> {
-  const database = options.database ?? new URL(options.connectionString).pathname.replace(/^\//, "");
+  const database =
+    options.database ?? new URL(options.connectionString).pathname.replace(/^\//, "");
   if (!database) {
     throw new Error("无法确定目标数据库：请在连接串 URL path 里带库名，或显式传 database");
   }
@@ -69,14 +71,18 @@ export async function collectMysqlCatalogWithPool(
   pool: MysqlPool,
   options: CollectOptions,
 ): Promise<SchemaCatalog> {
-  const database = options.database ?? new URL(options.connectionString).pathname.replace(/^\//, "");
+  const database =
+    options.database ?? new URL(options.connectionString).pathname.replace(/^\//, "");
   if (!database) {
     throw new Error("无法确定目标数据库：请在连接串 URL path 里带库名，或显式传 database");
   }
   return collectWithPool(pool, { ...options, database });
 }
 
-async function collectWithPool(pool: MysqlPool, options: CollectOptions & { database: string }): Promise<SchemaCatalog> {
+async function collectWithPool(
+  pool: MysqlPool,
+  options: CollectOptions & { database: string },
+): Promise<SchemaCatalog> {
   const { database, tableFilter, skipSystemSchemas = true, skipSamples = false } = options;
   const tableScope = ["mysql", "information_schema", "performance_schema", "sys"];
 
@@ -89,7 +95,9 @@ async function collectWithPool(pool: MysqlPool, options: CollectOptions & { data
   const tables = (tableRows as TableRow[])
     .filter((_row) => (skipSystemSchemas ? !tableScope.includes(database) : true))
     .filter((row) => !row.TABLE_NAME.startsWith("_") && !row.TABLE_NAME.startsWith("tmp_"))
-    .filter((row) => (tableFilter && tableFilter.length > 0 ? matchesAny(row.TABLE_NAME, tableFilter) : true))
+    .filter((row) =>
+      tableFilter && tableFilter.length > 0 ? matchesAny(row.TABLE_NAME, tableFilter) : true,
+    )
     .sort((a, b) => a.TABLE_NAME.localeCompare(b.TABLE_NAME));
   const tableNames = new Set(tables.map((row) => row.TABLE_NAME));
 
@@ -147,6 +155,8 @@ async function collectWithPool(pool: MysqlPool, options: CollectOptions & { data
     tables: [],
   };
 
+  const columnsByTable = groupByTable(columns, (column) => column.TABLE_NAME);
+  const relationsByTable = groupByTable(relations, (relation) => relation.TABLE_NAME);
   for (const t of tables) {
     const tableMeta: TableMeta = {
       name: t.TABLE_NAME,
@@ -155,37 +165,41 @@ async function collectWithPool(pool: MysqlPool, options: CollectOptions & { data
       approxRows: t.TABLE_ROWS ?? undefined,
       collectedAt: now,
     };
-    const tableColumns: ColumnMeta[] = columns
-      .filter((c) => c.TABLE_NAME === t.TABLE_NAME)
-      .map((c) => {
-        const key = `${c.TABLE_NAME}.${c.COLUMN_NAME}`;
-        return {
-          table: c.TABLE_NAME,
-          schema: database,
-          name: c.COLUMN_NAME,
-          columnType: c.COLUMN_TYPE,
-          nullable: c.IS_NULLABLE === "YES",
-          isPrimary: primaryKeys.has(key),
-          isUnique: uniqueKeys.has(key),
-          hasIndex: indexedColumns.has(key),
-          comment: c.COLUMN_COMMENT || undefined,
-          defaultValue: c.COLUMN_DEFAULT ?? undefined,
-          sensitivity: isSensitive(c.COLUMN_NAME, c.COLUMN_COMMENT),
-          tier: tierOf(c, primaryKeys.has(key), uniqueKeys.has(key)),
-        };
-      });
+    const tableColumns: ColumnMeta[] = (columnsByTable.get(t.TABLE_NAME) ?? []).map((c) => {
+      const key = `${c.TABLE_NAME}.${c.COLUMN_NAME}`;
+      return {
+        table: c.TABLE_NAME,
+        schema: database,
+        name: c.COLUMN_NAME,
+        columnType: c.COLUMN_TYPE,
+        nullable: c.IS_NULLABLE === "YES",
+        isPrimary: primaryKeys.has(key),
+        isUnique: uniqueKeys.has(key),
+        hasIndex: indexedColumns.has(key),
+        comment: c.COLUMN_COMMENT || undefined,
+        defaultValue: c.COLUMN_DEFAULT ?? undefined,
+        sensitivity: isSensitive(c.COLUMN_NAME, c.COLUMN_COMMENT),
+        tier: columnTier(
+          c.COLUMN_NAME,
+          c.COLUMN_TYPE,
+          primaryKeys.has(key),
+          uniqueKeys.has(key),
+          "mysql",
+        ),
+      };
+    });
 
-    const tableRelations: RelationMeta[] = relations
-      .filter((r) => r.TABLE_NAME === t.TABLE_NAME)
-      .map((r) => ({
-        fromTable: r.TABLE_NAME,
-        fromColumn: r.COLUMN_NAME,
-        toTable: r.REFERENCED_TABLE_NAME!,
-        toColumn: r.REFERENCED_COLUMN_NAME!,
-      }));
+    const tableRelations: RelationMeta[] = (relationsByTable.get(t.TABLE_NAME) ?? []).map((r) => ({
+      fromTable: r.TABLE_NAME,
+      fromColumn: r.COLUMN_NAME,
+      toTable: r.REFERENCED_TABLE_NAME!,
+      toColumn: r.REFERENCED_COLUMN_NAME!,
+    }));
 
     const tableEnums: EnumMeta[] = collectEnums(tableColumns);
-    const tableSamples: SampleMeta[] = skipSamples ? [] : await collectSamples(pool, database, t.TABLE_NAME, tableColumns, options);
+    const tableSamples: SampleMeta[] = skipSamples
+      ? []
+      : await collectSamples(pool, database, t.TABLE_NAME, tableColumns, options);
 
     catalog.tables.push({
       table: tableMeta,
@@ -199,44 +213,6 @@ async function collectWithPool(pool: MysqlPool, options: CollectOptions & { data
   return catalog;
 }
 
-function matchesAny(name: string, filters: string[]): boolean {
-  return filters.some((f) => {
-    if (!f.includes("*")) return f === name;
-    const re = new RegExp("^" + f.split("*").map(escapeRe).join(".*") + "$");
-    return re.test(name);
-  });
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** 敏感字段启发式：命中则标记 sensitive（默认不注入 LLM）。 */
-function isSensitive(column: string, comment?: string): "sensitive" | "normal" {
-  const text = `${column} ${comment ?? ""}`.toLowerCase();
-  return /(password|passwd|pwd|secret|token|api_?key|private_?key|id_card|身份证|手机号|mobile|phone|手机|密码|密钥)/.test(text)
-    ? "sensitive"
-    : "normal";
-}
-
-/** 字段分档：主键/FK/时间/状态 → required；普通业务字段 → common；其余 → full。 */
-function tierOf(c: ColumnRow, isPrimary: boolean, isUnique: boolean): ColumnTier {
-  if (isPrimary || isUnique) return "required";
-  const name = c.COLUMN_NAME.toLowerCase();
-  const type = c.COLUMN_TYPE.toLowerCase();
-  if (/^(created|updated|submitted|approved|status|state|type|org|dept|is_|has_)/.test(name)) return "required";
-  // 标识/登录类字段（username/account/login/nickname 等）对查询用户很关键，提为 common
-  if (/^(username|user_name|account|login|login_name|nickname|nick_name|display_name|real_name)$/.test(name)) return "common";
-  if (/(_at|_on|_id|_no|_code|_name|_type|_status)/.test(name)) return "common";
-  if (/^(tinyint|smallint|mediumint|int|bigint|varchar|char|enum|set|date|datetime|timestamp)/.test(type)) {
-    if (/(^|_)(id|no|code|name|status|type|time|date)(_|$)/.test(name)) return "common";
-    return "full";
-  }
-  return "full";
-}
-
-type ColumnTier = ColumnMeta["tier"];
-
 /** 从列定义中识别枚举（MySQL ENUM/SET 类型或字段注释里的枚举说明）。 */
 function collectEnums(columns: ColumnMeta[]): EnumMeta[] {
   const result: EnumMeta[] = [];
@@ -244,7 +220,10 @@ function collectEnums(columns: ColumnMeta[]): EnumMeta[] {
     const m = c.columnType.match(/^(enum|set)\((.+)\)$/i);
     if (m) {
       // 解析 'a','b' 形式
-      const values = m[2]!.match(/'((?:[^'\\]|\\.)*)'/g)?.map((v) => v.replace(/^'|'$/g, "").replace(/\\'/g, "'")) ?? [];
+      const values =
+        m[2]!
+          .match(/'((?:[^'\\]|\\.)*)'/g)
+          ?.map((v) => v.replace(/^'|'$/g, "").replace(/\\'/g, "'")) ?? [];
       result.push({
         table: c.table,
         column: c.name,
@@ -252,19 +231,8 @@ function collectEnums(columns: ColumnMeta[]): EnumMeta[] {
       });
       continue;
     }
-    // 注释里形如 "0=草稿;1=已提交;2=待审批"
-    const comment = c.comment ?? "";
-    const kv = comment.match(/(\d+)\s*=\s*([^;，,]+)/g);
-    if (kv && kv.length >= 2) {
-      result.push({
-        table: c.table,
-        column: c.name,
-        values: kv.map((pair) => {
-          const [k, ...rest] = pair.split("=");
-          return { value: k!.trim(), meaning: rest.join("=").trim() };
-        }),
-      });
-    }
+    const parsed = commentEnum(c);
+    if (parsed) result.push(parsed);
   }
   return result;
 }
@@ -287,10 +255,10 @@ async function collectSamples(
   const candidates = columns.filter((c) => {
     const n = c.name.toLowerCase();
     return (
-      c.hasIndex &&
-      /(status|state|type|kind|category|org|dept|source|channel|is_|flag|code|no)$/.test(n) ||
-      /(status|state|type|kind|category|org|dept|source|channel|is_|flag|code|no)/.test(n) &&
-        !/^(id|created|updated|modified|deleted)/.test(n)
+      (c.hasIndex &&
+        /(status|state|type|kind|category|org|dept|source|channel|is_|flag|code|no)$/.test(n)) ||
+      (/(status|state|type|kind|category|org|dept|source|channel|is_|flag|code|no)/.test(n) &&
+        !/^(id|created|updated|modified|deleted)/.test(n))
     );
   });
   if (candidates.length === 0) return [];

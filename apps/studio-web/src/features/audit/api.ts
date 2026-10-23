@@ -1,4 +1,6 @@
 import { studioFetch } from "../../lib/client.js";
+import { parseHttpError as parseError } from "@open-agent-tools/studio-client";
+import { asRecord } from "@open-agent-tools/api-contracts/values";
 import { getAuditEvent, listAuditEvents } from "../mcp/api.js";
 import type { AuditEventRecord, AuditEventSummary } from "../mcp/api.js";
 import type { QueryAuditDetail, QueryAuditSummary } from "../observatory/api.js";
@@ -108,20 +110,11 @@ export interface UsageEventRecord {
   createdAt: number;
 }
 
-async function parseError(response: Response): Promise<string> {
-  const body = (await response.json().catch(() => ({}))) as { error?: string };
-  return body.error ?? `HTTP ${response.status}`;
-}
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await studioFetch(path, init);
   if (!response.ok) throw new Error(await parseError(response));
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 function pickString(source: Record<string, unknown>, keys: string[]): string | null {

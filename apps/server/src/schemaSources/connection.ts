@@ -1,3 +1,4 @@
+import { safeDecodeUriComponent } from "@open-agent-tools/api-contracts/values";
 import type { SchemaSourceConnector } from "./store.js";
 
 export interface SchemaSourceConnectionInput {
@@ -13,14 +14,6 @@ function defaultPort(connector: SchemaSourceConnector): number {
   return connector === "postgresql" ? 5432 : 3306;
 }
 
-function decodeConnectionComponent(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
 export function schemaSourceConnectionMetadata(
   connectionString: string,
   databaseName?: string | null,
@@ -30,9 +23,9 @@ export function schemaSourceConnectionMetadata(
   return {
     host: parsed.hostname.replace(/^\[|\]$/g, ""),
     port: parsed.port ? Number(parsed.port) : defaultPort(connector),
-    username: decodeConnectionComponent(parsed.username),
+    username: safeDecodeUriComponent(parsed.username),
     databaseName:
-      databaseName?.trim() || decodeConnectionComponent(parsed.pathname.replace(/^\//, "")) || null,
+      databaseName?.trim() || safeDecodeUriComponent(parsed.pathname.replace(/^\//, "")) || null,
   };
 }
 

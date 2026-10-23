@@ -1,4 +1,5 @@
 import type { ImMessageEvent } from "../types.js";
+import { trimmedString as normalizeSenderName } from "@open-agent-tools/api-contracts/values";
 
 /** 钉钉机器人消息回调（/v1.0/im/bot/messages/get）中与本模块相关的字段。 */
 interface DingTalkMessageData {
@@ -44,11 +45,7 @@ export function stripDingTalkMentionPrefix(content: string): string {
 }
 
 /** 归一化发送者昵称：非空裁剪，缺失/空白返回 null（不臆造）。 */
-export function normalizeSenderName(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
+export { normalizeSenderName };
 
 /** 把钉钉机器人消息载荷归一化为平台内 ImMessageEvent。 */
 export function parseDingTalkMessageEvent(data: unknown): ImMessageEvent {

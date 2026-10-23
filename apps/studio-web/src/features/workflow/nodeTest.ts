@@ -1,24 +1,7 @@
 import { nodeInputs, type NodeInputBinding, type WorkflowNodeData } from "./model.js";
 
-export function serializeNodeTestValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === undefined) return "";
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-
-export function parseNodeTestValue(value: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return value;
-  }
-}
+import { serializeNodeTestValue } from "@open-agent-tools/workflow-contracts";
+export { serializeNodeTestValue, parseNodeTestValue } from "@open-agent-tools/workflow-contracts";
 
 export function createNodeTestInputDraft(
   data: WorkflowNodeData,

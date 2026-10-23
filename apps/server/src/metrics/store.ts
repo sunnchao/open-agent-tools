@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeStringList, parseJsonStringList } from "@open-agent-tools/api-contracts/values";
 import { openDb } from "../db.js";
 import {
   MetricCaliberSchema,
@@ -63,26 +64,6 @@ function now(): string {
   return new Date().toISOString();
 }
 
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [
-    ...new Set(
-      value
-        .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
-
-function parseStringList(raw: string): string[] {
-  try {
-    return normalizeStringList(JSON.parse(raw) as unknown);
-  } catch {
-    return [];
-  }
-}
-
 function rowToMetric(row: MetricDefinitionRow): MetricDefinition {
   return {
     id: row.id,
@@ -92,9 +73,9 @@ function rowToMetric(row: MetricDefinitionRow): MetricDefinition {
     unit: row.unit,
     caliber: MetricCaliberSchema.parse(JSON.parse(row.caliber_json) as unknown),
     sourceId: row.source_id,
-    tables: parseStringList(row.tables_json),
-    synonyms: parseStringList(row.synonyms_json),
-    tags: parseStringList(row.tags_json),
+    tables: parseJsonStringList(row.tables_json),
+    synonyms: parseJsonStringList(row.synonyms_json),
+    tags: parseJsonStringList(row.tags_json),
     status: MetricStatusSchema.catch("active").parse(row.status),
     version: row.version,
     owner: row.owner,
@@ -106,8 +87,7 @@ function rowToMetric(row: MetricDefinitionRow): MetricDefinition {
 function getRow(id: string): MetricDefinitionRow | null {
   return (
     (openDb().prepare(`SELECT * FROM metric_definitions WHERE id = ?`).get(id) as
-      | MetricDefinitionRow
-      | undefined) ?? null
+      MetricDefinitionRow | undefined) ?? null
   );
 }
 
@@ -132,9 +112,7 @@ export function listMetricDefinitions(options?: {
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const rows = openDb()
-    .prepare(
-      `SELECT * FROM metric_definitions ${where} ORDER BY category ASC, name ASC`,
-    )
+    .prepare(`SELECT * FROM metric_definitions ${where} ORDER BY category ASC, name ASC`)
     .all(...params) as unknown as MetricDefinitionRow[];
   return rows.map(rowToMetric);
 }
@@ -188,7 +166,9 @@ export function updateMetricDefinition(
       ? MetricCaliberSchema.parse(JSON.parse(current.caliber_json) as unknown)
       : MetricCaliberSchema.parse(input.caliber);
   const status =
-    input.status === undefined ? rowToMetric(current).status : MetricStatusSchema.parse(input.status);
+    input.status === undefined
+      ? rowToMetric(current).status
+      : MetricStatusSchema.parse(input.status);
   openDb()
     .prepare(
       `UPDATE metric_definitions
@@ -210,7 +190,9 @@ export function updateMetricDefinition(
       input.synonyms === undefined
         ? current.synonyms_json
         : JSON.stringify(normalizeStringList(input.synonyms)),
-      input.tags === undefined ? current.tags_json : JSON.stringify(normalizeStringList(input.tags)),
+      input.tags === undefined
+        ? current.tags_json
+        : JSON.stringify(normalizeStringList(input.tags)),
       status,
       input.owner === undefined ? current.owner : input.owner?.trim() || null,
       now(),

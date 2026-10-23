@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeStringList as normalizePatterns } from "@open-agent-tools/api-contracts/values";
 
 /**
  * 连接器框架的公共契约。
@@ -95,18 +96,6 @@ export function normalizeFilter(value: unknown): ConnectorFilter {
     exclude: normalizePatterns(raw.exclude),
     maxDocuments: normalizeMaxDocuments(raw.maxDocuments),
   };
-}
-
-function normalizePatterns(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [
-    ...new Set(
-      value
-        .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  ];
 }
 
 function normalizeMaxDocuments(value: unknown): number | null {

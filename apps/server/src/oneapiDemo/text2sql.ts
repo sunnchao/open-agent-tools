@@ -9,6 +9,7 @@ import {
   executeQuerySqlWithConnection,
   validateQuerySql,
 } from "../function_tools/sqlQueryBuiltin.js";
+import { extractJson } from "../jsonExtraction.js";
 import { buildClarification, type Clarification } from "@open-agent-tools/query-resolver";
 import { createLlmClient, type LlmClient } from "../providers/clients/index.js";
 import { getDefaultProvider, getProvider, type ProviderWithKey } from "../providers/store.js";
@@ -20,12 +21,8 @@ import {
   loadSchemaCatalog,
   matchTableNames,
 } from "../schemaSources/runtime.js";
-import {
-  getDefaultSchemaSource,
-  getSchemaSource,
-  type SchemaSemanticProfile,
-  type SchemaSourceWithSecret,
-} from "../schemaSources/store.js";
+import type { SchemaSemanticProfile, SchemaSourceWithSecret } from "../schemaSources/store.js";
+import { resolveSchemaSource } from "../schemaSources/resolve.js";
 import { selectTablesSemantically, semanticSelectorEnabled } from "../schemaSources/semantic.js";
 import {
   createQueryAudit,
@@ -47,6 +44,7 @@ import {
   trackUsage,
   type UsageSnapshot,
 } from "../usageTracking.js";
+import { formatHistoryText } from "../promptHistory.js";
 
 const ONEAPI_INTENT_TABLES: Record<string, string[]> = {
   log_query: ["logs"],
@@ -109,17 +107,6 @@ export interface ObservatoryRunOptions {
   validateRerunSql?: (sql: string, catalog: SchemaCatalog, graph: unknown) => void | Promise<void>;
 }
 
-function resolveSource(sourceId?: string): SchemaSourceWithSecret {
-  const source = sourceId
-    ? getSchemaSource(sourceId, { requireEnabled: true })
-    : getDefaultSchemaSource({ requireEnabled: true });
-  if (!source)
-    throw new Error(
-      sourceId ? "schema source not found or disabled" : "no enabled schema source configured",
-    );
-  return source;
-}
-
 function resolveLlm(): { llm: LlmClient; model: string; provider: ProviderWithKey } | null {
   const providerId = process.env.AI_QUERY_PROVIDER_ID;
   const provider: ProviderWithKey | null = providerId
@@ -156,18 +143,6 @@ function resultChecksFor(
     // 基线写入失败只影响下次校验,本次结果照常返回。
   }
   return assessment;
-}
-
-function extractJson(text: string): Record<string, unknown> | null {
-  const cleaned = text.replace(/```(?:json)?/gi, "");
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end <= start) return null;
-  try {
-    return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 function unique(values: string[]): string[] {
@@ -313,10 +288,7 @@ async function generateSql(
   history: HistoryTurn[],
   rowLimit: ReturnType<typeof detectRowLimitIntent>,
 ): Promise<{ sql?: string; clarifying?: string }> {
-  const historyText = history
-    .slice(-6)
-    .map((turn) => `${turn.role === "user" ? "用户" : "助手"}: ${turn.content}`)
-    .join("\n");
+  const historyText = formatHistoryText(history, 6);
   const response = await llm.complete({
     model,
     messages: [
@@ -352,9 +324,8 @@ export async function runSchemaText2Sql(
   onProgress?: (event: QueryProgressEvent) => void,
   options: ObservatoryRunOptions = { audit: {} },
 ): Promise<ObservatoryQueryResult> {
-  return trackUsage(
-    { source: "sql_query", workspaceId: options.audit.workspace },
-    () => runSchemaText2SqlCore(sourceId, question, history, onProgress, options),
+  return trackUsage({ source: "sql_query", workspaceId: options.audit.workspace }, () =>
+    runSchemaText2SqlCore(sourceId, question, history, onProgress, options),
   );
 }
 
@@ -388,7 +359,7 @@ async function runSchemaText2SqlCore(
   };
   try {
     audit.start("source", { sourceId: sourceId ?? null });
-    const source = resolveSource(sourceId);
+    const source = resolveSchemaSource(sourceId);
     audit.addSecret(source.connectionString);
     const password = new URL(source.connectionString).password;
     audit.addSecret(password);

@@ -32,7 +32,42 @@ export interface GraphExtractor {
   extract(chunk: ChunkLike): Promise<ExtractResult>;
 }
 
-/** 规范化实体名，类型非法时回退 concept。 */
+/** 抽取过程的可观测统计：解析失败不再静默丢数据。 */
+export interface ExtractDiagnostics {
+  /** 调用抽取器的次数。 */
+  calls: number;
+  /** LLM 返回内容无法解析成 JSON 的次数（会产出 0 实体 0 关系）。 */
+  parseFailures: number;
+  /** 三元组因端点不在本块实体表中被丢弃的次数。 */
+  orphanRelations: number;
+  /** 被白名单拒绝、回退成 related_to 的谓词次数。 */
+  predicateFallbacks: number;
+}
+
+/** 抽取器可选实现：暴露失败计数，便于上层日志与健康检查。 */
+export interface ObservableExtractor {
+  diagnostics(): ExtractDiagnostics;
+}
+
+/** 单次抽取的统计载体（每次 extract 重建，供包装器累积）。 */
+interface MutableDiagnostics {
+  calls: number;
+  parseFailures: number;
+  orphanRelations: number;
+  predicateFallbacks: number;
+}
+
+function emptyDiagnostics(): MutableDiagnostics {
+  return { calls: 0, parseFailures: 0, orphanRelations: 0, predicateFallbacks: 0 };
+}
+
+/**
+ * 规范化实体名，类型非法时回退 concept。
+ *
+ * 注意：实体 id 仍带 type。同名不同 type 会分裂成多个节点，这是历史设计；
+ * 上层用 `KnowledgeGraph.resolveDuplicateEntities()` 做消解，而不是在这里改 id 规则
+ * （改 id 会让所有存量数据失效）。
+ */
 function makeEntity(name: string, type: string, props: Record<string, string> = {}): Entity {
   const normalized = normalizeName(name);
   const safeType = (DEFAULT_ENTITY_TYPES as readonly string[]).includes(type) ? type : "concept";
@@ -42,11 +77,18 @@ function makeEntity(name: string, type: string, props: Record<string, string> = 
 /**
  * 建边。source 取自所属分块的文档来源，是生命周期级联删除的锚点——
  * 只记 chunk id 无法反查归属文档，删除时会漏。
+ *
+ * 边 id 由 relationId 计算：对称谓词会按端点排序，使 A→B 与 B→A 归一为同一条边。
  */
-function makeRelation(src: Entity, relType: string, dst: Entity, chunk: ChunkLike): Relation {
-  const safeType = (DEFAULT_RELATION_TYPES as readonly string[]).includes(relType)
-    ? relType
-    : "related_to";
+function makeRelation(
+  src: Entity,
+  relType: string,
+  dst: Entity,
+  chunk: ChunkLike,
+  origin: "llm" | "rule",
+): Relation {
+  const whitelisted = (DEFAULT_RELATION_TYPES as readonly string[]).includes(relType);
+  const safeType = whitelisted ? relType : "related_to";
   return {
     id: relationId(src.id, safeType, dst.id),
     srcId: src.id,
@@ -55,6 +97,7 @@ function makeRelation(src: Entity, relType: string, dst: Entity, chunk: ChunkLik
     weight: 1,
     sourceChunk: chunk.id,
     source: chunk.source,
+    origin,
   };
 }
 
@@ -83,13 +126,18 @@ export function extractJson(text: string): unknown {
  * LLM 抽取器：一次调用同时输出实体与三元组（JSON mode）。
  * 无 Key / 调用失败时由调用方回退 RuleGraphExtractor。
  */
-export class LlmGraphExtractor implements GraphExtractor {
+export class LlmGraphExtractor implements GraphExtractor, ObservableExtractor {
   private chat: LlmChatFn;
   private entityTypes: readonly string[];
+  private stats: MutableDiagnostics = emptyDiagnostics();
 
   constructor(chat: LlmChatFn, opts: { entityTypes?: readonly string[] } = {}) {
     this.chat = chat;
     this.entityTypes = opts.entityTypes ?? DEFAULT_ENTITY_TYPES;
+  }
+
+  diagnostics(): ExtractDiagnostics {
+    return { ...this.stats };
   }
 
   async extract(chunk: ChunkLike): Promise<ExtractResult> {
@@ -99,7 +147,13 @@ export class LlmGraphExtractor implements GraphExtractor {
       `关系 predicate 只能是以下之一: ${DEFAULT_RELATION_TYPES.join("、")}；如无合适谓词用 related_to。\n` +
       `输出格式: {"entities":[{"name":"","type":"","props":{}}],"relations":[{"subject":"","predicate":"","object":""}]}`;
     const raw = await this.chat(system, chunk.content);
+    this.stats.calls += 1;
     const data = extractJson(raw);
+    if (data === null) {
+      // 解析失败会静默产出 0 实体 0 关系；计数暴露给上层，避免"抽了但没抽到"无声无息
+      this.stats.parseFailures += 1;
+      return { entities: [], relations: [] };
+    }
     return this.normalize(data, chunk);
   }
 
@@ -145,13 +199,16 @@ export class LlmGraphExtractor implements GraphExtractor {
           if (typeof subject !== "string" || typeof object !== "string") continue;
           const src = byName.get(normalizeName(subject));
           const dst = byName.get(normalizeName(object));
-          if (!src || !dst) continue;
-          const rel = makeRelation(
-            src,
-            typeof predicate === "string" ? predicate : "related_to",
-            dst,
-            chunk,
-          );
+          if (!src || !dst) {
+            // 端点不在本块实体表里：这条关系无法解析成实体名，如实计数后丢弃
+            this.stats.orphanRelations += 1;
+            continue;
+          }
+          const rawPredicate = typeof predicate === "string" ? predicate : "related_to";
+          if (!(DEFAULT_RELATION_TYPES as readonly string[]).includes(rawPredicate)) {
+            this.stats.predicateFallbacks += 1;
+          }
+          const rel = makeRelation(src, rawPredicate, dst, chunk, "llm");
           if (!relations.some((r) => r.id === rel.id)) relations.push(rel);
         }
       }
@@ -205,6 +262,9 @@ export function splitSentences(text: string): string[] {
  * 规则抽取器（无 LLM 时回退）：句内共现建图。
  * - 实体：候选名（标点切块 + 停用词过滤，无残词）；
  * - 关系：同一句内共现的实体对 → related_to（方向无关），替代整块全连接，显著降噪。
+ *
+ * 这类边的 origin 标记为 `rule`：谓词恒为 related_to 且没有真实语义，
+ * 检索排序时按谓词特异性降权（见 `relationSpecificity`），避免共现噪声挤占候选。
  */
 export class RuleGraphExtractor implements GraphExtractor {
   async extract(chunk: ChunkLike): Promise<ExtractResult> {
@@ -219,7 +279,7 @@ export class RuleGraphExtractor implements GraphExtractor {
         .filter((e): e is Entity => e !== undefined);
       for (let i = 0; i < inSentence.length; i += 1) {
         for (let j = i + 1; j < inSentence.length; j += 1) {
-          const rel = makeRelation(inSentence[i]!, "related_to", inSentence[j]!, chunk);
+          const rel = makeRelation(inSentence[i]!, "related_to", inSentence[j]!, chunk, "rule");
           if (!seen.has(rel.id)) {
             seen.add(rel.id);
             relations.push(rel);
@@ -229,4 +289,74 @@ export class RuleGraphExtractor implements GraphExtractor {
     }
     return { entities, relations };
   }
+}
+
+/**
+ * Gleaning 包装器：首轮抽完后用更强硬的 prompt 追问遗漏，把新增结果并回。
+ *
+ * GraphRAG / LightRAG 都依赖这一步提召回：单轮抽取在信息密集分块上容易漏实体。
+ * 合并天然幂等——实体按规范化名去重，关系按稳定 id 去重。
+ */
+export class GleaningExtractor implements GraphExtractor, ObservableExtractor {
+  private inner: GraphExtractor;
+  private rounds: number;
+  private extraInstruction: string;
+
+  constructor(
+    inner: GraphExtractor,
+    opts: { rounds?: number; extraInstruction?: string } = {},
+  ) {
+    this.inner = inner;
+    this.rounds = Math.max(1, opts.rounds ?? 1);
+    this.extraInstruction =
+      opts.extraInstruction ??
+      "上一轮你可能遗漏了一些实体和关系。请仔细再检查一遍文本，补充所有尚未抽取的实体与它们之间的关系。";
+  }
+
+  diagnostics(): ExtractDiagnostics {
+    const observable = this.inner as Partial<ObservableExtractor>;
+    return (
+      observable.diagnostics?.() ?? {
+        calls: 0,
+        parseFailures: 0,
+        orphanRelations: 0,
+        predicateFallbacks: 0,
+      }
+    );
+  }
+
+  async extract(chunk: ChunkLike): Promise<ExtractResult> {
+    const first = await this.inner.extract(chunk);
+    if (this.rounds <= 1) return first;
+    let merged = first;
+    for (let round = 0; round < this.rounds - 1; round += 1) {
+      const again = await this.inner.extract({
+        ...chunk,
+        content: `${chunk.content}\n\n【补充要求】${this.extraInstruction}`,
+      });
+      merged = mergeExtractResults(merged, again);
+      // 本轮没新增任何东西说明已抽全，提前结束省 token
+      if (again.entities.length === 0 && again.relations.length === 0) break;
+    }
+    return merged;
+  }
+}
+
+/** 合并两次抽取结果：实体按 id、关系按稳定 id 去重，首轮优先。 */
+export function mergeExtractResults(a: ExtractResult, b: ExtractResult): ExtractResult {
+  const entities = [...a.entities];
+  const entityIds = new Set(entities.map((e) => e.id));
+  for (const entity of b.entities) {
+    if (entityIds.has(entity.id)) continue;
+    entityIds.add(entity.id);
+    entities.push(entity);
+  }
+  const relations = [...a.relations];
+  const relationIds = new Set(relations.map((r) => r.id));
+  for (const relation of b.relations) {
+    if (relationIds.has(relation.id)) continue;
+    relationIds.add(relation.id);
+    relations.push(relation);
+  }
+  return { entities, relations };
 }

@@ -1,236 +1,34 @@
+import { createWorkflowClient } from "@open-agent-tools/studio-client";
 import { agentFetch, parseError } from "../lib/http";
 import { consumeSse } from "../lib/sse";
 
-export interface WorkflowAppRecord {
-  id: string;
-  name: string;
-  slug: string;
-  description: string;
-  status: "ACTIVE" | "DELETED";
-  draftRevision: number;
-  currentVersionId: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-export interface WorkflowSnapshot {
-  name: string;
-  nodes: WorkflowNode[];
-  edges: WorkflowEdge[];
-}
-export interface WorkflowNode {
-  id: string;
-  type?: string;
-  position?: { x: number; y: number };
-  data: {
-    id?: string;
-    kind: string;
-    label?: string;
-    description?: string;
-    status?: string;
-    config?: Record<string, unknown>;
-  };
-}
-export interface WorkflowEdge {
-  id?: string;
-  source: string;
-  target: string;
-  label?: unknown;
-  branchId?: string;
-  sourceHandle?: string;
-  type?: string;
-}
-export interface WorkflowVersionRecord {
-  id: string;
-  workflowId: string;
-  versionNumber: number;
-  name: string;
-  releaseNotes: string;
-  graph: WorkflowSnapshot;
-  inputSchema: Record<string, unknown>;
-  outputSchema: Record<string, unknown>;
-  createdAt: string;
-}
-export interface WorkflowDetailRecord {
-  app: WorkflowAppRecord;
-  draft: WorkflowSnapshot;
-  versions: WorkflowVersionRecord[];
-}
-export interface WorkflowApiKeyRecord {
-  id: string;
-  workflowId: string;
-  name: string;
-  prefix: string;
-  status: "ACTIVE" | "REVOKED";
-  rateLimitPerMinute: number;
-  expiresAt: string | null;
-  lastUsedAt: string | null;
-  createdAt: string;
-}
-export interface WorkflowRunRecord {
-  id: string;
-  taskId: string;
-  workflowId: string;
-  versionId: string | null;
-  user: string;
-  source: "service-api" | "studio";
-  status: "running" | "succeeded" | "failed" | "stopped";
-  inputs: Record<string, unknown>;
-  outputs: Record<string, unknown> | null;
-  error: string | null;
-  totalSteps: number;
-  totalTokens: number;
-  createdAt: string;
-  finishedAt: string | null;
-  elapsedTime: number | null;
-}
-export interface WorkflowRunEventRecord {
-  runId: string;
-  sequence: number;
-  type: string;
-  payload: Record<string, unknown>;
-  createdAt: string;
-}
-export interface WorkflowRunHistory {
-  run: WorkflowRunRecord;
-  events: WorkflowRunEventRecord[];
-  graph: WorkflowSnapshot;
-}
+export type {
+  WorkflowAppRecord,
+  WorkflowNode,
+  WorkflowEdge,
+  WorkflowSnapshot,
+  WorkflowVersionRecord,
+  WorkflowDetailRecord,
+  WorkflowApiKeyRecord,
+  WorkflowRunRecord,
+  WorkflowRunEventRecord,
+  WorkflowRunHistory,
+} from "@open-agent-tools/workflow-contracts";
 
-async function parse<T>(r: Response): Promise<T> {
-  let body: T & { error?: string };
-  try {
-    body = (await r.json()) as T & { error?: string };
-  } catch {
-    body = {} as T & { error?: string };
-  }
-  if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
-  return body;
-}
-
-export async function fetchWorkflows(): Promise<WorkflowAppRecord[]> {
-  return (await parse<{ workflows: WorkflowAppRecord[] }>(await agentFetch("/api/workflows")))
-    .workflows;
-}
-export async function fetchWorkflow(
-  workflowId: string,
-): Promise<{ workflow: WorkflowDetailRecord; apiKeys: WorkflowApiKeyRecord[] }> {
-  return parse(await agentFetch(`/api/workflows/${encodeURIComponent(workflowId)}`));
-}
-export async function createWorkflow(input: {
-  name: string;
-  description?: string;
-  graph?: WorkflowSnapshot;
-}): Promise<WorkflowDetailRecord> {
-  return (
-    await parse<{ workflow: WorkflowDetailRecord }>(
-      await agentFetch("/api/workflows", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(input),
-      }),
-    )
-  ).workflow;
-}
-export async function duplicateWorkflow(workflowId: string): Promise<WorkflowDetailRecord> {
-  return (
-    await parse<{ workflow: WorkflowDetailRecord }>(
-      await agentFetch(`/api/workflows/${encodeURIComponent(workflowId)}/duplicate`, {
-        method: "POST",
-      }),
-    )
-  ).workflow;
-}
-export async function deleteWorkflow(workflowId: string): Promise<void> {
-  const r = await agentFetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
-    method: "DELETE",
-  });
-  if (!r.ok && r.status !== 404) await parse(r);
-}
-export async function saveWorkflowDraft(
-  workflowId: string,
-  expectedRevision: number,
-  graph: WorkflowSnapshot,
-): Promise<WorkflowDetailRecord> {
-  return (
-    await parse<{ workflow: WorkflowDetailRecord }>(
-      await agentFetch(`/api/workflows/${encodeURIComponent(workflowId)}/draft`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedRevision, graph }),
-      }),
-    )
-  ).workflow;
-}
-export async function publishWorkflow(
-  workflowId: string,
-  expectedRevision: number,
-  releaseNotes = "",
-): Promise<WorkflowDetailRecord> {
-  return (
-    await parse<{ workflow: WorkflowDetailRecord }>(
-      await agentFetch(`/api/workflows/${encodeURIComponent(workflowId)}/publish`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedRevision, releaseNotes }),
-      }),
-    )
-  ).workflow;
-}
-export async function rollbackWorkflow(
-  workflowId: string,
-  versionId: string,
-): Promise<WorkflowDetailRecord> {
-  return (
-    await parse<{ workflow: WorkflowDetailRecord }>(
-      await agentFetch(`/api/workflows/${encodeURIComponent(workflowId)}/rollback`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ versionId }),
-      }),
-    )
-  ).workflow;
-}
-export async function createWorkflowKey(
-  workflowId: string,
-  input: { name: string; rateLimitPerMinute: number },
-): Promise<{ key: WorkflowApiKeyRecord; rawKey: string }> {
-  return parse(
-    await agentFetch(`/api/workflows/${encodeURIComponent(workflowId)}/api-keys`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    }),
-  );
-}
-export async function revokeWorkflowKey(workflowId: string, keyId: string): Promise<void> {
-  const r = await agentFetch(
-    `/api/workflows/${encodeURIComponent(workflowId)}/api-keys/${encodeURIComponent(keyId)}`,
-    { method: "DELETE" },
-  );
-  if (!r.ok && r.status !== 404) await parse(r);
-}
-export async function fetchWorkflowRuns(
-  workflowId: string,
-  signal?: AbortSignal,
-): Promise<WorkflowRunRecord[]> {
-  return (
-    await parse<{ runs: WorkflowRunRecord[] }>(
-      await agentFetch(`/api/workflows/${encodeURIComponent(workflowId)}/runs`, { signal }),
-    )
-  ).runs;
-}
-export async function fetchWorkflowRunEvents(
-  workflowId: string,
-  runId: string,
-  signal?: AbortSignal,
-): Promise<WorkflowRunHistory> {
-  return parse(
-    await agentFetch(
-      `/api/workflows/${encodeURIComponent(workflowId)}/runs/${encodeURIComponent(runId)}/events`,
-      { signal },
-    ),
-  );
-}
+export const {
+  fetchWorkflows,
+  fetchWorkflow,
+  createWorkflow,
+  duplicateWorkflow,
+  deleteWorkflow,
+  saveWorkflowDraft,
+  publishWorkflow,
+  rollbackWorkflow,
+  createWorkflowKey,
+  revokeWorkflowKey,
+  fetchWorkflowRuns,
+  fetchWorkflowRunEvents,
+} = createWorkflowClient(agentFetch);
 
 export interface WorkflowRunNode {
   id: string;

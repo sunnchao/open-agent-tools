@@ -1,17 +1,11 @@
 import type { Edge } from "@xyflow/react";
+import {
+  updateRunEdges,
+  type EdgeRunStates,
+  type EdgeRunStatus,
+} from "@open-agent-tools/workflow-contracts";
 
-export type EdgeRunStatus = "active" | "done" | "error";
-export type EdgeRunStates = Record<string, EdgeRunStatus>;
-
-export function updateRunEdges(
-  current: EdgeRunStates,
-  incomingEdgeIds: string[],
-  status: EdgeRunStatus,
-): EdgeRunStates {
-  const next = { ...current };
-  for (const id of incomingEdgeIds) next[id] = status;
-  return next;
-}
+export { updateRunEdges, type EdgeRunStates, type EdgeRunStatus };
 
 export function decorateRunEdges(edges: Edge[], states: EdgeRunStates): Edge[] {
   return edges.map((edge) => {

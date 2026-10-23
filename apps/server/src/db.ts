@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { SqliteSessionStore, sqliteTableColumns } from "@open-agent-tools/database/sqlite";
 import { logDebugDuration } from "./trace.js";
 
 export type Role = "user" | "assistant" | "system" | "tool";
@@ -400,14 +401,9 @@ function ensureDefaultWorkspace(database: DatabaseSync): void {
     .run(DEFAULT_WORKSPACE_ID, "默认空间", "存量数据与未指定归属的资源", now, now);
 }
 
-function messageColumns(database: DatabaseSync): Set<string> {
-  const rows = database.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
-  return new Set(rows.map((row) => row.name));
-}
-
 /** Add tool_call_id / tool_name on legacy DBs without destructive rebuild. */
 function migrateMessagesTable(database: DatabaseSync): void {
-  const columns = messageColumns(database);
+  const columns = sqliteTableColumns(database, "messages");
 
   if (!columns.has("tool_call_id")) {
     database.exec(`ALTER TABLE messages ADD COLUMN tool_call_id TEXT`);
@@ -503,9 +499,8 @@ export function closeDb(): void {
   }
 }
 
-function autoTitle(content: string): string {
-  const trimmed = content.trim().replace(/\n/g, " ");
-  return trimmed.length > 32 ? `${trimmed.slice(0, 32)}…` : trimmed || "New chat";
+function sessionStore(): SqliteSessionStore<Role, MessageStatus> {
+  return new SqliteSessionStore<Role, MessageStatus>(openDb(), "complete");
 }
 
 /**
@@ -561,45 +556,18 @@ export function getSession(id: string): Session | null {
   const database = openDb();
   const session = database
     .prepare(
-      `SELECT id, title, updated_at AS updatedAt
-       FROM sessions
-       WHERE id = ?`,
+      `
+    SELECT id, title, updated_at AS updatedAt
+    FROM sessions WHERE id = ?
+  `,
     )
     .get(id) as { id: string; title: string; updatedAt: number } | undefined;
-
   if (!session) return null;
-
-  const messages = database
-    .prepare(
-      `SELECT id, role, content, created_at AS createdAt, status,
-              tool_call_id AS toolCallId, tool_name AS toolName
-       FROM messages
-       WHERE session_id = ?
-       ORDER BY position ASC`,
-    )
-    .all(id) as Array<{
-    id: string;
-    role: Role;
-    content: string;
-    createdAt: number;
-    status: MessageStatus | null;
-    toolCallId: string | null;
-    toolName: string | null;
-  }>;
-
   return {
     id: session.id,
     title: session.title,
     updatedAt: session.updatedAt,
-    messages: messages.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      createdAt: m.createdAt,
-      ...(m.status ? { status: m.status } : {}),
-      ...(m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
-      ...(m.toolName ? { tool_name: m.toolName } : {}),
-    })),
+    messages: sessionStore().messagesFor([id]).get(id)!,
   };
 }
 
@@ -617,8 +585,11 @@ export function listSessionsWithMessages(
 ): Session[] {
   const startedAt = Date.now();
   const summaries = listSessions(workspaceId, options);
-  const sessions = summaries.map((s) => getSession(s.id)).filter((s): s is Session => s !== null);
-  // N+1 查询(每个会话单独取消息);会话数变大时耗时会明显上升,debug 下单独计时便于发现。
+  const messages = sessionStore().messagesFor(summaries.map((session) => session.id));
+  const sessions = summaries.map((session) => ({
+    ...session,
+    messages: messages.get(session.id)!,
+  }));
   logDebugDuration("db.list_sessions_with_messages", startedAt, { sessions: sessions.length });
   return sessions;
 }
@@ -654,31 +625,15 @@ export function createSession(input?: SessionCreateOptions): Session {
 }
 
 export function renameSession(id: string, title: string): Session | null {
-  const database = openDb();
-  const updatedAt = Date.now();
-  const result = database
-    .prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`)
-    .run(title, updatedAt, id);
-
-  if (result.changes === 0) return null;
-  return getSession(id);
+  return sessionStore().renameSession(id, title) ? getSession(id) : null;
 }
 
 export function deleteSession(id: string): boolean {
-  const database = openDb();
-  const result = database.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
-  return result.changes > 0;
+  return sessionStore().deleteSession(id);
 }
 
 export function touchSession(id: string, updatedAt = Date.now()): void {
-  openDb().prepare(`UPDATE sessions SET updated_at = ? WHERE id = ?`).run(updatedAt, id);
-}
-
-function nextPosition(sessionId: string): number {
-  const row = openDb()
-    .prepare(`SELECT COALESCE(MAX(position), -1) AS maxPos FROM messages WHERE session_id = ?`)
-    .get(sessionId) as { maxPos: number };
-  return row.maxPos + 1;
+  sessionStore().touchSession(id, updatedAt);
 }
 
 export function addMessage(
@@ -693,139 +648,18 @@ export function addMessage(
     tool_name?: string;
   },
 ): Message | null {
-  const database = openDb();
-  const session = database.prepare(`SELECT id, title FROM sessions WHERE id = ?`).get(sessionId) as
-    { id: string; title: string } | undefined;
-  if (!session) return null;
-
-  const id = message.id ?? randomUUID();
-  const createdAt = message.createdAt ?? Date.now();
-  const status = message.status ?? "complete";
-
-  // 同 id 再插入（重新生成、断网重试、双击）不能抛 UNIQUE，也不能改写已有行。
-  // 会话或角色不一致时拒绝，避免把别的会话的消息吞掉。
-  const existing = database
-    .prepare(
-      `SELECT id, session_id AS sessionId, role, content, created_at AS createdAt, status,
-              tool_call_id AS toolCallId, tool_name AS toolName
-       FROM messages WHERE id = ?`,
-    )
-    .get(id) as
-    | {
-        id: string;
-        sessionId: string;
-        role: Role;
-        content: string;
-        createdAt: number;
-        status: MessageStatus | null;
-        toolCallId: string | null;
-        toolName: string | null;
-      }
-    | undefined;
-  if (existing) {
-    if (existing.sessionId !== sessionId || existing.role !== message.role) return null;
-    return {
-      id: existing.id,
-      role: existing.role,
-      content: existing.content,
-      createdAt: existing.createdAt,
-      status: existing.status ?? "complete",
-      ...(existing.toolCallId ? { tool_call_id: existing.toolCallId } : {}),
-      ...(existing.toolName ? { tool_name: existing.toolName } : {}),
-    };
-  }
-
-  const position = nextPosition(sessionId);
-
-  database
-    .prepare(
-      `INSERT INTO messages (id, session_id, role, content, created_at, status, position, tool_call_id, tool_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      id,
-      sessionId,
-      message.role,
-      message.content,
-      createdAt,
-      status,
-      position,
-      message.tool_call_id ?? null,
-      message.tool_name ?? null,
-    );
-
-  if (session.title === "New chat" && message.role === "user") {
-    const title = autoTitle(message.content);
-    database
-      .prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`)
-      .run(title, createdAt, sessionId);
-  } else {
-    touchSession(sessionId, createdAt);
-  }
-
-  return {
-    id,
-    role: message.role,
-    content: message.content,
-    createdAt,
-    status,
-    ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
-    ...(message.tool_name ? { tool_name: message.tool_name } : {}),
-  };
+  return sessionStore().addMessage(sessionId, message, { returnExisting: true });
 }
 
 export function updateMessage(
   messageId: string,
   patch: { content?: string; status?: MessageStatus },
 ): Message | null {
-  const database = openDb();
-  const existing = database
-    .prepare(
-      `SELECT id, session_id AS sessionId, role, content, created_at AS createdAt, status
-       FROM messages WHERE id = ?`,
-    )
-    .get(messageId) as
-    | {
-        id: string;
-        sessionId: string;
-        role: Role;
-        content: string;
-        createdAt: number;
-        status: MessageStatus | null;
-      }
-    | undefined;
-
-  if (!existing) return null;
-
-  const content = patch.content ?? existing.content;
-  const status = patch.status ?? existing.status ?? "complete";
-
-  database
-    .prepare(`UPDATE messages SET content = ?, status = ? WHERE id = ?`)
-    .run(content, status, messageId);
-
-  touchSession(existing.sessionId);
-
-  return {
-    id: existing.id,
-    role: existing.role,
-    content,
-    createdAt: existing.createdAt,
-    status,
-  };
+  return sessionStore().updateMessage(messageId, patch);
 }
 
 export function deleteMessage(messageId: string): boolean {
-  const database = openDb();
-  const existing = database
-    .prepare(`SELECT session_id AS sessionId FROM messages WHERE id = ?`)
-    .get(messageId) as { sessionId: string } | undefined;
-
-  if (!existing) return false;
-
-  database.prepare(`DELETE FROM messages WHERE id = ?`).run(messageId);
-  touchSession(existing.sessionId);
-  return true;
+  return sessionStore().deleteMessage(messageId);
 }
 
 export function ensureSession(

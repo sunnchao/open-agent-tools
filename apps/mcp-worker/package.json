@@ -33,6 +33,7 @@
     "@aws-sdk/client-s3": "catalog:",
     "@aws-sdk/s3-request-presigner": "catalog:",
     "@modelcontextprotocol/sdk": "catalog:",
+    "@open-agent-tools/api-contracts": "workspace:*",
     "@open-agent-tools/database": "workspace:*",
     "@open-agent-tools/mcp-auth": "workspace:*",
     "@open-agent-tools/mcp-contracts": "workspace:*",

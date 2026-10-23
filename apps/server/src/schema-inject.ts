@@ -15,6 +15,7 @@ import path from "node:path";
 import {
   renderSkeleton,
   renderTableSchemaTiered,
+  estimateTokens,
   searchTables,
   type SchemaCatalog,
 } from "@open-agent-tools/schema-catalog";
@@ -208,11 +209,4 @@ export function buildSchemaInjection(query: string | undefined): SchemaInjection
     tableNames,
     estimatedTokens: estimateTokens(text),
   };
-}
-
-/** 简易 token 估算（与 schema-catalog render.estimateTokens 同构）。 */
-function estimateTokens(text: string): number {
-  const cjk = (text.match(/[\u4e00-\u9fff]/g) ?? []).length;
-  const ascii = text.length - cjk;
-  return Math.ceil(cjk * 1.1 + ascii / 4);
 }

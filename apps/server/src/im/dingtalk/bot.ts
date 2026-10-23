@@ -1,9 +1,7 @@
 import type { ImBotHandle, ImConfig } from "../types.js";
-import { buildImSessionId } from "../types.js";
+import { answerImMessage } from "../answerMessage.js";
 import { askChat } from "../chatClient.js";
-import { chunkText } from "../text.js";
-import { recordImChatAudit } from "../audit.js";
-import { logDebugDuration, logTrace } from "../../trace.js";
+import { logTrace } from "../../trace.js";
 import { parseDingTalkMessagePayload, type DingTalkMessagePayload } from "./message.js";
 import { DingTalkStreamClient, type DingTalkStreamClientOptions } from "./streamClient.js";
 
@@ -76,130 +74,10 @@ export async function startDingTalkBot(
       text: event.text.slice(0, 120),
     });
 
-    const askChatStartedAt = Date.now();
-    // 会话 id 规则见 im/types.ts 的 buildImSessionId：私聊按用户隔离，群聊共享上下文。
-    const sessionId = buildImSessionId(
-      "dingtalk",
-      event.chatId,
-      event.chatType,
-      event.senderOpenId,
-    );
-    const actor = event.senderOpenId;
-    const actorName = event.senderName;
-    try {
-      const answer = await ask({
-        baseUrl: config.chatBaseUrl,
-        question: event.text,
-        sessionId,
-        sources: config.ragSources,
-        topK: config.ragTopK,
-        sqlSources: config.sqlSources,
-        mcpTools: config.mcpTools,
-        ...(config.workspaceId ? { workspaceId: config.workspaceId } : {}),
-        im: {
-          ...(config.channelId ? { channelId: config.channelId } : {}),
-          ...(actor ? { actor } : {}),
-          chatType: event.chatType,
-        },
-      });
-      logDebugDuration("im.dingtalk.ask_chat", askChatStartedAt, {
-        chatId: event.chatId,
-        contentLength: answer.content.length,
-      });
-      const parts = chunkText(answer.content);
-      if (parts.length === 0) {
-        await reply(payload, "（没有生成回答内容）");
-        audit({
-          sessionId,
-          question: event.text,
-          answer: "",
-          status: "ok",
-          durationMs: Date.now() - askChatStartedAt,
-          actor,
-          actorName,
-          chatType: event.chatType,
-          conversationId: event.chatId,
-          toolCalls: answer.toolCalls.length,
-          citations: answer.citations,
-        });
-        return;
-      }
-      for (const part of parts) {
-        await reply(payload, part);
-      }
-      audit({
-        sessionId,
-        question: event.text,
-        answer: answer.content,
-        status: "ok",
-        durationMs: Date.now() - askChatStartedAt,
-        actor,
-        actorName,
-        chatType: event.chatType,
-        conversationId: event.chatId,
-        toolCalls: answer.toolCalls.length,
-        citations: answer.citations,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logTrace("im.dingtalk.chat_error", { error: message }, "error");
-      await reply(payload, `抱歉，处理失败：${message.slice(0, 300)}`);
-      audit({
-        sessionId,
-        question: event.text,
-        answer: "",
-        status: "error",
-        error: message,
-        durationMs: Date.now() - askChatStartedAt,
-        actor,
-        actorName,
-        chatType: event.chatType,
-        conversationId: event.chatId,
-      });
-    }
-  }
-
-  /**
-   * 写 IM 会话审计。**写审计失败绝不能影响回复**：这里只吞异常并记日志。
-   */
-  function audit(input: {
-    sessionId: string;
-    question: string;
-    answer: string;
-    status: "ok" | "error";
-    error?: string;
-    durationMs: number;
-    actor?: string | null;
-    /** 对话者昵称（钉钉 senderNick；缺失时为 null）。 */
-    actorName?: string | null;
-    chatType: "p2p" | "group";
-    conversationId: string;
-    toolCalls?: number;
-    citations?: number;
-  }): void {
-    try {
-      recordImChatAudit({
-        channelId: config.channelId ?? null,
-        channelName: config.name,
-        platform: "dingtalk",
-        sessionId: input.sessionId,
-        workspace: config.workspaceId ?? null,
-        // actor 为平台用户 id（senderStaffId），actorName 为 senderNick（调试版可能缺失，保持 null）。
-        actor: input.actor ?? null,
-        actorName: input.actorName ?? null,
-        chatType: input.chatType,
-        conversationId: input.conversationId,
-        question: input.question,
-        answer: input.answer,
-        status: input.status,
-        error: input.error ?? null,
-        durationMs: input.durationMs,
-        toolCalls: input.toolCalls ?? 0,
-        citations: input.citations ?? 0,
-      });
-    } catch (auditError) {
-      logTrace("im.dingtalk.audit_error", { error: String(auditError) }, "error");
-    }
+    await answerImMessage(config, event, {
+      askChat: ask,
+      reply: (text) => reply(payload, text),
+    });
   }
 
   /** 通过 sessionWebhook 回复文本；所有失败只记录日志，不影响长连接。 */

@@ -1,4 +1,5 @@
 import type { RemoteServiceConfig } from "@open-agent-tools/mcp-contracts";
+import { parseMcpResponseBody } from "@open-agent-tools/mcp-contracts/response";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
@@ -208,7 +209,7 @@ export class RemoteMcpProxy {
       if (!response.ok) {
         throw new RemoteMcpError(`Remote MCP responded with status ${response.status}`);
       }
-      return parseBody(text, response.headers.get("content-type"));
+      return parseMcpResponseBody(text, response.headers.get("content-type"));
     } catch (error) {
       if (error instanceof RemoteMcpError) throw error;
       if (error instanceof Error && error.name === "AbortError") {
@@ -253,23 +254,4 @@ function normalizeTools(
           ? (tool.inputSchema as Record<string, unknown>)
           : { type: "object" },
     }));
-}
-
-/** 解析上游响应：JSON 直返，或 SSE（data: 行）中的最后一个 JSON 负载。 */
-function parseBody(text: string, contentType: string | null): unknown {
-  if (text.length === 0) return null;
-  if (
-    contentType?.includes("text/event-stream") ||
-    text.startsWith("event:") ||
-    text.startsWith("data:")
-  ) {
-    const payloads = text
-      .split("\n")
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice("data:".length).trim())
-      .filter((line) => line.length > 0);
-    if (payloads.length === 0) return null;
-    return JSON.parse(payloads[payloads.length - 1]!);
-  }
-  return JSON.parse(text);
 }

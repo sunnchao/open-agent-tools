@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import type { CaliberConfigInput, DraftSlots } from "@open-agent-tools/query-resolver";
+import { httpErrorStatus as errorStatus } from "../httpErrors.js";
 import { resolveCaliberQuery } from "../caliber/service.js";
 import {
   createCaliberConfig,
@@ -41,11 +42,6 @@ function configPayload(body: unknown): Partial<Omit<CaliberConfigRecordInput, "i
     ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
     ...(typeof value.isDefault === "boolean" ? { isDefault: value.isDefault } : {}),
   };
-}
-
-function errorStatus(error: unknown): number {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("not found") ? 404 : 400;
 }
 
 caliberRouter.get("/api/caliber-configs", (_req: Request, res: Response) => {

@@ -8,11 +8,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { enrichNewApiCatalog } from "../src/dict/newapi.js";
 import type { SchemaCatalog } from "../src/types.js";
-
-function argValue(args: string[], key: string): string | undefined {
-  const i = args.indexOf(key);
-  return i >= 0 ? args[i + 1] : undefined;
-}
+import { argValue } from "./args.js";
 
 async function main() {
   const args = process.argv.slice(2);

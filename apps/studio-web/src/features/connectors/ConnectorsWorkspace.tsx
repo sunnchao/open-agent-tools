@@ -46,6 +46,7 @@ import {
   type ConnectorSyncRun,
   type ConnectorType,
 } from "./api.js";
+import { errorMessage as errorText } from "@open-agent-tools/api-contracts/values";
 
 interface FormState {
   id?: string;
@@ -107,7 +108,9 @@ function draftFromForm(form: FormState): ConnectorDraft {
   };
 }
 
-function connectorBadge(status: ConnectorRecord["lastStatus"]): "success" | "processing" | "error" | "default" {
+function connectorBadge(
+  status: ConnectorRecord["lastStatus"],
+): "success" | "processing" | "error" | "default" {
   if (status === "success") return "success";
   if (status === "partial") return "processing";
   if (status === "error") return "error";
@@ -280,11 +283,7 @@ export function ConnectorsWorkspace() {
           <Button icon={<PlusOutlined />} type="primary" onClick={startCreate}>
             新建
           </Button>
-          <Button
-            icon={<ReloadOutlined />}
-            disabled={busy !== null}
-            onClick={() => void refresh()}
-          >
+          <Button icon={<ReloadOutlined />} disabled={busy !== null} onClick={() => void refresh()}>
             刷新
           </Button>
         </>
@@ -509,21 +508,17 @@ export function ConnectorsWorkspace() {
             </Form>
           </Card>
 
-          <Card
-            size="small"
-            title="最近同步结果"
-            extra={<Tag>{runs.length}</Tag>}
-          >
+          <Card size="small" title="最近同步结果" extra={<Tag>{runs.length}</Tag>}>
             <Table<ConnectorSyncRun>
               size="small"
               rowKey="id"
               columns={runColumns}
               dataSource={runs}
-              pagination={
-                runs.length > 10 ? { pageSize: 10, showSizeChanger: false } : false
-              }
+              pagination={runs.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
               scroll={{ x: "max-content" }}
-              locale={{ emptyText: <Empty description="尚无同步记录,点击「立即同步」试运行一次。" /> }}
+              locale={{
+                emptyText: <Empty description="尚无同步记录,点击「立即同步」试运行一次。" />,
+              }}
             />
           </Card>
         </Flex>
@@ -543,8 +538,4 @@ function runNote(run: ConnectorSyncRun): string {
     return run.failures.map((failure) => `${failure.externalId}: ${failure.reason}`).join("; ");
   }
   return "—";
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

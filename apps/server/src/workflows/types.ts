@@ -1,5 +1,6 @@
-import { migrateLegacyGraphNodes } from "@open-agent-tools/workflow-contracts";
+import { graphToRunNodes } from "@open-agent-tools/workflow-contracts";
 import type { WorkflowEdgeInput, WorkflowNodeInput } from "../workflow/executor.js";
+export { graphToRunNodes };
 
 export interface WorkflowCanvasNode {
   id: string;
@@ -97,16 +98,4 @@ export interface WorkflowRunEventRecord {
 export interface WorkflowRunSnapshot {
   runId: string;
   graph: WorkflowGraph;
-}
-
-export function graphToRunNodes(graph: WorkflowGraph): WorkflowNodeInput[] {
-  // DB 里保存的旧草稿/已发布版本仍可能含 kind:"graph"。这里是「版本图 → 执行器」的唯一
-  // 入口，先统一迁移成 rag 节点，保证已发布旧版本在升级后仍能运行（迁移幂等）。
-  const data = graph.nodes.map((node) => ({
-    id: node.id,
-    kind: node.data.kind,
-    label: node.data.label,
-    config: node.data.config,
-  }));
-  return migrateLegacyGraphNodes(data);
 }

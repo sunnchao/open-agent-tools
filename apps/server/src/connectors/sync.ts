@@ -1,3 +1,4 @@
+import { errorMessage } from "@open-agent-tools/api-contracts/values";
 import { connectorFor } from "./registry.js";
 import { ragDocumentUploader, type ConnectorDocumentUploader } from "./ragUpload.js";
 import {
@@ -129,8 +130,4 @@ export async function runConnectorSync(
   });
   updateConnectorSyncState(connector.id, { status, lastSyncedAt: finishedAt });
   return run;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

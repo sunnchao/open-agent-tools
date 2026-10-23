@@ -1,4 +1,10 @@
+import { requestJson } from "@open-agent-tools/studio-client";
 import { studioFetch } from "../../lib/client.js";
+export {
+  connectorStatusLabel as statusLabel,
+  linesToPatterns,
+  patternsToText,
+} from "@open-agent-tools/studio-client";
 
 export type ConnectorType = "http" | "local-dir" | "feishu" | "yuque" | "confluence";
 export type ConnectorSyncStatus = "idle" | "success" | "partial" | "error";
@@ -112,37 +118,8 @@ export const CONNECTOR_BASE_URL_HINTS: Record<ConnectorType, string> = {
   confluence: "站点地址,如 https://team.atlassian.net/wiki",
 };
 
-/** 多行文本 <-> 过滤规则数组的互转(每行一条)。 */
-export function linesToPatterns(text: string): string[] {
-  return [
-    ...new Set(
-      text
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
-
-export function patternsToText(patterns: string[]): string {
-  return patterns.join("\n");
-}
-
-export function statusLabel(status: ConnectorSyncStatus | null): string {
-  if (status === "success") return "成功";
-  if (status === "partial") return "部分成功";
-  if (status === "error") return "失败";
-  return "未同步";
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await studioFetch(path, init);
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `HTTP ${response.status}`);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return requestJson<T>(studioFetch, path, init);
 }
 
 export function fetchConnectors(): Promise<ConnectorRecord[]> {

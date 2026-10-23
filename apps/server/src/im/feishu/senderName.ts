@@ -1,4 +1,5 @@
 import { logTrace } from "../../trace.js";
+import { trimmedString as normalizeFeishuUserName } from "@open-agent-tools/api-contracts/values";
 
 /**
  * 通讯录姓名解析所需的最小客户端能力（`lark.Client` 的结构子集）。
@@ -64,11 +65,7 @@ function writeCache(openId: string, name: string | null, ttlMs: number, now: num
 }
 
 /** 归一化通讯录姓名：非空裁剪，缺失/空白返回 null（不臆造）。 */
-export function normalizeFeishuUserName(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
+export { normalizeFeishuUserName };
 
 export interface ResolveFeishuSenderNameOptions {
   /** 通讯录接口超时（毫秒），默认 3000；超时返回 null，不阻塞问答。 */

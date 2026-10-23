@@ -6,6 +6,7 @@ import {
   fetchWorkflowRunEvents,
 } from "./api.js";
 import type { WorkflowSnapshot } from "./types.js";
+import { setStudioApiToken, setWorkspaceId } from "../../lib/client.js";
 
 const snapshot: WorkflowSnapshot = { name: "Test", nodes: [], edges: [] };
 
@@ -14,6 +15,31 @@ afterEach(() => {
 });
 
 describe("workflow management API client", () => {
+  it("reads current authentication and workspace settings for every shared-client request", async () => {
+    const settings = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => settings.get(key) ?? null,
+      setItem: (key: string, value: string) => settings.set(key, value),
+    });
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ workflows: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    setStudioApiToken("token-1");
+    setWorkspaceId("ws-1");
+    await fetchWorkflows();
+    setStudioApiToken("token-2");
+    setWorkspaceId("ws-2");
+    await fetchWorkflows();
+    for (const [index, token, workspace] of [
+      [0, "token-1", "ws-1"],
+      [1, "token-2", "ws-2"],
+    ] as const) {
+      expect(fetchMock.mock.calls[index]?.[0]).toBe("/api/workflows");
+      const headers = new Headers(fetchMock.mock.calls[index]?.[1]?.headers);
+      expect(headers.get("authorization")).toBe(`Bearer ${token}`);
+      expect(headers.get("x-workspace-id")).toBe(workspace);
+    }
+  });
+
   it("reads Studio replay through the scoped management route and propagates cancellation", async () => {
     const payload = { run: { id: "run/1" }, events: [], graph: snapshot };
     const fetchMock = vi

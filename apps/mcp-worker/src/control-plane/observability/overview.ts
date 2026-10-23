@@ -1,5 +1,4 @@
 import type { AuditService } from "../audit.js";
-import type { AuditEventRecord } from "../audit-repository.js";
 import { ManagementError, type McpManagementService } from "../management.js";
 import type { Actor, BuildJobSummary } from "../types.js";
 import { summarizeAuditEvents, type AuditStats } from "./audit-stats.js";
@@ -135,7 +134,7 @@ export class ObservabilityService {
    * 工具 SLA 面板数据源:按「服务 + 工具」聚合成功/失败、时延分位与错误 Top N。
    *
    * 复用既有审计数据(每次 Gateway 请求都会落库),先按 action 过滤出工具调用,
-   * 再逐条读取完整事件以解析工具名与错误详情。单次扫描上限由 toolSlaScanLimit
+   * 再批量读取完整事件以解析工具名与错误详情。单次扫描上限由 toolSlaScanLimit
    * 控制(默认 200),因此窗口内的较早事件可能被截断,报告中会给出 scan.truncated。
    */
   async toolSla(
@@ -148,12 +147,11 @@ export class ObservabilityService {
     const window = resolveSlaWindow(query.window);
     const limit = this.#toolSlaScanLimit;
     const summaries = await this.#audit.list({ limit, action: TOOL_CALL_ACTION }, actor);
-    // list 与 get 之间事件可能已被清理,单条缺失不应让整块面板失败。
-    const events = (
-      await Promise.all(
-        summaries.map((summary) => this.#audit.get(summary.id, actor).catch(() => null)),
-      )
-    ).filter((event): event is AuditEventRecord => event !== null);
+    // 两次读取之间可能清理事件；批量接口会跳过缺失项，并保留摘要顺序。
+    const events = await this.#audit.getMany(
+      summaries.map((summary) => summary.id),
+      actor,
+    );
     return summarizeToolSla(events, {
       window,
       now: this.#now(),

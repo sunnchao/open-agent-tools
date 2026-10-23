@@ -1,6 +1,7 @@
 import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { isRecord } from "@open-agent-tools/api-contracts/values";
 import { ManagedMcpManifestSchema, type ManagedMcpManifest } from "@open-agent-tools/mcp-contracts";
 
 export type NodePackageValidationCode =
@@ -36,10 +37,6 @@ export interface ValidatedNodeToolPackage {
   packageLock: JsonObject;
 }
 
-function isJsonObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 async function readRequiredJson(root: string, name: string): Promise<unknown> {
   const path = resolve(root, name);
   let contents: string;
@@ -71,15 +68,15 @@ async function readRequiredJson(root: string, name: string): Promise<unknown> {
 }
 
 function validatePackageLock(packageJson: JsonObject, packageLock: unknown): JsonObject {
-  if (!isJsonObject(packageLock)) {
+  if (!isRecord(packageLock)) {
     throw new NodePackageValidationError(
       "INVALID_LOCKFILE",
       "package-lock.json must contain a JSON object",
     );
   }
 
-  const rootPackage = isJsonObject(packageLock.packages) ? packageLock.packages[""] : undefined;
-  if (![2, 3].includes(packageLock.lockfileVersion as number) || !isJsonObject(rootPackage)) {
+  const rootPackage = isRecord(packageLock.packages) ? packageLock.packages[""] : undefined;
+  if (![2, 3].includes(packageLock.lockfileVersion as number) || !isRecord(rootPackage)) {
     throw new NodePackageValidationError(
       "INVALID_LOCKFILE",
       "package-lock.json must be npm lockfile version 2 or 3",
@@ -137,7 +134,7 @@ export async function readNodeToolPackage(root: string): Promise<ValidatedNodeTo
     );
   }
 
-  if (!isJsonObject(packageJsonValue)) {
+  if (!isRecord(packageJsonValue)) {
     throw new NodePackageValidationError(
       "INVALID_PACKAGE_JSON",
       "package.json must contain a JSON object",
@@ -152,7 +149,7 @@ export async function readNodeToolPackage(root: string): Promise<ValidatedNodeTo
 
   if (manifestResult.data.build !== undefined) {
     const scripts = packageJsonValue.scripts;
-    if (!isJsonObject(scripts) || typeof scripts.build !== "string" || scripts.build.length === 0) {
+    if (!isRecord(scripts) || typeof scripts.build !== "string" || scripts.build.length === 0) {
       throw new NodePackageValidationError(
         "MISSING_BUILD_SCRIPT",
         "package.json must define scripts.build when mcp.json declares a build",

@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { appAccessToken } from "../appAccess.js";
 import {
   createPublishedApp,
   deletePublishedApp,
@@ -16,14 +17,6 @@ import { resolveWorkspace } from "../workspace.js";
 import { gatewayConnectionDetails } from "../trustedIdentity.js";
 
 export const publishedAppsRouter: ReturnType<typeof Router> = Router();
-
-/** 访问口令可走请求头或 query（分享链接形态）。 */
-function appAccessToken(req: Request): string | null {
-  const header = req.header("x-app-access-token")?.trim();
-  if (header) return header;
-  const query = req.query.access_token;
-  return typeof query === "string" && query.trim() ? query.trim() : null;
-}
 
 function parseSuggestions(value: unknown): PublishedAppInput["suggestions"] {
   if (!Array.isArray(value)) return undefined;

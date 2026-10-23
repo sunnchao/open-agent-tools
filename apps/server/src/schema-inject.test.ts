@@ -1,5 +1,9 @@
-import { test } from "node:test";
+import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { SchemaCatalog } from "@open-agent-tools/schema-catalog";
 import {
   detectIntent,
   detectRowLimitIntent,
@@ -8,10 +12,51 @@ import {
   rowLimitClarifying,
 } from "./schema-inject.js";
 
-test("loadCatalog 能加载 enriched catalog", () => {
+const originalCatalogPath = process.env.SCHEMA_CATALOG_PATH;
+let fixtureDirectory: string;
+before(() => {
+  fixtureDirectory = mkdtempSync(join(tmpdir(), "schema-injection-"));
+  const collectedAt = "2026-01-01T00:00:00.000Z";
+  const fixture: SchemaCatalog = {
+    source: "mysql",
+    database: "fixture",
+    collectedAt,
+    tables: ["users", "tokens", "logs"].map((name) => ({
+      table: { name, schema: "fixture", collectedAt, comment: name === "users" ? "用户" : name },
+      columns: (name === "users" ? ["id", "username", "display_name"] : ["id"]).map((column) => ({
+        table: name,
+        schema: "fixture",
+        name: column,
+        columnType: "varchar(64)",
+        nullable: false,
+        isPrimary: column === "id",
+        isUnique: false,
+        hasIndex: false,
+        sensitivity: "normal",
+        tier: "common",
+        comment: column === "username" ? "登录名" : column,
+      })),
+      relations: [],
+      enums: [],
+      samples: [],
+    })),
+  };
+  process.env.SCHEMA_CATALOG_PATH = join(fixtureDirectory, "catalog.json");
+  writeFileSync(process.env.SCHEMA_CATALOG_PATH, JSON.stringify(fixture));
+});
+after(() => {
+  if (originalCatalogPath === undefined) delete process.env.SCHEMA_CATALOG_PATH;
+  else process.env.SCHEMA_CATALOG_PATH = originalCatalogPath;
+  rmSync(fixtureDirectory, { recursive: true, force: true });
+});
+
+test("loadCatalog 能从配置路径加载 enriched catalog", () => {
   const catalog = loadCatalog();
   assert.ok(catalog, "catalog 应可加载");
-  assert.ok(catalog.tables.length >= 20);
+  assert.deepEqual(
+    catalog.tables.map((entry) => entry.table.name),
+    ["users", "tokens", "logs"],
+  );
   // 验证字典增强生效：users 表有注释
   const users = catalog.tables.find((t) => t.table.name === "users");
   assert.ok(users?.table.comment?.includes("用户"));

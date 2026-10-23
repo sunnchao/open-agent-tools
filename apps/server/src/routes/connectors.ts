@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { errorMessage as errorText } from "@open-agent-tools/api-contracts/values";
 import { runConnectorSync } from "../connectors/sync.js";
 import {
   createConnector,
@@ -132,7 +133,3 @@ connectorsRouter.get("/api/admin/connectors/:id/runs", (req: Request, res: Respo
   const limit = Number(req.query.limit);
   res.json({ runs: listSyncRuns(id, Number.isFinite(limit) ? limit : 10) });
 });
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

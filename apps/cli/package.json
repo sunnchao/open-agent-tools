@@ -17,12 +17,17 @@
     "format:check": "prettier --check .",
     "test": "tsx --test src/*.test.ts src/**/*.test.ts",
     "render:demo": "tsx scripts/markdown-demo.ts",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "predev": "pnpm --filter @open-agent-tools/database build",
+    "prebuild": "pnpm --filter @open-agent-tools/database build",
+    "pretest": "pnpm --filter @open-agent-tools/database build",
+    "pretypecheck": "pnpm --filter @open-agent-tools/database build"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.84.1",
     "@earendil-works/pi-coding-agent": "0.84.1",
     "@modelcontextprotocol/sdk": "catalog:",
+    "@open-agent-tools/database": "workspace:*",
     "chalk": "catalog:",
     "dotenv": "catalog:",
     "marked": "^15.0.12",

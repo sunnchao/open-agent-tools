@@ -1,4 +1,4 @@
-import { Button } from "antd";
+import { Button, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { IM_PLATFORM_LABELS } from "../im/api.js";
 
@@ -48,6 +48,43 @@ export function formatTime(value: string): string {
   if (!value) return "—";
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+export function excerptColumn<T>(options: {
+  title: string;
+  dataIndex: Extract<keyof T, string>;
+  secondary?: boolean;
+}): ColumnsType<T>[number] {
+  return {
+    title: options.title,
+    dataIndex: options.dataIndex,
+    key: options.dataIndex,
+    ellipsis: true,
+    render: (value: unknown) => (
+      <Typography.Text
+        type={options.secondary ? "secondary" : undefined}
+        style={{ fontSize: 12 }}
+        ellipsis
+        title={typeof value === "string" ? value : undefined}
+      >
+        {typeof value === "string" && value ? value : "—"}
+      </Typography.Text>
+    ),
+  };
+}
+
+export function durationColumn<T extends { durationMs: number }>(
+  format: (value: number) => string,
+): ColumnsType<T>[number] {
+  return {
+    title: "耗时",
+    dataIndex: "durationMs",
+    key: "durationMs",
+    width: 90,
+    render: (value: number) => (
+      <Typography.Text style={{ fontSize: 12 }}>{format(value)}</Typography.Text>
+    ),
+  };
 }
 
 export function detailColumn<T extends { id: string }>(

@@ -14,6 +14,14 @@ assertRagAuthConfigured();
 
 const config = readServerConfig();
 const runtime = createRuntime(config);
+// 进程重启/OOM/Ctrl-C 会让抽取中的来源永久停在 building：它既不算 missing 也不算
+// stale，reconcile 永远不会重试。启动时先复位，让对账能把缺的图补回来。
+const stuckSources = runtime.knowledge.graph.resetStuckSources();
+if (stuckSources.length > 0) {
+  console.warn(
+    `[rag-server] reset ${stuckSources.length} stuck graph source(s): ${stuckSources.join(", ")}`,
+  );
+}
 const server = createApp(config, runtime).listen(config.port, config.host, () => {
   const capabilities = runtime.capabilities;
   console.log(`[rag-server] api listening on http://${config.host}:${config.port}`);

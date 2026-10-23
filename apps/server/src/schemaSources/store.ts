@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeStringList, parseJsonStringList } from "@open-agent-tools/api-contracts/values";
 import { createMysqlPool } from "@open-agent-tools/database/mysql";
 import { createPostgresPool } from "@open-agent-tools/database/postgres";
 import { openDb } from "../db.js";
@@ -102,18 +103,6 @@ function isSyncStatus(value: unknown): value is SchemaSourceSyncStatus {
   return value === "idle" || value === "syncing" || value === "ready" || value === "error";
 }
 
-function normalizeFilters(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [
-    ...new Set(
-      value
-        .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
-
 function normalizeConnectionString(value: string, connector?: SchemaSourceConnector): string {
   const connectionString = value.trim();
   if (!connectionString) throw new Error("connectionString is required");
@@ -143,14 +132,6 @@ function endpointOf(
   return schemaName?.trim() ? `${endpoint}#${schemaName.trim()}` : endpoint;
 }
 
-function parseFilters(raw: string): string[] {
-  try {
-    return normalizeFilters(JSON.parse(raw) as unknown);
-  } catch {
-    return [];
-  }
-}
-
 function rowToSource(
   row: SchemaSourceRow,
   includeSecret = false,
@@ -166,7 +147,7 @@ function rowToSource(
     endpoint: endpointOf(connectionString, row.database_name, row.schema_name),
     ...schemaSourceConnectionMetadata(connectionString, row.database_name),
     schemaName: row.schema_name,
-    tableFilter: parseFilters(row.table_filter_json),
+    tableFilter: parseJsonStringList(row.table_filter_json),
     semanticProfile: isProfile(row.semantic_profile) ? row.semantic_profile : "generic",
     enabled: row.enabled === 1,
     isDefault: row.is_default === 1,
@@ -228,7 +209,7 @@ function environmentSource(): SchemaSourceWithSecret | null {
     endpoint: endpointOf(normalized, databaseName, schemaName),
     ...schemaSourceConnectionMetadata(normalized, databaseName),
     schemaName,
-    tableFilter: normalizeFilters(process.env.SCHEMA_SOURCE_TABLE_FILTER?.split(",")),
+    tableFilter: normalizeStringList(process.env.SCHEMA_SOURCE_TABLE_FILTER?.split(",")),
     semanticProfile: isProfile(process.env.SCHEMA_SOURCE_PROFILE)
       ? process.env.SCHEMA_SOURCE_PROFILE
       : "oneapi",
@@ -319,7 +300,7 @@ export function createSchemaSource(input: SchemaSourceInput): SchemaSource {
       encryptConfigSecret(connectionString),
       databaseName,
       schemaName,
-      JSON.stringify(normalizeFilters(input.tableFilter)),
+      JSON.stringify(normalizeStringList(input.tableFilter)),
       semanticProfile,
       input.enabled === false ? 0 : 1,
       shouldDefault && input.enabled !== false ? 1 : 0,
@@ -380,7 +361,7 @@ export function updateSchemaSource(
       input.schemaName === undefined ? current.schema_name : input.schemaName?.trim() || null,
       input.tableFilter === undefined
         ? current.table_filter_json
-        : JSON.stringify(normalizeFilters(input.tableFilter)),
+        : JSON.stringify(normalizeStringList(input.tableFilter)),
       semanticProfile,
       enabled ? 1 : 0,
       now(),

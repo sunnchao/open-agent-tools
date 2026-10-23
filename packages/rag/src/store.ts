@@ -20,6 +20,16 @@ import {
 export interface SqliteStoreOptions {
   /** SQLite 数据库文件路径，如 "./rag.db"。 */
   dbPath: string;
+  /**
+   * Number of vector rows loaded per scan. Batching bounds the temporary candidate
+   * memory while preserving the existing brute-force cosine search.
+   */
+  vectorScanBatchSize?: number;
+  /**
+   * Candidate count below which one ordered SQL read is cheaper than repeated scans.
+   * This remains a bounded raw-row limit; larger candidate sets use `vectorScanBatchSize`.
+   */
+  vectorScanEagerRowLimit?: number;
 }
 
 interface ChunkRow {
@@ -29,6 +39,41 @@ interface ChunkRow {
   chunk_index: number;
   content: string;
   embedding: Uint8Array;
+}
+
+interface RankedChunk {
+  chunk: Chunk;
+  score: number;
+  order: number;
+}
+
+function isWorse(a: RankedChunk, b: RankedChunk): boolean {
+  return a.score < b.score || (a.score === b.score && a.order > b.order);
+}
+
+/** Keep the worst retained hit at the root; equal scores retain the original query order. */
+function retainTopK(heap: RankedChunk[], hit: RankedChunk, k: number): void {
+  if (heap.length < k) {
+    let index = heap.length;
+    heap.push(hit);
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      if (!isWorse(hit, heap[parent]!)) break;
+      heap[index] = heap[parent]!;
+      index = parent;
+    }
+    heap[index] = hit;
+  } else if (hit.score > heap[0]!.score) {
+    let index = 0;
+    while (index * 2 + 1 < heap.length) {
+      let child = index * 2 + 1;
+      if (child + 1 < heap.length && isWorse(heap[child + 1]!, heap[child]!)) child++;
+      if (!isWorse(heap[child]!, hit)) break;
+      heap[index] = heap[child]!;
+      index = child;
+    }
+    heap[index] = hit;
+  }
 }
 
 interface DocumentRow {
@@ -86,7 +131,10 @@ function toDocument(r: DocumentRow): DocumentInfo {
     semanticThreshold: r.semantic_threshold,
     ocrApplied: (r.ocr_applied ?? 0) === 1,
     ocrStatus:
-      status === "ocr" || status === "ocr_needed" || status === "ocr_failed" || status === "text_layer"
+      status === "ocr" ||
+      status === "ocr_needed" ||
+      status === "ocr_failed" ||
+      status === "text_layer"
         ? status
         : "none",
     createdAt: r.created_at,
@@ -102,8 +150,20 @@ function toDocument(r: DocumentRow): DocumentInfo {
  */
 export class SqliteVectorStore implements VectorStore {
   private db: DatabaseSync;
+  private vectorScanBatchSize: number;
+  private vectorScanEagerRowLimit: number;
 
   constructor(opts: SqliteStoreOptions) {
+    const batchSize = opts.vectorScanBatchSize ?? 1024;
+    if (!Number.isSafeInteger(batchSize) || batchSize <= 0) {
+      throw new RangeError("vectorScanBatchSize must be a positive safe integer");
+    }
+    this.vectorScanBatchSize = batchSize;
+    const eagerRowLimit = opts.vectorScanEagerRowLimit ?? 8192;
+    if (!Number.isSafeInteger(eagerRowLimit) || eagerRowLimit < 0) {
+      throw new RangeError("vectorScanEagerRowLimit must be a non-negative safe integer");
+    }
+    this.vectorScanEagerRowLimit = eagerRowLimit;
     this.db = new DatabaseSync(opts.dbPath);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.db.exec(`
@@ -232,18 +292,94 @@ export class SqliteVectorStore implements VectorStore {
   vectorSearch(embedding: number[], k: number, sources?: readonly string[]): ScoredChunk[] {
     if (sources?.length === 0) return [];
     const sourceFilter = sources ? ` AND source IN (${sources.map(() => "?").join(", ")})` : "";
-    const rows = this.db
-      .prepare(
-        `SELECT rowid, id, source, chunk_index, content, embedding FROM chunks
-         WHERE embedding IS NOT NULL${sourceFilter}`,
-      )
-      .all(...(sources ?? [])) as unknown as ChunkRow[];
+    const where = `embedding IS NOT NULL${sourceFilter}`;
     const q = Float32Array.from(embedding);
-    return rows
-      .map((r) => ({ chunk: toChunk(r), score: cosine(q, deserializeF32(r.embedding)) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, k)
-      .map((e) => ({ ...e.chunk, score: e.score }));
+    const allRows = () =>
+      this.db
+        .prepare(
+          `SELECT rowid, id, source, chunk_index, content, embedding FROM chunks
+           WHERE ${where}`,
+        )
+        .all(...(sources ?? [])) as unknown as ChunkRow[];
+    const sortAll = () => {
+      return allRows()
+        .map((r) => ({ chunk: toChunk(r), score: cosine(q, deserializeF32(r.embedding)) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, k)
+        .map((e) => ({ ...e.chunk, score: e.score }));
+    };
+    const count = this.db
+      .prepare(`SELECT COUNT(*) AS count FROM chunks WHERE ${where}`)
+      .get(...(sources ?? [])) as { count: number };
+    // Preserve slice coercion for legacy limits; sorting is sufficient when all rows are requested.
+    if (!Number.isInteger(k) || k <= 0 || k >= Number(count.count)) return sortAll();
+    const heap: RankedChunk[] = [];
+    let order = 0;
+    const consume = (rows: ChunkRow[]): boolean => {
+      for (const row of rows) {
+        const score = cosine(q, deserializeF32(row.embedding));
+        // NaN/Infinity changes the full-sort comparator order; retain that exceptional fallback.
+        if (!Number.isFinite(score)) return false;
+        if (heap.length < k || score > heap[0]!.score) {
+          retainTopK(heap, { chunk: toChunk(row), score, order }, k);
+        }
+        order += 1;
+      }
+      return true;
+    };
+    const finishHeap = () =>
+      heap
+        .sort((a, b) => b.score - a.score || a.order - b.order)
+        .map(({ chunk, score }) => ({ ...chunk, score }));
+    // Small candidate sets are faster with SQLite's native sort than with repeated scans
+    // or a JavaScript heap; the unconditional row cap keeps this fast path memory-bounded.
+    if (Number(count.count) <= this.vectorScanEagerRowLimit) return sortAll();
+    if (sources) {
+      // The legacy query uses idx_chunks_source for source filters, which yields sources
+      // in B-tree order. Scanning each source separately preserves that tie order while
+      // keeping both the query and loaded candidate set bounded.
+      const sourceRows = this.db
+        .prepare(
+          `SELECT DISTINCT source FROM chunks
+           WHERE embedding IS NOT NULL AND source IN (${sources.map(() => "?").join(", ")})
+           ORDER BY source`,
+        )
+        .all(...sources) as unknown as Array<{ source: string }>;
+      const scanSource = this.db.prepare(
+        `SELECT rowid, id, source, chunk_index, content, embedding FROM chunks
+         WHERE embedding IS NOT NULL AND source = ? AND rowid > ?
+         ORDER BY rowid
+         LIMIT ?`,
+      );
+      for (const { source } of sourceRows) {
+        let cursor = 0;
+        while (true) {
+          const rows = scanSource.all(
+            source,
+            cursor,
+            this.vectorScanBatchSize,
+          ) as unknown as ChunkRow[];
+          if (rows.length === 0) break;
+          if (!consume(rows)) return sortAll();
+          cursor = rows[rows.length - 1]!.rowid;
+        }
+      }
+    } else {
+      const scan = this.db.prepare(
+        `SELECT rowid, id, source, chunk_index, content, embedding FROM chunks
+         WHERE embedding IS NOT NULL AND rowid > ?
+         ORDER BY rowid
+         LIMIT ?`,
+      );
+      let cursor = 0;
+      while (true) {
+        const rows = scan.all(cursor, this.vectorScanBatchSize) as unknown as ChunkRow[];
+        if (rows.length === 0) break;
+        if (!consume(rows)) return sortAll();
+        cursor = rows[rows.length - 1]!.rowid;
+      }
+    }
+    return finishHeap();
   }
 
   /**

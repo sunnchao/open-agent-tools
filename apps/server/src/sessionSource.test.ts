@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
+  addMessage,
   closeDb,
   createSession,
   ensureSession,
   listSessions,
   listSessionsWithMessages,
   openDb,
+  touchSession,
 } from "./db.js";
 import { createWorkspace } from "./workspace.js";
 
@@ -110,5 +112,43 @@ describe("session source and workspace isolation", () => {
       web.map((session) => session.id),
       ["web-2"],
     );
+  });
+
+  it("replays selected workspaces and sources in two queries with message position order", (t) => {
+    const wsA = createWorkspace({ name: "A" });
+    const wsB = createWorkspace({ name: "B" });
+    createSession({ id: "a-web", workspaceId: wsA.id });
+    createSession({ id: "a-empty", workspaceId: wsA.id });
+    createSession({ id: "a-im", workspaceId: wsA.id, source: "im" });
+    createSession({ id: "b-web", workspaceId: wsB.id });
+    const user = addMessage("a-web", { role: "user", content: "first", createdAt: 20 });
+    const tool = addMessage("a-web", {
+      role: "tool",
+      content: "second",
+      createdAt: 10,
+      status: "stopped",
+      tool_call_id: "call",
+      tool_name: "search",
+    });
+    addMessage("a-im", { role: "user", content: "im only" });
+    addMessage("b-web", { role: "user", content: "other workspace" });
+    touchSession("a-empty", 30);
+    const prepares = t.mock.method(openDb(), "prepare");
+    const selected = listSessionsWithMessages(wsA.id);
+    assert.equal(prepares.mock.callCount(), 2);
+    assert.deepEqual(
+      selected.map((session) => session.id),
+      ["a-empty", "a-web"],
+    );
+    assert.deepEqual(selected[0]?.messages, []);
+    assert.deepEqual(selected[1]?.messages, [user, tool]);
+    assert.deepEqual(
+      listSessionsWithMessages(wsA.id, { source: "im" }).map((session) => session.id),
+      ["a-im"],
+    );
+    assert.equal(listSessionsWithMessages(wsA.id, { source: "all" }).length, 3);
+    prepares.mock.resetCalls();
+    assert.deepEqual(listSessionsWithMessages("missing-workspace"), []);
+    assert.equal(prepares.mock.callCount(), 1);
   });
 });

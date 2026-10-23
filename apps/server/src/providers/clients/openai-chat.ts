@@ -1,6 +1,7 @@
-import { OpenAI } from "openai";
+import type { OpenAI } from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions/completions";
 import type { ProviderWithKey } from "../store.js";
+import { createOpenAIClient } from "./openai-client.js";
 import type {
   LlmClient,
   LlmCompleteResult,
@@ -35,9 +36,9 @@ function toChatCompletionMessage(message: LlmMessage): ChatCompletionMessagePara
   }
 }
 
-function toToolDefinitions(tools: LlmToolDefinition[]): NonNullable<
-  Parameters<OpenAI["chat"]["completions"]["create"]>[0]["tools"]
-> {
+function toToolDefinitions(
+  tools: LlmToolDefinition[],
+): NonNullable<Parameters<OpenAI["chat"]["completions"]["create"]>[0]["tools"]> {
   return tools.map((tool) => ({
     type: "function",
     function: { name: tool.name, description: tool.description, parameters: tool.parameters },
@@ -52,13 +53,6 @@ export class OpenAIChatClient implements LlmClient {
 
   constructor(private readonly provider: ProviderWithKey) {}
 
-  private client(): OpenAI {
-    return new OpenAI({
-      apiKey: this.provider.apiKey ?? "",
-      baseURL: this.provider.baseUrl,
-    });
-  }
-
   async streamChat(params: {
     model: string;
     messages: LlmMessage[];
@@ -70,7 +64,7 @@ export class OpenAIChatClient implements LlmClient {
     const completionMessages = messages
       .map(toChatCompletionMessage)
       .filter((m): m is ChatCompletionMessageParam => m !== null);
-    const stream = await this.client().chat.completions.create(
+    const stream = await createOpenAIClient(this.provider).chat.completions.create(
       {
         model,
         messages: completionMessages,
@@ -110,7 +104,9 @@ export class OpenAIChatClient implements LlmClient {
     const toolCalls = [...callsByIndex.entries()]
       .sort(([left], [right]) => left - right)
       .map(([, call], index) => ({ ...call, id: call.id ?? `call_${index}` }))
-      .filter((call): call is { id: string; name: string; arguments: string } => Boolean(call.name));
+      .filter((call): call is { id: string; name: string; arguments: string } =>
+        Boolean(call.name),
+      );
 
     return { content, toolCalls, tokenUsage: { inputTokens, outputTokens } };
   }
@@ -125,7 +121,7 @@ export class OpenAIChatClient implements LlmClient {
     const completionMessages = messages
       .map(toChatCompletionMessage)
       .filter((m): m is ChatCompletionMessageParam => m !== null);
-    const response = await this.client().chat.completions.create(
+    const response = await createOpenAIClient(this.provider).chat.completions.create(
       {
         model,
         messages: completionMessages,

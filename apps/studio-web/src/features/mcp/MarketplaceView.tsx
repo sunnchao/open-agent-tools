@@ -37,10 +37,7 @@ import {
   type McpScope,
 } from "./api.js";
 import { callGatewayTool } from "./gateway.js";
-
-function messageFrom(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason);
-}
+import { errorMessage as messageFrom } from "@open-agent-tools/api-contracts/values";
 
 function toolCountLabel(service: MarketplaceService): string {
   return service.toolsUnknown ? "Tools 未知" : `${service.toolCount ?? 0} Tools`;

@@ -1,0 +1,273 @@
+import type { MessageUsage } from "./chat.js";
+export interface DocumentSource {
+  source: string;
+  title: string;
+  tags: string[];
+  /** 可查看该文档的分组；空数组表示公开。 */
+  allowedGroups: string[];
+  mimeType: string;
+  byteSize: number;
+  contentHash: string;
+  chunks: number;
+  version: number;
+  chunkStrategy: ChunkStrategy;
+  chunkSize: number;
+  chunkOverlap: number;
+  separators: string[];
+  semanticThreshold: number | null;
+  /** 是否经 OCR 兜底生成；旧服务端缺字段时前端按 false 处理。 */
+  ocrApplied: boolean;
+  /** none | text_layer | ocr | ocr_needed | ocr_failed */
+  ocrStatus: OcrStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type OcrStatus = "none" | "text_layer" | "ocr" | "ocr_needed" | "ocr_failed";
+
+export interface DocumentStats {
+  sources: DocumentSource[];
+  chunks: number;
+  embeddingsEnabled: boolean;
+  llmAvailable: boolean;
+  ocrEnabled: boolean;
+  /** 部署级图谱检索总开关（RAG_GRAPH_RETRIEVAL）；旧服务端缺省按可用处理。 */
+  graphRetrieval?: boolean;
+  ocrMinCharsPerPage: number;
+  ocrMaxPagesSync: number;
+  chunkSize: number;
+  chunkOverlap: number;
+  chunkStrategy: ChunkStrategy;
+  separators: string[];
+  semanticThreshold: number;
+}
+
+export type ChunkStrategy = "fixed" | "semantic";
+
+export interface UploadDocumentSettings {
+  chunkSize: number;
+  chunkOverlap: number;
+  chunkStrategy: ChunkStrategy;
+  separators: string[];
+  semanticThreshold: number;
+}
+
+export interface QueryKnowledgeInput {
+  query: string;
+  topK: number;
+  generate: boolean;
+  sources?: string[];
+  /** false 显式关闭图谱第三路；缺省时由服务端按配置决定。 */
+  graph?: boolean;
+  graphHops?: number;
+  /** false 显式关闭关键词通道；与 graph:false 同时使用即为「仅向量」召回。 */
+  keyword?: boolean;
+}
+
+export interface ChunkInfo {
+  id: string;
+  source: string;
+  chunkIndex: number;
+  content: string;
+  length: number;
+  hasEmbedding: boolean;
+}
+
+export type RetrievalChannel = "vector" | "keyword" | "graph";
+
+export interface RetrievalChannelHit {
+  id: string;
+  source: string;
+  chunkIndex: number;
+  content: string;
+  score: number;
+  rank: number;
+}
+
+export interface GraphChannelHit extends RetrievalChannelHit {
+  seeds: string[];
+}
+
+export interface QueryChunkHit extends Omit<RetrievalChannelHit, "rank"> {
+  rank?: number;
+  debug?: {
+    vectorScore: number | null;
+    vectorRank: number | null;
+    keywordScore: number | null;
+    keywordRank: number | null;
+    /** 图谱通道原始分与排名；旧服务端或未启用图谱时缺省。 */
+    graphScore?: number | null;
+    graphRank?: number | null;
+    rrfScore: number;
+    channels: RetrievalChannel[];
+  };
+}
+
+export interface GraphQueryAugmentation {
+  enabled: boolean;
+  seeds: Array<{ id: string; name: string; type: string }>;
+  entities: number;
+  relations: number;
+  chunkHits: number;
+  context: string;
+}
+
+export interface RetrievalPayload {
+  store: string;
+  embeddingsEnabled: boolean;
+  candidates: number;
+  rrfK: number;
+  timingsMs: {
+    vectorMs: number | null;
+    keywordMs: number;
+    /** 图谱通道耗时；未启用时后端可能缺省。 */
+    graphMs?: number | null;
+    fusionMs: number;
+  };
+  vectorHits: RetrievalChannelHit[];
+  keywordHits: RetrievalChannelHit[];
+  /** 关键词通道是否参与本次检索；false 表示「仅向量」模式，旧服务端缺省按启用处理。 */
+  keywordEnabled?: boolean;
+  /** 图谱通道是否参与本次检索；旧服务端缺省时前端按未知处理。 */
+  graphEnabled?: boolean;
+  /** 融合前的图谱候选（含种子实体名），用于解释第三路召回。 */
+  graphHits?: GraphChannelHit[];
+}
+
+export interface QueryResult {
+  usage?: MessageUsage;
+  queryId: string;
+  query: string;
+  chunks: QueryChunkHit[];
+  /** 检索明细：与 chunks[].debug 同源，老服务端缺失时前端降级只展示 RRF。 */
+  retrieval?: RetrievalPayload;
+  /** 图谱增强结果；老服务端或显式关闭图谱时缺省。 */
+  graph?: GraphQueryAugmentation;
+  answer: string | null;
+  generate: boolean;
+  llmAvailable: boolean;
+}
+
+export type QueryDetailTraceHit = RetrievalChannelHit;
+
+export interface QueryDetailTraceChunk extends RetrievalChannelHit {
+  vectorScore: number | null;
+  vectorRank: number | null;
+  keywordScore: number | null;
+  keywordRank: number | null;
+  graphScore?: number | null;
+  graphRank?: number | null;
+  rrfScore: number;
+  channels: RetrievalChannel[];
+}
+
+export interface QueryDetail {
+  id: string;
+  query: string;
+  sources: string[];
+  sourceCount: number;
+  topK: number;
+  generate: boolean;
+  crag: boolean;
+  hitCount: number;
+  answerGenerated: boolean;
+  answer: string | null;
+  attribution: QueryAttribution;
+  assessment: string | null;
+  actions: string[];
+  latencyMs: number;
+  error: string | null;
+  createdAt: string;
+  feedback: QueryFeedbackRating | null;
+  feedbackComment: string | null;
+  trace: {
+    store: string;
+    embeddingsEnabled: boolean;
+    candidates: number;
+    rrfK: number;
+    timingsMs: {
+      vectorMs: number | null;
+      keywordMs: number;
+      graphMs?: number | null;
+      fusionMs: number;
+    };
+    visibleSources?: string[];
+    viewerGroups?: string[];
+    vectorHits: QueryDetailTraceHit[];
+    keywordHits: QueryDetailTraceHit[];
+    /** 关键词通道是否启用；仅「仅向量」模式写 false，旧 trace 缺省视为启用。 */
+    keywordEnabled?: boolean;
+    /** 图谱候选与序列化上下文；旧 trace 没有该字段。 */
+    graphEnabled?: boolean;
+    graphHits?: QueryDetailTraceHit[];
+    graphContext?: string | null;
+    fused: QueryDetailTraceChunk[];
+    formatted?: string | null;
+    answer?: string | null;
+    truncated: boolean;
+  } | null;
+}
+
+export type QueryFeedbackRating = "positive" | "negative";
+
+export type QueryAttribution =
+  | "no_documents"
+  | "retrieval_miss"
+  | "low_relevance"
+  | "model_refusal"
+  | "error"
+  | "answered"
+  | "unknown";
+
+export interface QualityReport {
+  periodDays: 7 | 30;
+  generatedAt: string;
+  totals: {
+    queries: number;
+    answered: number;
+    hits: number;
+    noAnswer: number;
+    hitRate: number;
+    noAnswerRate: number;
+  };
+  attribution: Record<QueryAttribution, number>;
+  topUnanswered: Array<{
+    query: string;
+    count: number;
+    attribution: Exclude<QueryAttribution, "answered" | "unknown">;
+  }>;
+  trend: Array<{
+    date: string;
+    queries: number;
+    answered: number;
+    noAnswer: number;
+    hitRate: number;
+    noAnswerRate: number;
+  }>;
+}
+
+export interface AnalyticsOverview {
+  periodDays: number;
+  totals: {
+    queries: number;
+    failed: number;
+    noHits: number;
+    noHitRate: number;
+    averageLatencyMs: number;
+    positiveFeedback: number;
+    negativeFeedback: number;
+    helpfulRate: number | null;
+  };
+  daily: Array<{ date: string; queries: number; noHits: number; failed: number }>;
+  topSources: Array<{ source: string; hits: number; queries: number }>;
+  recent: Array<{
+    id: string;
+    query: string;
+    hitCount: number;
+    latencyMs: number;
+    error: string | null;
+    feedback: QueryFeedbackRating | null;
+    attribution: QueryAttribution;
+    createdAt: string;
+  }>;
+}

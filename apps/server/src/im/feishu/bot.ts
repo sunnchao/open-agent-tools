@@ -1,12 +1,9 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { ImBotHandle, ImConfig } from "../types.js";
-import { buildImSessionId } from "../types.js";
-import { askChat } from "../chatClient.js";
-import { chunkText } from "../text.js";
+import { answerImMessage } from "../answerMessage.js";
 import { parseFeishuMessageEvent } from "./message.js";
-import { recordImChatAudit } from "../audit.js";
 import { resolveFeishuSenderName } from "./senderName.js";
-import { logDebugDuration, logTrace } from "../../trace.js";
+import { logTrace } from "../../trace.js";
 
 export type FeishuBotHandle = ImBotHandle;
 
@@ -47,8 +44,7 @@ export async function startFeishuBot(
   });
 
   const resolveName =
-    deps.resolveSenderName ??
-    ((openId: string) => resolveFeishuSenderName(restClient, openId));
+    deps.resolveSenderName ?? ((openId: string) => resolveFeishuSenderName(restClient, openId));
 
   const ws = new lark.WSClient({
     appId: config.appId,
@@ -84,131 +80,10 @@ export async function startFeishuBot(
       text: event.text.slice(0, 120),
     });
 
-    const askChatStartedAt = Date.now();
-    // 会话 id 规则见 im/types.ts 的 buildImSessionId：私聊按用户隔离，群聊共享上下文。
-    const sessionId = buildImSessionId("feishu", event.chatId, event.chatType, event.senderOpenId);
-    const actor = event.senderOpenId;
-    // 姓名解析与问答并行：通讯录延迟（默认 3s 超时）不拖慢回复；失败只留空，审计照常落 ID。
-    const actorNamePromise = actor ? resolveName(actor).catch(() => null) : Promise.resolve(null);
-    try {
-      const [answer, actorName] = await Promise.all([
-        askChat({
-          baseUrl: config.chatBaseUrl,
-          question: event.text,
-          sessionId,
-          sources: config.ragSources,
-          topK: config.ragTopK,
-          sqlSources: config.sqlSources,
-          mcpTools: config.mcpTools,
-          ...(config.workspaceId ? { workspaceId: config.workspaceId } : {}),
-          im: {
-            ...(config.channelId ? { channelId: config.channelId } : {}),
-            ...(actor ? { actor } : {}),
-            chatType: event.chatType,
-          },
-        }),
-        actorNamePromise,
-      ]);
-      logDebugDuration("im.feishu.ask_chat", askChatStartedAt, {
-        chatId: event.chatId,
-        contentLength: answer.content.length,
-      });
-      const parts = chunkText(answer.content);
-      if (parts.length === 0) {
-        await reply(event.messageId, "（没有生成回答内容）");
-        audit({
-          sessionId,
-          question: event.text,
-          answer: "",
-          status: "ok",
-          durationMs: Date.now() - askChatStartedAt,
-          actor,
-          actorName,
-          chatType: event.chatType,
-          conversationId: event.chatId,
-          toolCalls: answer.toolCalls.length,
-          citations: answer.citations,
-        });
-        return;
-      }
-      for (const part of parts) {
-        await reply(event.messageId, part);
-      }
-      audit({
-        sessionId,
-        question: event.text,
-        answer: answer.content,
-        status: "ok",
-        durationMs: Date.now() - askChatStartedAt,
-        actor,
-        actorName,
-        chatType: event.chatType,
-        conversationId: event.chatId,
-        toolCalls: answer.toolCalls.length,
-        citations: answer.citations,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logTrace("im.feishu.chat_error", { error: message }, "error");
-      // 问答失败时姓名解析可能仍在进行：等它落定（已缓存/超时，很快）再写审计。
-      const actorName = await actorNamePromise.catch(() => null);
-      await reply(event.messageId, `抱歉，处理失败：${message.slice(0, 300)}`);
-      audit({
-        sessionId,
-        question: event.text,
-        answer: "",
-        status: "error",
-        error: message,
-        durationMs: Date.now() - askChatStartedAt,
-        actor,
-        actorName,
-        chatType: event.chatType,
-        conversationId: event.chatId,
-      });
-    }
-  }
-
-  /**
-   * 写 IM 会话审计。**写审计失败绝不能影响回复**：这里只吞异常并记日志。
-   */
-  function audit(input: {
-    sessionId: string;
-    question: string;
-    answer: string;
-    status: "ok" | "error";
-    error?: string;
-    durationMs: number;
-    actor?: string | null;
-    /** 对话者姓名（通讯录解析；无权限/超时时为 null）。 */
-    actorName?: string | null;
-    chatType: "p2p" | "group";
-    conversationId: string;
-    toolCalls?: number;
-    citations?: number;
-  }): void {
-    try {
-      recordImChatAudit({
-        channelId: config.channelId ?? null,
-        channelName: config.name,
-        platform: "feishu",
-        sessionId: input.sessionId,
-        workspace: config.workspaceId ?? null,
-        // actor 为平台用户 id（open_id），actorName 为通讯录姓名（解析失败留空，不臆造）。
-        actor: input.actor ?? null,
-        actorName: input.actorName ?? null,
-        chatType: input.chatType,
-        conversationId: input.conversationId,
-        question: input.question,
-        answer: input.answer,
-        status: input.status,
-        error: input.error ?? null,
-        durationMs: input.durationMs,
-        toolCalls: input.toolCalls ?? 0,
-        citations: input.citations ?? 0,
-      });
-    } catch (auditError) {
-      logTrace("im.feishu.audit_error", { error: String(auditError) }, "error");
-    }
+    await answerImMessage(config, event, {
+      reply: (text) => reply(event.messageId, text),
+      resolveSenderName: resolveName,
+    });
   }
 
   async function reply(messageId: string, text: string): Promise<void> {

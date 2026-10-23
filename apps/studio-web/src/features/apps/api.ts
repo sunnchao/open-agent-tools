@@ -1,6 +1,7 @@
-import type { ChatRequestMessage, Message, MessageUsage, ToolCall } from "../../types.js";
-import { newId } from "../../lib/ids.js";
+import type { ChatRequestMessage, MessageUsage, ToolCall } from "../../types.js";
+import { localMessage as createLocalMessage } from "@open-agent-tools/studio-client";
 import { parseSseBuffer } from "../../lib/api.js";
+import { parseHttpError as parseError } from "@open-agent-tools/studio-client";
 
 export interface AppChatProfile {
   slug: string;
@@ -49,11 +50,6 @@ export function resolveAppAccessToken(slug: string): string | null {
 function accessHeaders(slug: string): Record<string, string> {
   const token = resolveAppAccessToken(slug);
   return token ? { "x-app-access-token": token } : {};
-}
-
-async function parseError(response: Response): Promise<string> {
-  const body = (await response.json().catch(() => ({}))) as { error?: string };
-  return body.error ?? `HTTP ${response.status}`;
 }
 
 /** 读取发布应用外观（终端用户入口，无需部署 token；口令模式需带 access_token）。 */
@@ -159,6 +155,4 @@ export function streamAppChat(
 }
 
 /** 本地消息构造（员工侧不需要持久化到 localStorage）。 */
-export function localMessage(role: Message["role"], content: string): Message {
-  return { id: newId(), role, content, createdAt: Date.now(), status: "complete" };
-}
+export const localMessage = createLocalMessage;

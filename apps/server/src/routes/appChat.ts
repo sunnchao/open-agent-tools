@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { appAccessToken } from "../appAccess.js";
 import { addMessage, ensureSession, updateMessage, type Role } from "../db.js";
 import { getPublishedAppBySlug, verifyAppAccess, type PublishedApp } from "../publishedApps.js";
 import { checkAppQuota } from "../appQuota.js";
@@ -9,6 +10,7 @@ import { createLlmClient } from "../providers/clients/index.js";
 import { normalizeResourceBindings } from "../resources.js";
 import { logDebugDuration, logTrace, truncate } from "../trace.js";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
+import { writeSseData } from "../sse.js";
 import { ChatTurnError, streamChatTurn, usageSnapshot, type ChatTurnUsage } from "./chatCore.js";
 import {
   identityMode,
@@ -23,14 +25,6 @@ interface AppChatBody {
   messages?: Array<{ role: Role; content: string }>;
   sessionId?: string;
   viewerGroups?: unknown;
-}
-
-/** 访问口令可走请求头或 query（分享链接形态），两者都支持便于嵌入与直接粘贴。 */
-function appAccessToken(req: Request): string | null {
-  const header = req.header("x-app-access-token")?.trim();
-  if (header) return header;
-  const query = req.query.access_token;
-  return typeof query === "string" && query.trim() ? query.trim() : null;
 }
 
 /**
@@ -189,7 +183,7 @@ appChatRouter.post("/api/apps/:slug/chat", async (req: Request, res: Response) =
     Connection: "keep-alive",
   });
   const send = (data: Record<string, unknown>) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    writeSseData(res, data);
   };
   if (assistantMessageId) send({ assistantMessageId });
 
@@ -222,7 +216,9 @@ appChatRouter.post("/api/apps/:slug/chat", async (req: Request, res: Response) =
             span,
             schemaSources,
             usageSource: "app_chat",
-            onUsage: (usage) => { turnUsage = usage; },
+            onUsage: (usage) => {
+              turnUsage = usage;
+            },
           });
           fullContent = result.fullContent;
           toolRounds = result.toolRounds;

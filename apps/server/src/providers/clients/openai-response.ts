@@ -1,6 +1,7 @@
-import { OpenAI } from "openai";
 import type { FunctionTool } from "openai/resources/responses/responses";
 import type { ProviderWithKey } from "../store.js";
+import { createOpenAIClient } from "./openai-client.js";
+import { finalizeToolCalls } from "./openai-tool-calls.js";
 import type {
   LlmClient,
   LlmCompleteResult,
@@ -79,13 +80,6 @@ export class OpenAIResponseClient implements LlmClient {
 
   constructor(private readonly provider: ProviderWithKey) {}
 
-  private client(): OpenAI {
-    return new OpenAI({
-      apiKey: this.provider.apiKey ?? "",
-      baseURL: this.provider.baseUrl,
-    });
-  }
-
   async streamChat(params: {
     model: string;
     messages: LlmMessage[];
@@ -95,7 +89,7 @@ export class OpenAIResponseClient implements LlmClient {
   }): Promise<LlmStreamResult> {
     const { model, messages, tools, signal, callbacks } = params;
     const { instructions, input } = toResponseInput(messages);
-    const stream = await this.client().responses.create(
+    const stream = await createOpenAIClient(this.provider).responses.create(
       {
         model,
         ...(instructions ? { instructions } : {}),
@@ -134,10 +128,7 @@ export class OpenAIResponseClient implements LlmClient {
       }
     }
 
-    const toolCalls = [...callsByIndex.entries()]
-      .sort(([left], [right]) => left - right)
-      .map(([, call]) => ({ ...call, id: call.id ?? `call_${Date.now()}` }))
-      .filter((call): call is { id: string; name: string; arguments: string } => Boolean(call.name));
+    const toolCalls = finalizeToolCalls(callsByIndex);
 
     return { content, toolCalls, tokenUsage: { inputTokens, outputTokens } };
   }
@@ -150,7 +141,7 @@ export class OpenAIResponseClient implements LlmClient {
   }): Promise<LlmCompleteResult> {
     const { model, messages, temperature, signal } = params;
     const { instructions, input } = toResponseInput(messages);
-    const response = await this.client().responses.create(
+    const response = await createOpenAIClient(this.provider).responses.create(
       {
         model,
         ...(instructions ? { instructions } : {}),

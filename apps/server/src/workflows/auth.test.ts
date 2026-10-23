@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { scryptSync } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +11,7 @@ import {
   createWorkflowApiKey,
   resetWorkflowRateLimitsForTest,
 } from "./auth.js";
-import { createWorkflow, revokeWorkflowApiKey } from "./store.js";
+import { createWorkflow, insertWorkflowApiKey, revokeWorkflowApiKey } from "./store.js";
 
 function requestWithKey(rawKey: string): Request {
   return {
@@ -77,5 +78,74 @@ describe("workflow API key auth", () => {
     const limited = await authorizeWorkflowRequest(requestWithKey(created.rawKey), workflow.app.id);
     assert.equal(limited.ok, false);
     if (!limited.ok) assert.equal(limited.status, 429);
+  });
+
+  it("authorizes historical workflow hashes while retaining key prefix and expiry checks", async () => {
+    const workflow = createWorkflow({ name: "Legacy auth" });
+    const id = "4d36e967-e325-11ce-bfc1-08002be10318";
+    const secret = Buffer.alloc(32, 7).toString("base64url");
+    const salt = Buffer.alloc(16, 9);
+    const derived = scryptSync(secret, salt, 32, {
+      N: 16_384,
+      r: 8,
+      p: 1,
+      maxmem: 64 * 1024 * 1024,
+    });
+    const keyHash = `scrypt$16384$8$1$${salt.toString("base64url")}$${derived.toString("base64url")}$legacy`;
+    const record = {
+      id,
+      workflowId: workflow.app.id,
+      name: "Legacy",
+      keyHash,
+      prefix: "wf.legacy...",
+      status: "ACTIVE" as const,
+      rateLimitPerMinute: 60,
+      expiresAt: null,
+      lastUsedAt: null,
+      createdAt: new Date().toISOString(),
+    };
+    insertWorkflowApiKey(record);
+    assert.equal(
+      (await authorizeWorkflowRequest(requestWithKey(`wf.${id}.${secret}`), workflow.app.id)).ok,
+      true,
+    );
+    assert.equal(
+      (await authorizeWorkflowRequest(requestWithKey(`mcp.${id}.${secret}`), workflow.app.id)).ok,
+      false,
+    );
+    assert.equal(
+      (
+        await authorizeWorkflowRequest(
+          requestWithKey(`wf.${id}.${Buffer.alloc(32, 8).toString("base64url")}`),
+          workflow.app.id,
+        )
+      ).ok,
+      false,
+    );
+    insertWorkflowApiKey({
+      ...record,
+      id: "4d36e967-e325-11ce-bfc1-08002be10319",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    assert.deepEqual(
+      await authorizeWorkflowRequest(
+        requestWithKey(`wf.4d36e967-e325-11ce-bfc1-08002be10319.${secret}`),
+        workflow.app.id,
+      ),
+      {
+        ok: false,
+        status: 401,
+        error: "workflow API key is inactive",
+      },
+    );
+  });
+
+  it("rejects missing and malformed Bearer credentials", async () => {
+    for (const header of [undefined, "", "Basic abc", "Bearer ", "Bearer wf.invalid.secret"]) {
+      const req = { header: () => header } as unknown as Request;
+      const result = await authorizeWorkflowRequest(req, "workflow");
+      assert.equal(result.ok, false);
+      if (!result.ok) assert.equal(result.status, 401);
+    }
   });
 });

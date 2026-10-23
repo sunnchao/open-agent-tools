@@ -20,6 +20,8 @@
     "@langchain/openai": "catalog:",
     "@langfuse/core": "catalog:",
     "@langfuse/langchain": "^5.10.0",
+    "@open-agent-tools/api-contracts": "workspace:*",
+    "@open-agent-tools/mcp-auth": "workspace:*",
     "@open-agent-tools/observability": "workspace:*",
     "@open-agent-tools/rag": "workspace:*",
     "cors": "catalog:",

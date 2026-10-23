@@ -16,7 +16,8 @@ import type {
   UsageEventRecord,
   UsageSummary,
 } from "./types.js";
-import { ManagementError, type Actor, type IdGenerator } from "./management.js";
+import { ManagementError, requireAdmin } from "./authorization.js";
+import type { Actor, IdGenerator } from "./management.js";
 
 const CreateClientSchema = z.object({ name: z.string().trim().min(1).max(120) }).strict();
 const CreateApiKeySchema = z
@@ -53,12 +54,6 @@ export interface ClientAccessServiceOptions {
 function publicKey(key: StoredApiKeyRecord): ApiKeyView {
   const { keyHash: _keyHash, ...view } = key;
   return view;
-}
-
-function requireAdmin(actor: Actor): void {
-  if (actor.role !== "admin") {
-    throw new ManagementError("FORBIDDEN", "This operation requires admin access");
-  }
 }
 
 function requireReader(actor: Actor): void {

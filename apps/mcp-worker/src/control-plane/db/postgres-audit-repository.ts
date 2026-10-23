@@ -1,4 +1,4 @@
-import { and, desc, eq, getTableColumns, ilike, type SQL } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, ilike, inArray, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { createPostgresConnection } from "@open-agent-tools/database/postgres";
 
@@ -50,6 +50,19 @@ export class PostgresAuditRepository implements AuditRepository {
       .where(eq(mcpAuditEvents.id, id))
       .limit(1);
     return row ?? null;
+  }
+
+  async getMany(ids: readonly string[]): Promise<AuditEventRecord[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.#db
+      .select()
+      .from(mcpAuditEvents)
+      .where(inArray(mcpAuditEvents.id, [...ids]));
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return ids.flatMap((id) => {
+      const row = byId.get(id);
+      return row ? [row] : [];
+    });
   }
 }
 

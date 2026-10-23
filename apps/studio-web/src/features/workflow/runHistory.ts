@@ -1,6 +1,35 @@
 import type { WorkflowNodeRunMeta } from "../../lib/api.js";
+import {
+  cachedNodesFromEvents,
+  prepareResumeCheckpoint,
+  type ResumeGraph,
+} from "@open-agent-tools/workflow-contracts";
 import type { WorkflowRunHistory } from "./api.js";
-import type { RunLogEntry } from "./types.js";
+import type { RunLogEntry, WorkflowSnapshot } from "./types.js";
+import { variableNodes } from "./variables.js";
+
+function resumeGraph(graph: WorkflowSnapshot): ResumeGraph {
+  return {
+    nodes: variableNodes(graph.nodes),
+    edges: graph.edges.map((edge) => ({
+      ...edge,
+      label: typeof edge.label === "string" ? edge.label : undefined,
+    })),
+  };
+}
+
+export function createResumeCheckpoint(
+  currentGraph: WorkflowSnapshot,
+  history: WorkflowRunHistory,
+  fromNodeId: string,
+) {
+  return prepareResumeCheckpoint(
+    resumeGraph(currentGraph),
+    resumeGraph(history.graph),
+    fromNodeId,
+    cachedNodesFromEvents(history.events),
+  );
+}
 
 /** Persisted public events use snake_case; reconstruct the same log shape as Studio SSE. */
 export function replayWorkflowRun(history: WorkflowRunHistory): {

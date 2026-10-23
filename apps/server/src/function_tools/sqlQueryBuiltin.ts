@@ -5,6 +5,7 @@
  */
 import { createMysqlPool, type MysqlPool } from "@open-agent-tools/database/mysql";
 import { createPostgresPool } from "@open-agent-tools/database/postgres";
+import { quotePostgresIdentifier } from "@open-agent-tools/schema-catalog";
 
 const BLOCKED =
   /\b(drop|truncate|delete|update|insert|alter|create|grant|revoke|copy|vacuum|rename|replace|load_file|outfile|dumpfile|sleep|benchmark|shutdown)\b/i;
@@ -159,10 +160,6 @@ export async function executeQuerySqlWithConnection(
   } finally {
     await sourcePool?.close();
   }
-}
-
-function quotePostgresIdentifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
 }
 
 /** 测试辅助：重置连接池。 */

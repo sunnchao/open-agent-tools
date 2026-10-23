@@ -1,95 +1,37 @@
+import type {
+  Role,
+  MessageStatus,
+  ToolCallStatus,
+  UiBlock,
+  ToolCall,
+  Message,
+  RagCitation,
+  McpToolBinding,
+  ChatResourceBinding,
+  Session,
+} from "@open-agent-tools/api-contracts/chat";
+export type {
+  Role,
+  MessageStatus,
+  ToolCallStatus,
+  SqlResultProps,
+  UiBlock,
+  ToolCall,
+  Message,
+  MessageUsage,
+  RagCitation,
+  McpToolBinding,
+  ChatResourceBinding,
+  Session,
+  ChatRequestMessage,
+} from "@open-agent-tools/api-contracts/chat";
+import { emptyChatResources } from "@open-agent-tools/api-contracts/chat";
+import { isRecord, normalizeStringList } from "@open-agent-tools/api-contracts/values";
+export { emptyChatResources };
 // 与 studio-web src/types.ts 同语义的跨端子集（RN 无 DOM 依赖）。
-export type Role = "user" | "assistant" | "system" | "tool";
-export type MessageStatus = "streaming" | "complete" | "error" | "stopped";
-export type ToolCallStatus = "pending" | "done" | "error";
-export interface MessageUsage {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  toolCalls: number;
-  toolErrors: number;
-}
-export interface RagCitation {
-  source: string;
-  chunkIndex: number;
-  content: string;
-  [key: string]: unknown;
-}
-export interface SqlStep {
-  id: string;
-  label: string;
-  status: "pending" | "running" | "succeeded" | "failed" | "skipped";
-  message?: string;
-}
-export interface SqlResultProps {
-  rows: Record<string, unknown>[];
-  sourceId?: string;
-  sourceName?: string;
-  question?: string;
-  sql?: string;
-  auditId?: string;
-  steps?: SqlStep[];
-  durationMs?: number;
-  truncated?: boolean;
-  clarifying?: string;
-}
-export type UiBlock =
-  | {
-      type: "financial_report_card";
-      props: { reports: Array<{ id: string; name: string; status: string }> };
-    }
-  | { type: "sql_result"; props: SqlResultProps }
-  | { type: string; [key: string]: unknown };
-export interface ToolCall {
-  id?: string;
-  name: string;
-  arguments: string;
-  result?: unknown;
-  ui?: UiBlock;
-  error?: string;
-  status?: ToolCallStatus;
-}
-export interface Message {
-  id: string;
-  role: Role;
-  content: string;
-  createdAt: number;
-  status?: MessageStatus;
-  errorMessage?: string;
-  toolCalls?: ToolCall[];
-  uiBlocks?: UiBlock[];
-  ragCitations?: RagCitation[];
-  usage?: MessageUsage;
-  tool_call_id?: string;
-  tool_name?: string;
-}
-export interface McpToolBinding {
-  serviceSlug: string;
-  toolName: string;
-}
-export interface ChatResourceBinding {
-  mcpTools: McpToolBinding[];
-  rag: { sources: string[]; topK: number };
-  sqlSources: string[];
-}
-export function emptyChatResources(): ChatResourceBinding {
-  return { mcpTools: [], rag: { sources: [], topK: 5 }, sqlSources: [] };
-}
-type UnknownRecord = Record<string, unknown>;
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function stringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [
-    ...new Set(
-      value
-        .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
+
+export type SqlStep = import("@open-agent-tools/api-contracts/observatory").QueryStep;
+
 function mcpToolList(value: unknown): McpToolBinding[] {
   if (!Array.isArray(value)) return [];
   const bindings = new Map<string, McpToolBinding>();
@@ -108,18 +50,9 @@ export function normalizeChatResources(value: unknown): ChatResourceBinding {
   const topK = Math.max(1, Math.min(20, Math.floor(Number(rag.topK) || 5)));
   return {
     mcpTools: mcpToolList(resources.mcpTools),
-    rag: { sources: stringList(rag.sources), topK },
-    sqlSources: stringList(resources.sqlSources),
+    rag: { sources: normalizeStringList(rag.sources), topK },
+    sqlSources: normalizeStringList(resources.sqlSources),
   };
-}
-export interface Session {
-  id: string;
-  title: string;
-  messages: Message[];
-  updatedAt: number;
-  resources: ChatResourceBinding;
-  providerId?: string;
-  model?: string;
 }
 
 const ROLES: Role[] = ["user", "assistant", "system", "tool"];
@@ -162,8 +95,7 @@ function normalizeMessage(value: unknown, index: number): Message | null {
       : null;
   if (!role) return null;
   const status =
-    typeof value.status === "string" &&
-    MESSAGE_STATUSES.includes(value.status as MessageStatus)
+    typeof value.status === "string" && MESSAGE_STATUSES.includes(value.status as MessageStatus)
       ? (value.status as MessageStatus)
       : undefined;
   const toolCalls = Array.isArray(value.toolCalls)
@@ -173,10 +105,7 @@ function normalizeMessage(value: unknown, index: number): Message | null {
     ? value.uiBlocks.filter(isRecord).map((item) => item as UiBlock)
     : [];
   return {
-    id:
-      typeof value.id === "string" && value.id.trim()
-        ? value.id.trim()
-        : `message-${index}`,
+    id: typeof value.id === "string" && value.id.trim() ? value.id.trim() : `message-${index}`,
     role,
     content: typeof value.content === "string" ? value.content : "",
     createdAt: finiteNumber(value.createdAt, Date.now()),
@@ -188,9 +117,7 @@ function normalizeMessage(value: unknown, index: number): Message | null {
       ? {
           ragCitations: value.ragCitations.filter(
             (item): item is RagCitation =>
-              isRecord(item) &&
-              typeof item.source === "string" &&
-              typeof item.content === "string",
+              isRecord(item) && typeof item.source === "string" && typeof item.content === "string",
           ),
         }
       : {}),
@@ -222,17 +149,14 @@ export function normalizeSession(value: unknown): Session {
     : [];
   return {
     id,
-    title:
-      typeof value.title === "string" && value.title.trim() ? value.title.trim() : "New chat",
+    title: typeof value.title === "string" && value.title.trim() ? value.title.trim() : "New chat",
     messages,
     updatedAt: finiteNumber(value.updatedAt, Date.now()),
     resources: normalizeChatResources(value.resources),
     ...(typeof value.providerId === "string" && value.providerId.trim()
       ? { providerId: value.providerId.trim() }
       : {}),
-    ...(typeof value.model === "string" && value.model.trim()
-      ? { model: value.model.trim() }
-      : {}),
+    ...(typeof value.model === "string" && value.model.trim() ? { model: value.model.trim() } : {}),
   };
 }
 
@@ -252,19 +176,9 @@ export function normalizeSessions(value: unknown): Session[] {
   }
   return sessions;
 }
-export interface ChatRequestMessage {
-  role: Role;
-  content: string;
-}
+
 export type WorkspaceTab =
-  | "chat"
-  | "mcp"
-  | "rag"
-  | "connectors"
-  | "observatory"
-  | "reports"
-  | "workflow"
-  | "settings";
+  "chat" | "mcp" | "rag" | "connectors" | "observatory" | "reports" | "workflow" | "settings";
 export const WORKSPACES: Array<{ id: WorkspaceTab; label: string; en: string }> = [
   { id: "chat", label: "对话", en: "Chat" },
   { id: "mcp", label: "MCP", en: "Toolkit" },

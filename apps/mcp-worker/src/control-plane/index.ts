@@ -1,12 +1,14 @@
 import { config as loadEnv } from "dotenv";
+import { createPostgresConnection } from "@open-agent-tools/database/postgres";
 import { createControlPlaneApp } from "./app.js";
 import { ArtifactUploadService } from "./artifact-upload.js";
 import { AuditService } from "./audit.js";
 import { createArtifactInspectionQueue } from "./build-queue.js";
 import { ClientAccessService } from "./client-access.js";
-import { createPostgresClientAccessRepository } from "./db/postgres-client-access-repository.js";
-import { createPostgresAuditRepository } from "./db/postgres-audit-repository.js";
-import { createPostgresRepository } from "./db/postgres-repository.js";
+import { PostgresClientAccessRepository } from "./db/postgres-client-access-repository.js";
+import { PostgresAuditRepository } from "./db/postgres-audit-repository.js";
+import { PostgresMcpManagementRepository } from "./db/postgres-repository.js";
+import * as schema from "./db/schema.js";
 import { McpManagementService } from "./management.js";
 import { createAlertLoop } from "./observability/alerts.js";
 import { ObservabilityService } from "./observability/overview.js";
@@ -35,11 +37,10 @@ function numberEnvironment(name: string, fallback: number): number {
 const databaseUrl = requiredEnvironment("DATABASE_URL");
 const redisUrl = requiredEnvironment("REDIS_URL");
 const artifactBucket = requiredEnvironment("ARTIFACT_S3_BUCKET");
-const { repository, close } = createPostgresRepository(databaseUrl);
-const { repository: clientAccessRepository, close: closeClientAccess } =
-  createPostgresClientAccessRepository(databaseUrl);
-const { repository: auditRepository, close: closeAudit } =
-  createPostgresAuditRepository(databaseUrl);
+const { database, close } = createPostgresConnection(databaseUrl, { schema });
+const repository = new PostgresMcpManagementRepository(database);
+const clientAccessRepository = new PostgresClientAccessRepository(database);
+const auditRepository = new PostgresAuditRepository(database);
 const management = new McpManagementService(repository);
 const clientAccess = new ClientAccessService(clientAccessRepository);
 const audit = new AuditService(auditRepository);
@@ -103,13 +104,7 @@ async function shutdown(): Promise<void> {
     server.close((error) => (error ? reject(error) : resolve()));
   });
   await audit.flush();
-  await Promise.all([
-    close(),
-    closeClientAccess(),
-    closeAudit(),
-    inspectionQueue.close(),
-    artifactStorage.close(),
-  ]);
+  await Promise.all([close(), inspectionQueue.close(), artifactStorage.close()]);
 }
 
 process.once("SIGINT", () => void shutdown().then(() => process.exit(0)));

@@ -1,6 +1,7 @@
 import type { AuditEventRecord } from "../audit-repository.js";
 import { ManagementError } from "../management.js";
 import { percentile } from "./audit-stats.js";
+import { roundTwoDecimals as round } from "./round.js";
 
 /**
  * 工具 SLA 聚合:只读取既有 mcp_audit_events(每次 Gateway MCP 请求都会落库),
@@ -38,10 +39,6 @@ export function resolveSlaWindow(value: unknown): SlaWindow {
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
-}
-
-function round(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 export interface ToolCallIdentity {

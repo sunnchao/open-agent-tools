@@ -87,13 +87,4 @@ export async function gatewayFetch(serviceSlug: string, init?: RequestInit): Pro
   return fetch(joinUrl(s.gatewayUrl, `/mcp/services/${encodeURIComponent(serviceSlug)}`), init);
 }
 
-export async function parseError(res: Response): Promise<string> {
-  try {
-    const body = (await res.json()) as { error?: string | { message?: string } };
-    if (typeof body.error === "string") return body.error;
-    if (body.error?.message) return body.error.message;
-  } catch {
-    /* ignore */
-  }
-  return `HTTP ${res.status}`;
-}
+export { parseHttpError as parseError } from "@open-agent-tools/studio-client";

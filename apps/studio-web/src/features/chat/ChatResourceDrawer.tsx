@@ -3,6 +3,7 @@ import { Alert, Button, Checkbox, Drawer, Empty, Slider, Spin } from "antd";
 import type { ChatResourceBinding, McpToolBinding } from "../../types.js";
 import type { ResourceCatalog } from "../resources/api.js";
 import { openMcpGatewaySettings } from "../settings/mcpGateway.js";
+import { sameMcpToolBinding as sameTool } from "@open-agent-tools/api-contracts/chat";
 
 interface ChatResourceDrawerProps {
   open: boolean;
@@ -13,10 +14,6 @@ interface ChatResourceDrawerProps {
   onClose: () => void;
   onRefresh: () => void;
   onChange: (resources: ChatResourceBinding) => void;
-}
-
-function sameTool(left: McpToolBinding, right: McpToolBinding): boolean {
-  return left.serviceSlug === right.serviceSlug && left.toolName === right.toolName;
 }
 
 export function ChatResourceDrawer({
@@ -177,7 +174,8 @@ export function ChatResourceDrawer({
                     <Checkbox
                       checked={resources.sqlSources.includes(source.id)}
                       disabled={
-                        !resources.sqlSources.includes(source.id) && resources.sqlSources.length >= 20
+                        !resources.sqlSources.includes(source.id) &&
+                        resources.sqlSources.length >= 20
                       }
                       onChange={(event) => toggleSqlSource(source.id, event.target.checked)}
                     />

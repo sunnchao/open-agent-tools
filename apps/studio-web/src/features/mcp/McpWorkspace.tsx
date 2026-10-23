@@ -74,7 +74,6 @@ import {
   type McpVersion,
   type RemoteProbeResult,
   type RemoteServiceConfigInput,
-  type RemoteTransport,
 } from "./api.js";
 import { callGatewayTool } from "./gateway.js";
 import { AuditView, BuildsView, ClientsView, type McpManagementView } from "./McpOperations.js";
@@ -82,6 +81,8 @@ import { MarketplaceView } from "./MarketplaceView.js";
 import { SlaPanel } from "./SlaPanel.js";
 import { DebugSandbox } from "./DebugSandbox.js";
 import { VersionLimits } from "./VersionLimits.js";
+import { formatBytes } from "../../lib/format.js";
+import { coerceValue, collectRemoteInput, parseHeadersJson } from "./mcpForms.js";
 
 type Asset = { kind: "tool"; value: McpTool } | { kind: "prompt"; value: McpPrompt };
 type AssetTab = "tools" | "prompts";
@@ -421,7 +422,8 @@ export function McpWorkspace() {
                         cursor: "pointer",
                         borderRadius: 8,
                         padding: "8px 12px",
-                        background: service.id === selectedId ? "var(--studio-selected)" : undefined,
+                        background:
+                          service.id === selectedId ? "var(--studio-selected)" : undefined,
                       }}
                     >
                       <List.Item.Meta
@@ -974,12 +976,6 @@ function VersionLifecycle({
   );
 }
 
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function shortDigest(value: string): string {
   return value.length > 20 ? `${value.slice(0, 16)}...` : value;
 }
@@ -1165,27 +1161,6 @@ function AssetInspector({
       ) : null}
     </Flex>
   );
-}
-
-function coerceValue(value: string, type?: string): unknown {
-  if (type === "number" || type === "integer") {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) throw new Error(`无法将 ${value} 转换为数字`);
-    return parsed;
-  }
-  if (type === "boolean") {
-    if (value !== "true" && value !== "false") throw new Error("布尔参数必须是 true 或 false");
-    return value === "true";
-  }
-  if (type === "object" || type === "array") {
-    try {
-      return JSON.parse(value) as unknown;
-    } catch {
-      throw new Error(`${type === "object" ? "对象" : "数组"}参数必须是合法 JSON`);
-    }
-  }
-  if (type === "null") return null;
-  return value;
 }
 
 function CodeBlock({ value }: { value: string }) {
@@ -1383,37 +1358,6 @@ function RemoteFields({ initialTokenNote = true }: { initialTokenNote?: boolean 
       </Form.Item>
     </>
   );
-}
-
-/** 解析请求头 JSON：空=undefined；须为 string→string 对象。 */
-function parseHeadersJson(text: string): Record<string, string> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text) as unknown;
-  } catch {
-    throw new Error("请求头须为合法 JSON 对象");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("请求头须为 JSON 对象");
-  }
-  const headers: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof value !== "string") throw new Error(`请求头 ${key} 的值须为字符串`);
-    headers[key] = value;
-  }
-  return headers;
-}
-
-function collectRemoteInput(values: Record<string, unknown>): RemoteServiceConfigInput {
-  const headersText = String(values.headersText ?? "").trim();
-  const token = String(values.token ?? "");
-  return {
-    transport: values.transport as RemoteTransport,
-    url: String(values.url ?? "").trim(),
-    timeoutMs: Number(values.timeoutMs ?? 30_000),
-    ...(headersText === "" ? {} : { headers: parseHeadersJson(headersText) }),
-    ...(token === "" ? {} : { token }),
-  };
 }
 
 function ProbeResult({ probe }: { probe: RemoteProbeResult }) {

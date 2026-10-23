@@ -1,4 +1,5 @@
 import { studioFetch } from "../../lib/client.js";
+import { parseHttpError as parseError } from "@open-agent-tools/studio-client";
 export type ImPlatform = "feishu" | "dingtalk";
 
 export const IM_PLATFORMS: ImPlatform[] = ["feishu", "dingtalk"];
@@ -63,11 +64,6 @@ export interface ImStatus {
   enabled: boolean;
   connected: boolean;
   channels: ImChannelMetadata[];
-}
-
-async function parseError(response: Response): Promise<string> {
-  const body = (await response.json().catch(() => ({}))) as { error?: string };
-  return body.error ?? `HTTP ${response.status}`;
 }
 
 export async function fetchImChannels(): Promise<ImChannelMetadata[]> {

@@ -1,6 +1,13 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { logTrace, logDuration, logDebug, logDebugDuration, maskSecret, truncate } from "./trace.js";
+import {
+  logTrace,
+  logDuration,
+  logDebug,
+  logDebugDuration,
+  maskSecret,
+  truncate,
+} from "./trace.js";
 
 describe("trace 工具", () => {
   const originalLog = console.log;
@@ -57,7 +64,8 @@ describe("trace 工具", () => {
     assert.match(line, /\[trace:error\] test\.fail/);
   });
 
-  test("logDuration:附带 durationMs 字段", () => {
+  test("logDuration:附带 durationMs 字段", (t) => {
+    t.mock.method(Date, "now", () => 1_000);
     logDuration("test.duration", Date.now() - 12);
     const line = lines[0] ?? "";
     assert.match(line, /test\.duration \{"durationMs":12\}/);
@@ -82,7 +90,8 @@ describe("trace 工具", () => {
     assert.equal(lines.length, 1);
   });
 
-  test("logDebugDuration:DEBUG=true 时附带 durationMs", () => {
+  test("logDebugDuration:DEBUG=true 时附带 durationMs", (t) => {
+    t.mock.method(Date, "now", () => 1_000);
     process.env.DEBUG = "true";
     logDebugDuration("test.debug.duration", Date.now() - 12, { stage: "sql" });
     const line = lines[0] ?? "";

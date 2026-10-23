@@ -44,12 +44,12 @@ MCP Client ---> MCP Gateway (4100) ---> PostgreSQL
 | RAG Server     | `@open-agent-tools/rag-server`        | Document ingestion, retrieval, and optional LLM answer API                                |
 | Contracts      | `@open-agent-tools/mcp-contracts`     | Shared Zod contracts for manifests, Prompts, jobs, and Runner I/O                         |
 | Auth           | `@open-agent-tools/mcp-auth`          | API Key generation, parsing, hashing, verification                                        |
-| Database       | `@open-agent-tools/database`          | Unified database layer: PostgreSQL / MySQL / Redis / Elasticsearch connection helpers    |
+| Database       | `@open-agent-tools/database`          | Unified database layer: PostgreSQL / MySQL / Redis / Elasticsearch connection helpers     |
 | Node.js Runner | `@open-agent-tools/mcp-nodejs-runner` | Loads handlers inside Tool containers and validates MCP results                           |
 
 Control Plane and Worker share `@open-agent-tools/mcp-worker`, not a process or permission boundary. Control Plane sources, including the admin entry, live in `apps/mcp-worker/src/control-plane/`; `src/control-plane/index.ts` compiles to `dist/control-plane/index.js`. The original `src/index.ts` -> `dist/index.js` remains background-only. BullMQ dispatch and isolated Tool containers are unchanged. The admin process needs no Docker socket, Runner image, or Registry access; only the background Worker receives those privileges. `apps/mcp-server` is outside the merge scope and remains structurally and behaviorally unchanged.
 
-The former `apps/mcp-control-plane` is no longer a workspace/package or source tree. Its tracked contents are only README redirects and `drizzle -> ../mcp-worker/drizzle` for consumers of legacy migration paths; do not modify Gateway files to remove that compatibility dependency.
+The former `apps/mcp-control-plane` directory and its compatibility symlink have been removed. The single migration history lives in `apps/mcp-worker/drizzle/`; use the Worker package's database commands. Gateway process and permission boundaries remain unchanged.
 
 The `apps/cli` coding agent runs on a Pi Agent base (`@earendil-works/pi-coding-agent`). `apps/cli/src/app/piRuntime.ts` wraps `createAgentSession`, bridging Pi events to the CLI's streaming callbacks, with HITL permission gating (`tool_call` event), MCP tool loading (`tools/mcpPi.ts`), memory tools (`tools/memoryPi.ts`), and an isolated read-only `task` subagent (`tools/subagentPi.ts`).
 
@@ -144,7 +144,7 @@ export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mcp_management
 pnpm --filter @open-agent-tools/mcp-worker db:migrate
 ```
 
-Generate new migrations after schema changes with `pnpm --filter @open-agent-tools/mcp-worker db:generate`. The old `apps/mcp-control-plane/drizzle` path is only a compatibility symlink to the new migration directory, not a separate migration history or package.
+Generate new migrations after schema changes with `pnpm --filter @open-agent-tools/mcp-worker db:generate`. Migration SQL and journal live only in `apps/mcp-worker/drizzle/`.
 
 Control Plane and Gateway must use the same database, or the Gateway cannot see published services and client grants.
 

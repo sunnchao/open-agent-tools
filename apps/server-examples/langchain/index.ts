@@ -8,8 +8,8 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 
-dotenv.config({ path: resolve(import.meta.dirname, "../../../.env") });
-dotenv.config({ path: resolve(import.meta.dirname, "../../../.env.local"), override: true });
+dotenv.config({ path: resolve(import.meta.dirname, "../.env") });
+dotenv.config({ path: resolve(import.meta.dirname, "../.env.local"), override: true });
 
 const createMyModel = async () => {
   const model = new ChatOpenAI({
@@ -66,9 +66,14 @@ const run = async () => {
   const textSplitter = new RecursiveCharacterTextSplitter({
     chunkOverlap: 20,
     chunkSize: 100,
-    separators: ["\n","\n\n", "。", "！", "?"],
+    separators: ["\n", "\n\n", "。", "！", "?"],
   });
-  const pdfLoader = new PDFLoader(resolve(import.meta.dirname, "../../docs/数字货运系统部署说明-V1.2.pdf"));
+  const pdfLoader = new PDFLoader(
+    resolve(
+      process.argv[2] ??
+        resolve(import.meta.dirname, "../../server/src/docs/数字货运系统部署说明-V1.2.pdf"),
+    ),
+  );
   const pdfContent = await pdfLoader.load();
   // 归一化 source 为相对路径，避免把机器相关的绝对路径写入生成产物
   for (const doc of pdfContent) {
@@ -76,10 +81,18 @@ const run = async () => {
       doc.metadata.source = "../../docs/数字货运系统部署说明-V1.2.pdf";
     }
   }
-  fs.writeFileSync(resolve(import.meta.dirname, "./pdf-content.json"), JSON.stringify(pdfContent, null, 2), "utf-8");
+  fs.writeFileSync(
+    resolve(import.meta.dirname, "./pdf-content.json"),
+    JSON.stringify(pdfContent, null, 2),
+    "utf-8",
+  );
   // 保存分块内容
   const pdfContentSplit = await textSplitter.splitDocuments(pdfContent);
-  fs.writeFileSync(resolve(import.meta.dirname, "./pdf-content-split.json"), JSON.stringify(pdfContentSplit, null, 2), "utf-8");
+  fs.writeFileSync(
+    resolve(import.meta.dirname, "./pdf-content-split.json"),
+    JSON.stringify(pdfContentSplit, null, 2),
+    "utf-8",
+  );
 };
 
 run();

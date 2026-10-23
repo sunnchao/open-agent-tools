@@ -144,25 +144,28 @@ export async function retrieve(
   }
   let vectorList: ScoredChunk[] = [];
   let vectorMs: number | null = null;
-  if (embeddings) {
+  const vectorTask = (async () => {
+    if (!embeddings) return;
     const started = Date.now();
     const qv = (await embeddings.embedDocuments([query]))[0] ?? [];
     vectorList = await store.vectorSearch(qv, candidates, sources);
     vectorMs = Date.now() - started;
-  }
+  })();
   let keywordList: ScoredChunk[] = [];
   let keywordMs = 0;
-  if (keywordEnabled) {
+  const keywordTask = (async () => {
+    if (!keywordEnabled) return;
     const keywordStarted = Date.now();
     keywordList = await store.keywordSearch(query, candidates, sources); // store 内部做 CJK 切分 + AND→OR 降级
     keywordMs = Date.now() - keywordStarted;
-  }
+  })();
 
   // 图谱通道独立计时与降级：图数据库故障不应把整次知识库检索拖垮。
   let graphList: GraphChannelHit[] = [];
   let graphMs: number | null = null;
   let graphAugmentation: GraphAugmentation | undefined;
-  if (graphSource) {
+  const graphTask = (async () => {
+    if (!graphSource) return;
     const graphStarted = Date.now();
     graphAugmentation = emptyGraphAugmentation();
     try {
@@ -204,6 +207,11 @@ export async function retrieve(
       graphAugmentation = emptyGraphAugmentation();
     }
     graphMs = Date.now() - graphStarted;
+  })();
+  // 等待已启动的读取结束，并按原有通道顺序抛错，避免关闭 store 后仍有后台读取。
+  const results = await Promise.allSettled([vectorTask, keywordTask, graphTask]);
+  for (const result of results) {
+    if (result.status === "rejected") throw result.reason;
   }
 
   const fusionStarted = Date.now();

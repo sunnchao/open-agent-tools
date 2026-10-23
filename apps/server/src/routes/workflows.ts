@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { validateWorkflow, WorkflowValidationError } from "../workflow/executor.js";
+import { writeSseData } from "../sse.js";
 import { workflowRedactor } from "../workflow/redaction.js";
 import { authorizeWorkflowRequest, createWorkflowApiKey } from "../workflows/auth.js";
 import { startPublishedWorkflow, stopPublishedWorkflow } from "../workflows/runtime.js";
@@ -463,7 +464,7 @@ workflowsRouter.post("/v1/workflows/:slug/run", async (req, res) => {
         runId,
         taskId,
         onEvent: (event: PublicWorkflowEvent) => {
-          if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(event)}\n\n`);
+          if (!res.writableEnded && !res.destroyed) writeSseData(res, event);
         },
       });
       await run.completion;
@@ -526,15 +527,13 @@ workflowsRouter.get("/v1/workflow-runs/:runId/events", async (req, res) => {
   });
   res.write("event: ping\n\n");
   for (const event of listWorkflowEvents(run.id, after)) {
-    res.write(
-      `data: ${JSON.stringify({
-        event: event.type,
-        task_id: run.taskId,
-        workflow_run_id: run.id,
-        sequence: event.sequence,
-        data: event.payload,
-      })}\n\n`,
-    );
+    writeSseData(res, {
+      event: event.type,
+      task_id: run.taskId,
+      workflow_run_id: run.id,
+      sequence: event.sequence,
+      data: event.payload,
+    });
   }
   res.end();
 });

@@ -12,6 +12,7 @@ export default tseslint.config(
       "pnpm-lock.yaml",
       "apps/cli/apps/**",
       "temp/**",
+      "output/**",
       ".omo/**",
       ".playwright-cli/**",
     ],

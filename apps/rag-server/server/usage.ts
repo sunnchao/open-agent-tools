@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { NextFunction, Request, Response } from "express";
+import { nonNegativeInteger } from "@open-agent-tools/api-contracts/values";
 
 type UsageSource = "rag_query" | "rag_graph";
 
@@ -212,10 +213,10 @@ export async function trackRagLlm<
           completionTokens?: number;
         }
       | undefined;
-    const finite = (value: number | undefined) =>
-      Number.isFinite(value) && (value ?? 0) > 0 ? Math.floor(value!) : 0;
-    event.inputTokens = finite(response.usage_metadata?.input_tokens ?? fallback?.promptTokens);
-    event.outputTokens = finite(
+    event.inputTokens = nonNegativeInteger(
+      response.usage_metadata?.input_tokens ?? fallback?.promptTokens,
+    );
+    event.outputTokens = nonNegativeInteger(
       response.usage_metadata?.output_tokens ?? fallback?.completionTokens,
     );
     context.usage.inputTokens += event.inputTokens;

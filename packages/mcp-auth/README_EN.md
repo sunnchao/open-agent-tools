@@ -34,6 +34,12 @@ interface CreatedApiKey {
 
 `secretSource` exists primarily for deterministic tests. Production code should use the default `randomBytes(32)` implementation.
 
+### Shared authentication primitives (Node.js)
+
+`@open-agent-tools/mcp-auth/primitives` exports `hashSecret`, `verifySecret`, `parseBearerToken`, and `tokensEqual` for MCP, workflow keys, and service deployment tokens. Business key prefixes, permissions, expiry, and rate limits stay with their callers. This entry point uses Node.js crypto and must not be imported into browser or React Native clients.
+
+`verifySecret` requires a six-part hash by default. The workflow verifier explicitly passes `{ allowTrailingFields: true }` to preserve its previous behavior; MCP verification remains strict.
+
 ## Example
 
 ```ts

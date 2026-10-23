@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isRecord } from "@open-agent-tools/api-contracts/values";
 import { logDebugDuration, logTrace, truncate } from "../trace.js";
 
 export type DecisionMode = "off" | "shadow" | "on";
@@ -108,10 +109,6 @@ export function readDecisionConfig(env: NodeJS.ProcessEnv = process.env): Decisi
   const baseUrl = env.AI_QUERY_DECISION_BASE_URL?.trim().replace(/\/+$/, "") || undefined;
   const catalogVersion = env.AI_QUERY_DECISION_CATALOG_VERSION?.trim() || undefined;
   return { mode: globalMode, gateAMode, baseUrl, timeoutMs, catalogVersion };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requiredString(value: unknown, field: string): string {

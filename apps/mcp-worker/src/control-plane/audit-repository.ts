@@ -14,6 +14,7 @@ export interface AuditRepository {
   create(event: AuditEventRecord): Promise<void>;
   list(query: AuditEventQuery): Promise<AuditEventSummary[]>;
   get(id: string): Promise<AuditEventRecord | null>;
+  getMany(ids: readonly string[]): Promise<AuditEventRecord[]>;
 }
 
 export class InMemoryAuditRepository implements AuditRepository {
@@ -39,5 +40,13 @@ export class InMemoryAuditRepository implements AuditRepository {
   async get(id: string): Promise<AuditEventRecord | null> {
     const event = this.events.find((item) => item.id === id);
     return event ? structuredClone(event) : null;
+  }
+
+  async getMany(ids: readonly string[]): Promise<AuditEventRecord[]> {
+    const byId = new Map(this.events.map((event) => [event.id, event]));
+    return ids.flatMap((id) => {
+      const event = byId.get(id);
+      return event ? [structuredClone(event)] : [];
+    });
   }
 }

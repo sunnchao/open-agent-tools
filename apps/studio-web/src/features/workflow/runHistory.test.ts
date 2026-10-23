@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { replayWorkflowRun } from "./runHistory.js";
+import { createResumeCheckpoint, replayWorkflowRun } from "./runHistory.js";
 import type { WorkflowRunHistory } from "./api.js";
+import { createEdge, createNode } from "./graph.js";
 
 const history: WorkflowRunHistory = {
   run: {
@@ -81,5 +82,34 @@ describe("persisted workflow replay", () => {
     });
     expect(result.log[0]).toMatchObject({ status: "error", detail: "required input missing" });
     expect(result.outputs).toBeNull();
+  });
+  it("builds the resume checkpoint from shared graph mappings and persisted events", () => {
+    const start = createNode("start", "start", { x: 0, y: 0 });
+    const llm = createNode("llm", "llm", { x: 0, y: 160 });
+    const graph = { name: "Current", nodes: [start, llm], edges: [createEdge("start", "llm")] };
+    const checkpoint = createResumeCheckpoint(
+      graph,
+      {
+        ...history,
+        graph,
+        events: [
+          {
+            runId: "r",
+            sequence: 0,
+            type: "node_finished",
+            payload: { node_id: "start", status: "success", outputs: {} },
+            createdAt: "",
+          },
+          ...history.events,
+        ],
+      },
+      "llm",
+    );
+
+    expect(checkpoint).toMatchObject({
+      fromNodeId: "llm",
+      executeNodeIds: ["llm"],
+      cachedNodes: { start: { outputs: {} } },
+    });
   });
 });

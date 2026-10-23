@@ -4,37 +4,21 @@ import {
   nodeConfigSchemas,
   portableHttpConfig,
   runVariables,
+  updateRunEdges,
+  variableNodes,
   workflowFileSchema,
   workflowGraphSchema,
+  type EdgeRunStates,
+  type EdgeRunStatus,
   type LegacyGraphNodeLike,
 } from "@open-agent-tools/workflow-contracts";
 import { createEdge, createNode, nodeInputs, nodeOutputs, snapshotGraph } from "./workflowModel";
-import type {
-  WorkflowEdge,
-  WorkflowNode,
-  WorkflowRunHistory,
-  WorkflowSnapshot,
-} from "./workflow";
+import type { WorkflowEdge, WorkflowNode, WorkflowRunHistory, WorkflowSnapshot } from "./workflow";
 
 // ---- nodeTest ----
-export function serializeNodeTestValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === undefined) return "";
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
-export function parseNodeTestValue(value: string): unknown {
-  const t = value.trim();
-  if (!t) return "";
-  try {
-    return JSON.parse(t) as unknown;
-  } catch {
-    return value;
-  }
-}
+import { serializeNodeTestValue } from "@open-agent-tools/workflow-contracts";
+export { serializeNodeTestValue, parseNodeTestValue } from "@open-agent-tools/workflow-contracts";
+
 export function createNodeTestInputDraft(
   data: { config: Record<string, unknown> },
   runOutputs: Record<string, Record<string, unknown>> | null,
@@ -68,17 +52,7 @@ export function formatWorkflowRunOutput(value: unknown): string {
 }
 
 // ---- runEdges ----
-export type EdgeRunStatus = "active" | "done" | "error";
-export type EdgeRunStates = Record<string, EdgeRunStatus>;
-export function updateRunEdges(
-  current: EdgeRunStates,
-  incomingEdgeIds: string[],
-  status: EdgeRunStatus,
-): EdgeRunStates {
-  const next = { ...current };
-  for (const id of incomingEdgeIds) next[id] = status;
-  return next;
-}
+export { updateRunEdges, type EdgeRunStates, type EdgeRunStatus };
 
 // ---- runHistory 回放 ----
 export interface RunLogEntry {
@@ -216,13 +190,7 @@ export function serializeWorkflow(
     version: 1,
     exportedAt,
     graph,
-    runVariables: runVariables(
-      graph.nodes.map((n) => ({
-        id: n.id,
-        kind: String((n.data as { kind?: string }).kind ?? ""),
-        config: (n.data as { config?: Record<string, unknown> }).config ?? {},
-      })),
-    ),
+    runVariables: runVariables(variableNodes(graph.nodes)),
   };
   const json = JSON.stringify(value, null, 2);
   if (new TextEncoder().encode(json).length > workflowFileSizeLimit)

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, getTableColumns, gte, inArray, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, inArray, ne, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { createPostgresConnection, isPostgresError } from "@open-agent-tools/database/postgres";
 import {
@@ -9,27 +9,15 @@ import {
 import type {
   BuildJobRecord,
   BuildJobSummary,
-  ClientQuotaRecord,
   ConfiguredPrompt,
   ConfiguredTool,
   MarketplaceService,
   McpServiceRecord,
   McpServiceVersionRecord,
   PublishedVersionResult,
-  UsageEventQuery,
-  UsageEventRecord,
-  UsageSummary,
 } from "../types.js";
 import * as schema from "./schema.js";
-import {
-  clientQuotas,
-  mcpBuildJobs,
-  mcpPrompts,
-  mcpServices,
-  mcpServiceVersions,
-  mcpTools,
-  usageEvents,
-} from "./schema.js";
+import { mcpBuildJobs, mcpPrompts, mcpServices, mcpServiceVersions, mcpTools } from "./schema.js";
 
 type Database = NodePgDatabase<typeof schema>;
 type ServiceRow = typeof mcpServices.$inferSelect;
@@ -123,42 +111,6 @@ function mapBuildJob(row: BuildJobRow): BuildJobRecord {
     finishedAt: row.finishedAt,
     updatedAt: row.updatedAt,
   };
-}
-
-function mapClientQuota(row: typeof clientQuotas.$inferSelect): ClientQuotaRecord {
-  return {
-    id: row.id,
-    clientId: row.clientId,
-    serviceId: row.serviceId,
-    qpsLimit: row.qpsLimit,
-    dailyCallLimit: row.dailyCallLimit,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function mapUsageEvent(row: typeof usageEvents.$inferSelect): UsageEventRecord {
-  return {
-    id: row.id,
-    clientId: row.clientId,
-    serviceId: row.serviceId,
-    versionId: row.versionId,
-    toolName: row.toolName,
-    requestId: row.requestId,
-    status: row.status,
-    createdAt: row.createdAt,
-    finishedAt: row.finishedAt,
-    durationMs: row.durationMs,
-  };
-}
-
-function usageWhere(clientId: string, query: UsageEventQuery) {
-  return and(
-    eq(usageEvents.clientId, clientId),
-    query.serviceId === undefined ? undefined : eq(usageEvents.serviceId, query.serviceId),
-    query.from === undefined ? undefined : gte(usageEvents.createdAt, query.from),
-    query.to === undefined ? undefined : lte(usageEvents.createdAt, query.to),
-  );
 }
 
 export class PostgresMcpManagementRepository implements McpManagementRepository {
@@ -297,8 +249,8 @@ export class PostgresMcpManagementRepository implements McpManagementRepository 
       .where(eq(mcpServiceVersions.id, id))
       .limit(1);
     if (!row) return null;
-    const [tools, prompts] = await Promise.all([this.#loadTools(id), this.#loadPrompts(id)]);
-    return mapVersion(row, tools, prompts);
+    const { tools, prompts } = await this.#loadConfigurations([id]);
+    return mapVersion(row, tools.get(id) ?? [], prompts.get(id) ?? []);
   }
 
   async listVersions(serviceId: string): Promise<McpServiceVersionRecord[]> {
@@ -307,15 +259,8 @@ export class PostgresMcpManagementRepository implements McpManagementRepository 
       .from(mcpServiceVersions)
       .where(eq(mcpServiceVersions.serviceId, serviceId))
       .orderBy(desc(mcpServiceVersions.versionNumber));
-    return Promise.all(
-      rows.map(async (row) => {
-        const [tools, prompts] = await Promise.all([
-          this.#loadTools(row.id),
-          this.#loadPrompts(row.id),
-        ]);
-        return mapVersion(row, tools, prompts);
-      }),
-    );
+    const { tools, prompts } = await this.#loadConfigurations(rows.map((row) => row.id));
+    return rows.map((row) => mapVersion(row, tools.get(row.id) ?? [], prompts.get(row.id) ?? []));
   }
 
   async saveVersion(
@@ -662,96 +607,49 @@ export class PostgresMcpManagementRepository implements McpManagementRepository 
     });
   }
 
-  async listClientQuotas(clientId: string): Promise<ClientQuotaRecord[]> {
-    const rows = await this.#db
-      .select()
-      .from(clientQuotas)
-      .where(eq(clientQuotas.clientId, clientId))
-      .orderBy(asc(clientQuotas.serviceId));
-    return rows.map(mapClientQuota);
-  }
-
-  async upsertClientQuota(quota: ClientQuotaRecord): Promise<ClientQuotaRecord> {
-    const [existing] = await this.#db
-      .select({ id: clientQuotas.id })
-      .from(clientQuotas)
-      .where(
-        and(
-          eq(clientQuotas.clientId, quota.clientId),
-          quota.serviceId === null
-            ? sql`${clientQuotas.serviceId} IS NULL`
-            : eq(clientQuotas.serviceId, quota.serviceId),
-        ),
-      )
-      .limit(1);
-    const [row] = existing
-      ? await this.#db
-          .update(clientQuotas)
-          .set({
-            qpsLimit: quota.qpsLimit,
-            dailyCallLimit: quota.dailyCallLimit,
-            updatedAt: quota.updatedAt,
-          })
-          .where(eq(clientQuotas.id, existing.id))
-          .returning()
-      : await this.#db.insert(clientQuotas).values(quota).returning();
-    if (!row)
-      throw new RepositoryConflictError(`Failed to save quota for client: ${quota.clientId}`);
-    return mapClientQuota(row);
-  }
-
-  async listUsageEvents(clientId: string, query: UsageEventQuery): Promise<UsageEventRecord[]> {
-    const rows = await this.#db
-      .select()
-      .from(usageEvents)
-      .where(usageWhere(clientId, query))
-      .orderBy(desc(usageEvents.createdAt))
-      .limit(query.limit);
-    return rows.map(mapUsageEvent);
-  }
-
-  async summarizeUsage(clientId: string, query: UsageEventQuery): Promise<UsageSummary> {
-    const [row] = await this.#db
-      .select({
-        total: sql<number>`count(*)::int`,
-        reserved: sql<number>`count(*) filter (where ${usageEvents.status} = 'RESERVED')::int`,
-        succeeded: sql<number>`count(*) filter (where ${usageEvents.status} = 'SUCCEEDED')::int`,
-        failed: sql<number>`count(*) filter (where ${usageEvents.status} = 'FAILED')::int`,
-      })
-      .from(usageEvents)
-      .where(usageWhere(clientId, query));
-    return row ?? { total: 0, reserved: 0, succeeded: 0, failed: 0 };
-  }
-
-  async #loadTools(versionId: string): Promise<ConfiguredTool[]> {
-    const rows = await this.#db
-      .select()
-      .from(mcpTools)
-      .where(eq(mcpTools.versionId, versionId))
-      .orderBy(asc(mcpTools.position));
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      ...(row.description === null ? {} : { description: row.description }),
-      handler: row.handler,
-      inputSchema: row.inputSchema,
-    }));
-  }
-
-  async #loadPrompts(versionId: string): Promise<ConfiguredPrompt[]> {
-    const rows = await this.#db
-      .select()
-      .from(mcpPrompts)
-      .where(eq(mcpPrompts.versionId, versionId))
-      .orderBy(asc(mcpPrompts.position));
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      ...(row.title === null ? {} : { title: row.title }),
-      ...(row.description === null ? {} : { description: row.description }),
-      arguments: row.arguments,
-      messages: row.messages,
-    }));
+  async #loadConfigurations(versionIds: string[]): Promise<{
+    tools: Map<string, ConfiguredTool[]>;
+    prompts: Map<string, ConfiguredPrompt[]>;
+  }> {
+    const tools = new Map<string, ConfiguredTool[]>();
+    const prompts = new Map<string, ConfiguredPrompt[]>();
+    if (versionIds.length === 0) return { tools, prompts };
+    const [toolRows, promptRows] = await Promise.all([
+      this.#db
+        .select()
+        .from(mcpTools)
+        .where(inArray(mcpTools.versionId, versionIds))
+        .orderBy(asc(mcpTools.position)),
+      this.#db
+        .select()
+        .from(mcpPrompts)
+        .where(inArray(mcpPrompts.versionId, versionIds))
+        .orderBy(asc(mcpPrompts.position)),
+    ]);
+    for (const row of toolRows) {
+      const values = tools.get(row.versionId) ?? [];
+      values.push({
+        id: row.id,
+        name: row.name,
+        ...(row.description === null ? {} : { description: row.description }),
+        handler: row.handler,
+        inputSchema: row.inputSchema,
+      });
+      tools.set(row.versionId, values);
+    }
+    for (const row of promptRows) {
+      const values = prompts.get(row.versionId) ?? [];
+      values.push({
+        id: row.id,
+        name: row.name,
+        ...(row.title === null ? {} : { title: row.title }),
+        ...(row.description === null ? {} : { description: row.description }),
+        arguments: row.arguments,
+        messages: row.messages,
+      });
+      prompts.set(row.versionId, values);
+    }
+    return { tools, prompts };
   }
 }
 

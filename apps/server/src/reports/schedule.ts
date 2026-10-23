@@ -6,17 +6,9 @@
  * 时间按服务端本地时区解释(私有化部署通常是单一时区)。
  */
 
-export type ReportFrequency = "daily" | "weekly";
-
-export interface ReportSchedule {
-  frequency: ReportFrequency;
-  /** HH:MM(24 小时制,服务端本地时区)。 */
-  time: string;
-  /** weekly 必填:0=周日 .. 6=周六。 */
-  weekday?: number;
-}
-
-export const WEEKDAY_LABELS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"] as const;
+import type { ReportSchedule } from "@open-agent-tools/api-contracts/report";
+export { WEEKDAY_LABELS, describeSchedule } from "@open-agent-tools/api-contracts/report";
+export type { ReportFrequency, ReportSchedule } from "@open-agent-tools/api-contracts/report";
 
 const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const MINUTE_MS = 60_000;
@@ -34,8 +26,7 @@ export function parseTimeOfDay(value: string): TimeOfDay | null {
 }
 
 export type ScheduleParseResult =
-  | { ok: true; value: ReportSchedule }
-  | { ok: false; error: string };
+  { ok: true; value: ReportSchedule } | { ok: false; error: string };
 
 /** 校验并归一化周期配置。weekly 必须带 weekday,daily 忽略 weekday。 */
 export function parseReportSchedule(input: {
@@ -94,10 +85,4 @@ export function nextRunAt(
         : Date.UTC(year, month, day + 1, time.hour, time.minute, 0, 0);
   }
   return candidate - offsetMinutes * MINUTE_MS;
-}
-
-/** 人类可读的周期描述,服务端与前端展示共用同一套措辞。 */
-export function describeSchedule(schedule: ReportSchedule): string {
-  const prefix = schedule.frequency === "weekly" ? `每${WEEKDAY_LABELS[schedule.weekday ?? 0]}` : "每天";
-  return `${prefix} ${schedule.time}`;
 }

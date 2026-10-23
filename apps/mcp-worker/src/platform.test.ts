@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, realpath } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
 
@@ -57,17 +57,16 @@ test("management queue jobs remain asynchronous and compatible with the backgrou
   ]);
 });
 
-test("legacy migration paths resolve to the merged migration history without changing mcp-server", async () => {
+test("the merged Worker migration journal references a complete SQL history", async () => {
   const migrations = resolve(import.meta.dirname, "../drizzle");
-  const legacyMigrations = resolve(import.meta.dirname, "../../mcp-control-plane/drizzle");
-  assert.equal(await realpath(legacyMigrations), await realpath(migrations));
 
   const journal = JSON.parse(await readFile(resolve(migrations, "meta/_journal.json"), "utf8")) as {
     entries: Array<{ tag: string }>;
   };
   assert.ok(journal.entries.length > 0);
+  assert.equal(new Set(journal.entries.map(({ tag }) => tag)).size, journal.entries.length);
   for (const { tag } of journal.entries) {
     const migration = await readFile(resolve(migrations, `${tag}.sql`));
-    assert.deepEqual(await readFile(resolve(legacyMigrations, `${tag}.sql`)), migration);
+    assert.ok(migration.length > 0, `${tag} must contain SQL`);
   }
 });

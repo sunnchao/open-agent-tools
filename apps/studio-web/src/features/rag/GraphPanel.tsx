@@ -383,12 +383,15 @@ function GraphSyncBar({
   if (!status) return null;
 
   const pending = status.building.length + status.queued;
-  const drifted = status.missing.length + status.stale.length + status.orphan.length;
+  // stuck 是卡死的 building 来源：既不自动重建也不算缺失，必须显式计入不一致
+  const stuck = status.stuck?.length ?? 0;
+  const drifted = status.missing.length + status.stale.length + status.orphan.length + stuck;
   const tone = pending > 0 ? "building" : status.inSync ? "ok" : "drift";
   const detail: string[] = [];
   if (status.missing.length > 0) detail.push(`${status.missing.length} 篇待建图`);
   if (status.stale.length > 0) detail.push(`${status.stale.length} 篇已过期`);
   if (status.orphan.length > 0) detail.push(`${status.orphan.length} 项残留`);
+  if (stuck > 0) detail.push(`${stuck} 篇建图中断（点同步可恢复）`);
 
   const label =
     pending > 0

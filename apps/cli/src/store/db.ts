@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { SqliteSessionStore, sqliteTableColumns } from "@open-agent-tools/database/sqlite";
 import type { CliMessage } from "./messages.ts";
 
 export type Role = "user" | "assistant" | "system" | "tool" | "reasoning";
@@ -99,13 +100,8 @@ export function openDb(path = getDbPath()): DatabaseSync {
   return db;
 }
 
-function messageColumns(database: DatabaseSync): Set<string> {
-  const rows = database.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
-  return new Set(rows.map((row) => row.name));
-}
-
 function migrateMessagesTable(database: DatabaseSync): void {
-  const columns = messageColumns(database);
+  const columns = sqliteTableColumns(database, "messages");
 
   if (!columns.has("tool_call_id")) {
     database.exec(`ALTER TABLE messages ADD COLUMN tool_call_id TEXT`);
@@ -169,9 +165,8 @@ export function closeDb(): void {
   }
 }
 
-function autoTitle(content: string): string {
-  const trimmed = content.trim().replace(/\n/g, " ");
-  return trimmed.length > 32 ? `${trimmed.slice(0, 32)}…` : trimmed || "New chat";
+function sessionStore(): SqliteSessionStore<Role, MessageStatus> {
+  return new SqliteSessionStore<Role, MessageStatus>(openDb(), "complete");
 }
 
 function usageFromRow(row: {
@@ -216,55 +211,19 @@ export function getSession(id: string): Session | null {
   const database = openDb();
   const session = database
     .prepare(
-      `SELECT id, title, updated_at AS updatedAt
-       FROM sessions
-       WHERE id = ?`,
+      `
+    SELECT id, title, updated_at AS updatedAt, input_tokens AS inputTokens, output_tokens AS outputTokens, reasoning_tokens AS reasoningTokens
+    FROM sessions WHERE id = ?
+  `,
     )
-    .get(id) as { id: string; title: string; updatedAt: number } | undefined;
-
+    .get(id) as ({ id: string; title: string; updatedAt: number } & SessionUsage) | undefined;
   if (!session) return null;
-
-  const usage = database
-    .prepare(
-      `SELECT input_tokens AS inputTokens, output_tokens AS outputTokens,
-              reasoning_tokens AS reasoningTokens
-       FROM sessions
-       WHERE id = ?`,
-    )
-    .get(id) as { inputTokens: number; outputTokens: number; reasoningTokens: number };
-
-  const messages = database
-    .prepare(
-      `SELECT id, role, content, created_at AS createdAt, status,
-              tool_call_id AS toolCallId, tool_name AS toolName
-       FROM messages
-       WHERE session_id = ?
-       ORDER BY position ASC`,
-    )
-    .all(id) as Array<{
-    id: string;
-    role: Role;
-    content: string;
-    createdAt: number;
-    status: MessageStatus | null;
-    toolCallId: string | null;
-    toolName: string | null;
-  }>;
-
   return {
     id: session.id,
     title: session.title,
     updatedAt: session.updatedAt,
-    usage: usageFromRow(usage),
-    messages: messages.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      createdAt: m.createdAt,
-      ...(m.status ? { status: m.status } : {}),
-      ...(m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
-      ...(m.toolName ? { tool_name: m.toolName } : {}),
-    })),
+    usage: usageFromRow(session),
+    messages: sessionStore().messagesFor([id]).get(id)!,
   };
 }
 
@@ -301,31 +260,15 @@ export function createSession(input?: { id?: string; title?: string }): Session 
 }
 
 export function renameSession(id: string, title: string): Session | null {
-  const database = openDb();
-  const updatedAt = Date.now();
-  const result = database
-    .prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`)
-    .run(title, updatedAt, id);
-
-  if (result.changes === 0) return null;
-  return getSession(id);
+  return sessionStore().renameSession(id, title) ? getSession(id) : null;
 }
 
 export function deleteSession(id: string): boolean {
-  const database = openDb();
-  const result = database.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
-  return result.changes > 0;
+  return sessionStore().deleteSession(id);
 }
 
 export function touchSession(id: string, updatedAt = Date.now()): void {
-  openDb().prepare(`UPDATE sessions SET updated_at = ? WHERE id = ?`).run(updatedAt, id);
-}
-
-function nextPosition(sessionId: string): number {
-  const row = openDb()
-    .prepare(`SELECT COALESCE(MAX(position), -1) AS maxPos FROM messages WHERE session_id = ?`)
-    .get(sessionId) as { maxPos: number };
-  return row.maxPos + 1;
+  sessionStore().touchSession(id, updatedAt);
 }
 
 export function addMessage(
@@ -340,92 +283,14 @@ export function addMessage(
     tool_name?: string;
   },
 ): Message | null {
-  const database = openDb();
-  const session = database.prepare(`SELECT id, title FROM sessions WHERE id = ?`).get(sessionId) as
-    { id: string; title: string } | undefined;
-  if (!session) return null;
-
-  const id = message.id ?? randomUUID();
-  const createdAt = message.createdAt ?? Date.now();
-  const status = message.status ?? "complete";
-  const position = nextPosition(sessionId);
-
-  database
-    .prepare(
-      `INSERT INTO messages (id, session_id, role, content, created_at, status, position, tool_call_id, tool_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      id,
-      sessionId,
-      message.role,
-      message.content,
-      createdAt,
-      status,
-      position,
-      message.tool_call_id ?? null,
-      message.tool_name ?? null,
-    );
-
-  if (session.title === "New chat" && message.role === "user") {
-    const title = autoTitle(message.content);
-    database
-      .prepare(`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`)
-      .run(title, createdAt, sessionId);
-  } else {
-    touchSession(sessionId, createdAt);
-  }
-
-  return {
-    id,
-    role: message.role,
-    content: message.content,
-    createdAt,
-    status,
-    ...(message.tool_call_id ? { tool_call_id: message.tool_call_id } : {}),
-    ...(message.tool_name ? { tool_name: message.tool_name } : {}),
-  };
+  return sessionStore().addMessage(sessionId, message);
 }
 
 export function updateMessage(
   messageId: string,
   patch: { content?: string; status?: MessageStatus },
 ): Message | null {
-  const database = openDb();
-  const existing = database
-    .prepare(
-      `SELECT id, session_id AS sessionId, role, content, created_at AS createdAt, status
-       FROM messages WHERE id = ?`,
-    )
-    .get(messageId) as
-    | {
-        id: string;
-        sessionId: string;
-        role: Role;
-        content: string;
-        createdAt: number;
-        status: MessageStatus | null;
-      }
-    | undefined;
-
-  if (!existing) return null;
-
-  const content = patch.content ?? existing.content;
-  const status = patch.status ?? existing.status ?? "complete";
-
-  database
-    .prepare(`UPDATE messages SET content = ?, status = ? WHERE id = ?`)
-    .run(content, status, messageId);
-
-  touchSession(existing.sessionId);
-
-  return {
-    id: existing.id,
-    role: existing.role,
-    content,
-    createdAt: existing.createdAt,
-    status,
-  };
+  return sessionStore().updateMessage(messageId, patch);
 }
 
 export function ensureSession(sessionId: string): Session {

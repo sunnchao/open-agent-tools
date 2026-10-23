@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Request } from "express";
+import { trimmedString } from "@open-agent-tools/api-contracts/values";
 import { DEFAULT_WORKSPACE_ID, openDb } from "./db.js";
 
 export { DEFAULT_WORKSPACE_ID };
@@ -31,12 +32,6 @@ function toWorkspace(row: WorkspaceRow): Workspace {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function normalizeId(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
 }
 
 export function listWorkspaces(): Workspace[] {
@@ -95,7 +90,7 @@ export type WorkspaceResolution =
  * 注意：这里只做归属解析，不做权限校验——鉴权仍是部署级 token。
  */
 export function resolveWorkspace(req: Request): WorkspaceResolution {
-  const requested = normalizeId(req.header(WORKSPACE_HEADER));
+  const requested = trimmedString(req.header(WORKSPACE_HEADER));
   if (!requested) return { ok: true, workspaceId: DEFAULT_WORKSPACE_ID };
   if (workspaceExists(requested)) return { ok: true, workspaceId: requested };
   return { ok: false, requested };

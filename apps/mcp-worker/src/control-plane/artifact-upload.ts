@@ -1,7 +1,8 @@
 import type { ArtifactInspectionJob } from "@open-agent-tools/mcp-contracts";
 import { z } from "zod";
 
-import { ManagementError, type McpManagementService } from "./management.js";
+import { ManagementError, requireEditor } from "./authorization.js";
+import type { McpManagementService } from "./management.js";
 import type { Actor, BuildJobRecord, McpServiceVersionRecord } from "./types.js";
 
 export const MAX_ARTIFACT_BYTES = 50 * 1024 * 1024;
@@ -62,12 +63,6 @@ export class ArtifactUploadError extends Error {
 export interface ArtifactUploadServiceOptions {
   now?: () => string;
   uploadTtlMs?: number;
-}
-
-function requireEditor(actor: Actor): void {
-  if (actor.role === "auditor") {
-    throw new ManagementError("FORBIDDEN", "This operation requires admin or operator access");
-  }
 }
 
 export class ArtifactUploadService {

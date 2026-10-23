@@ -1,5 +1,6 @@
-import type { ChatRequestMessage, Message, ToolCall } from "../lib/types";
-import { newId } from "../lib/ids";
+import type { ChatRequestMessage, ToolCall } from "../lib/types";
+import { localMessage as createLocalMessage } from "@open-agent-tools/studio-client";
+export { employeeEntryPath } from "@open-agent-tools/studio-client";
 import { parseSseBuffer } from "../lib/sse";
 import { agentFetch, parseError } from "../lib/http";
 import { storageGet, storageSet } from "../lib/storage";
@@ -107,10 +108,4 @@ export function streamAppChat(
   })();
   return { abort: () => controller.abort() };
 }
-export function localMessage(role: Message["role"], content: string): Message {
-  return { id: newId(), role, content, createdAt: Date.now(), status: "complete" };
-}
-export function employeeEntryPath(slug: string, accessToken?: string | null): string {
-  const base = `#/app/${slug}`;
-  return accessToken ? `${base}?access_token=${encodeURIComponent(accessToken)}` : base;
-}
+export const localMessage = createLocalMessage;

@@ -34,6 +34,12 @@ interface CreatedApiKey {
 
 `secretSource` 主要用于确定性测试。生产代码应使用默认的 `randomBytes(32)`。
 
+### 共用鉴权原语（Node.js）
+
+`@open-agent-tools/mcp-auth/primitives` 提供 `hashSecret`、`verifySecret`、`parseBearerToken` 和 `tokensEqual`，供 MCP、工作流与服务部署 Token 共用。它不解析业务 Key 前缀，也不决定权限、过期或限流规则。此入口使用 Node.js crypto，不能引入浏览器或 React Native。
+
+`verifySecret` 默认严格校验六段 Hash。工作流为保持原有校验行为显式传入 `{ allowTrailingFields: true }`；MCP 保持严格校验。
+
 ## 使用示例
 
 ```ts

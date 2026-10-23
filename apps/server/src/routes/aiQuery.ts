@@ -24,6 +24,9 @@ import { routeIntentWithGateA } from "../aiQuery/decisionProvider.js";
 import { buildChartSuggestion, type ChartSuggestion } from "../aiQuery/chartSuggest.js";
 import { currentUsage, trackUsage } from "../usageTracking.js";
 import { resolveWorkspace } from "../workspace.js";
+import { extractJson } from "../jsonExtraction.js";
+import { formatHistoryText } from "../promptHistory.js";
+export { extractJson } from "../jsonExtraction.js";
 
 /**
  * AI 问数端点（POST /api/ai/query，标准 SSE）。
@@ -319,9 +322,7 @@ async function generateSql(
   signal?: AbortSignal,
 ): Promise<SqlGenResult> {
   const schema = buildDtmsSchemaPrompt(question, pageContext, allowedModules);
-  const historyText = history
-    .map((turn) => `${turn.role === "user" ? "用户" : "助手"}: ${turn.content}`)
-    .join("\n");
+  const historyText = formatHistoryText(history, HISTORY_TURNS);
   const pageHint = resolvePageContext(pageContext);
 
   const system =
@@ -365,19 +366,6 @@ async function generateSql(
         ? parsed.clarifying.trim()
         : undefined,
   };
-}
-
-/** 从 LLM 输出里稳健地抠出 JSON（容忍 markdown 代码围栏与前后文本）。 */
-export function extractJson(text: string): Record<string, unknown> | null {
-  const cleaned = text.replace(/```(?:json)?/gi, "");
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end <= start) return null;
-  try {
-    return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 /** SQL 执行错误 → 契约错误码（超时类单独映射，见 PRD 5.6）。 */
@@ -688,218 +676,221 @@ aiQueryRouter.post("/api/ai/query", async (req: Request, res: Response) => {
     failWith("INVALID_REQUEST");
     return;
   }
-  await trackUsage({
-    source: "sql_query",
-    workspaceId: workspace.workspaceId,
-    sessionId: sessionKey,
-    onUsage: (usage) => sendEvent("usage", { usage }),
-  }, async () => {
-    try {
-      const providerId = process.env.AI_QUERY_PROVIDER_ID;
-      const provider: ProviderWithKey | null = providerId
-        ? getProvider(providerId, { requireEnabled: true })
-        : getDefaultProvider({ requireEnabled: true });
-      if (!provider) {
-        failWith("AI_SERVICE_UNAVAILABLE");
-        return;
-      }
-      const llm = createLlmClient({ ...provider, apiKey: provider.apiKey ?? "ollama" });
-      const model = process.env.AI_QUERY_MODEL || provider.models[0] || "gpt-4o-mini";
-      const history = loadHistory(sessionKey);
-      const signal = abort.signal;
+  await trackUsage(
+    {
+      source: "sql_query",
+      workspaceId: workspace.workspaceId,
+      sessionId: sessionKey,
+      onUsage: (usage) => sendEvent("usage", { usage }),
+    },
+    async () => {
+      try {
+        const providerId = process.env.AI_QUERY_PROVIDER_ID;
+        const provider: ProviderWithKey | null = providerId
+          ? getProvider(providerId, { requireEnabled: true })
+          : getDefaultProvider({ requireEnabled: true });
+        if (!provider) {
+          failWith("AI_SERVICE_UNAVAILABLE");
+          return;
+        }
+        const llm = createLlmClient({ ...provider, apiKey: provider.apiKey ?? "ollama" });
+        const model = process.env.AI_QUERY_MODEL || provider.models[0] || "gpt-4o-mini";
+        const history = loadHistory(sessionKey);
+        const signal = abort.signal;
 
-      const intentStartedAt = Date.now();
-      const fast = fastIntent(trimmedQuestion);
-      let intentType: "DATA_QUERY" | "UNKNOWN";
-      if (fast) {
-        intentType = fast;
-        intentMeta = { via: "rule" };
-      } else {
-        const routed = await routeIntentWithGateA(
-          {
-            traceId,
-            question: trimmedQuestion,
-            pageContext: trimmedPageContext,
-            industry: trimmedIndustry,
-            hasSessionHistory: history.length > 0,
-            signal,
-          },
-          () => classifyIntentWithLlm(llm, model, trimmedQuestion, trimmedPageContext, signal),
+        const intentStartedAt = Date.now();
+        const fast = fastIntent(trimmedQuestion);
+        let intentType: "DATA_QUERY" | "UNKNOWN";
+        if (fast) {
+          intentType = fast;
+          intentMeta = { via: "rule" };
+        } else {
+          const routed = await routeIntentWithGateA(
+            {
+              traceId,
+              question: trimmedQuestion,
+              pageContext: trimmedPageContext,
+              industry: trimmedIndustry,
+              hasSessionHistory: history.length > 0,
+              signal,
+            },
+            () => classifyIntentWithLlm(llm, model, trimmedQuestion, trimmedPageContext, signal),
+          );
+          intentType = routed.intent;
+          intentMeta = {
+            via: routed.via,
+            ...(routed.decisionMs === undefined ? {} : { decisionMs: routed.decisionMs }),
+            ...(routed.confidence === undefined ? {} : { confidence: routed.confidence }),
+            ...(routed.gates ? { gates: routed.gates } : {}),
+          };
+        }
+        logDebugDuration("ai_query.stage.intent", intentStartedAt, {
+          traceId,
+          intentType,
+          ...intentMeta,
+        });
+        sendEvent("intent", { sessionId: sid, intentType, intentVersion: INTENT_VERSION });
+
+        if (intentType === "UNKNOWN") {
+          const replyText = buildUnknownReplyText(trimmedIndustry, perm.modules);
+          persistSuccess(replyText, "text");
+          sendEvent("reply", {
+            sessionId: sid,
+            replyType: "text",
+            replyText,
+            clarifying: false,
+          });
+          finish("OK", { clarifying: false });
+          return;
+        }
+
+        const generateSqlStartedAt = Date.now();
+        const gen = await generateSql(
+          llm,
+          model,
+          trimmedQuestion,
+          history,
+          trimmedIndustry,
+          trimmedPageContext,
+          perm.modules,
+          signal,
         );
-        intentType = routed.intent;
-        intentMeta = {
-          via: routed.via,
-          ...(routed.decisionMs === undefined ? {} : { decisionMs: routed.decisionMs }),
-          ...(routed.confidence === undefined ? {} : { confidence: routed.confidence }),
-          ...(routed.gates ? { gates: routed.gates } : {}),
-        };
-      }
-      logDebugDuration("ai_query.stage.intent", intentStartedAt, {
-        traceId,
-        intentType,
-        ...intentMeta,
-      });
-      sendEvent("intent", { sessionId: sid, intentType, intentVersion: INTENT_VERSION });
+        logDebugDuration("ai_query.stage.generate_sql", generateSqlStartedAt, {
+          traceId,
+          hasSql: Boolean(gen.sql),
+          clarifying: Boolean(gen.clarifyingQuestion),
+        });
+        if (abort.signal.aborted) return;
+        if (gen.clarifyingQuestion) {
+          persistSuccess(gen.clarifyingQuestion, "text");
+          sendEvent("reply", {
+            sessionId: sid,
+            replyType: "text",
+            replyText: gen.clarifyingQuestion,
+            clarifying: true,
+          });
+          finish("OK", { clarifying: true });
+          return;
+        }
+        if (!gen.sql) {
+          failWith("QUERY_BLOCKED");
+          return;
+        }
 
-      if (intentType === "UNKNOWN") {
-        const replyText = buildUnknownReplyText(trimmedIndustry, perm.modules);
-        persistSuccess(replyText, "text");
+        let rewritten: ReturnType<typeof rewriteAndValidateSqlWithAuth>;
+        try {
+          rewritten = rewriteAndValidateSqlWithAuth(
+            gen.sql,
+            rowScope.industries,
+            rowScope.orgNos,
+            perm.modules,
+          );
+        } catch (error) {
+          logTrace(
+            "ai_query.guard",
+            {
+              sessionId: sid,
+              reason: truncate(error instanceof Error ? error.message : String(error), 200),
+              sql: truncate(gen.sql, 200),
+            },
+            "warn",
+          );
+          failWith(error instanceof PermissionError ? "PERMISSION_DENIED" : "QUERY_BLOCKED");
+          return;
+        }
+        const executed = await executeQuerySql(rewritten.sql, rewritten.params);
+        logDebug("ai_query.stage.execute_sql", {
+          traceId,
+          ok: executed.ok,
+          rows: executed.rows?.length ?? 0,
+          durationMs: executed.durationMs,
+          ...(executed.error ? { error: truncate(executed.error, 200) } : {}),
+        });
+        if (abort.signal.aborted) return;
+        if (!executed.ok) {
+          failWith(mapSqlError(executed.error ?? ""));
+          return;
+        }
+        const rows = maskSensitiveRows((executed.rows ?? []) as Record<string, unknown>[]);
+        if (rows.length === 0) {
+          const replyText = emptyResultText(trimmedIndustry, trimmedPageContext);
+          persistSuccess(replyText, "text");
+          sendEvent("reply", {
+            sessionId: sid,
+            replyType: "text",
+            replyText,
+            clarifying: false,
+          });
+          finish("OK", { clarifying: false });
+          return;
+        }
+
+        const data = buildDataPayload(rows, trimmedIndustry, trimmedPageContext);
+
+        const summaryStartedAt = Date.now();
+        const summary = await llm.streamChat({
+          model,
+          signal,
+          messages: [
+            {
+              role: "system",
+              content:
+                "你是 DTMS 数据分析助手。基于查询结果用中文回答，2~4 句：先直接给出结论（金额用千分位、两位小数），再补充口径（时间范围、行业、模块）。不要编造数据，不要输出 SQL，不要输出 markdown，不要提及 NEW-API。",
+            },
+            {
+              role: "user",
+              content: `用户问题：${trimmedQuestion}\n\n查询结果（JSON）：${JSON.stringify(
+                data.type === "metric"
+                  ? { ...data }
+                  : { ...data, rows: data.rows.slice(0, SUMMARY_MAX_ROWS) },
+              )}`,
+            },
+          ],
+          callbacks: {
+            onDelta: (delta: string) => {
+              sendEvent("delta", { text: delta });
+            },
+          },
+        });
+        logDebugDuration("ai_query.stage.summary", summaryStartedAt, {
+          traceId,
+          replyType: data.type,
+          contentLength: summary.content.length,
+        });
+        if (abort.signal.aborted) return;
+
+        const replyText =
+          data.type === "table" && data.truncated
+            ? `${summary.content.trim()}\n${TRUNCATED_HINT}`
+            : summary.content;
+        persistSuccess(replyText, data.type);
         sendEvent("reply", {
           sessionId: sid,
-          replyType: "text",
+          replyType: data.type,
           replyText,
+          data,
           clarifying: false,
         });
-        finish("OK", { clarifying: false });
-        return;
-      }
-
-      const generateSqlStartedAt = Date.now();
-      const gen = await generateSql(
-        llm,
-        model,
-        trimmedQuestion,
-        history,
-        trimmedIndustry,
-        trimmedPageContext,
-        perm.modules,
-        signal,
-      );
-      logDebugDuration("ai_query.stage.generate_sql", generateSqlStartedAt, {
-        traceId,
-        hasSql: Boolean(gen.sql),
-        clarifying: Boolean(gen.clarifyingQuestion),
-      });
-      if (abort.signal.aborted) return;
-      if (gen.clarifyingQuestion) {
-        persistSuccess(gen.clarifyingQuestion, "text");
-        sendEvent("reply", {
+        logTrace("ai_query.done", {
           sessionId: sid,
-          replyType: "text",
-          replyText: gen.clarifyingQuestion,
-          clarifying: true,
+          replyType: data.type,
+          rows: rows.length,
+          durationMs: Date.now() - startedAt,
         });
-        finish("OK", { clarifying: true });
-        return;
-      }
-      if (!gen.sql) {
-        failWith("QUERY_BLOCKED");
-        return;
-      }
-
-      let rewritten: ReturnType<typeof rewriteAndValidateSqlWithAuth>;
-      try {
-        rewritten = rewriteAndValidateSqlWithAuth(
-          gen.sql,
-          rowScope.industries,
-          rowScope.orgNos,
-          perm.modules,
-        );
+        finish("OK", { clarifying: false });
       } catch (error) {
+        if (abort.signal.aborted) return;
         logTrace(
-          "ai_query.guard",
+          "ai_query.llm_error",
           {
             sessionId: sid,
-            reason: truncate(error instanceof Error ? error.message : String(error), 200),
-            sql: truncate(gen.sql, 200),
+            error: truncate(error instanceof Error ? error.message : String(error), 300),
+            durationMs: Date.now() - startedAt,
           },
-          "warn",
+          "error",
         );
-        failWith(error instanceof PermissionError ? "PERMISSION_DENIED" : "QUERY_BLOCKED");
-        return;
+        failWith("AI_SERVICE_UNAVAILABLE");
       }
-      const executed = await executeQuerySql(rewritten.sql, rewritten.params);
-      logDebug("ai_query.stage.execute_sql", {
-        traceId,
-        ok: executed.ok,
-        rows: executed.rows?.length ?? 0,
-        durationMs: executed.durationMs,
-        ...(executed.error ? { error: truncate(executed.error, 200) } : {}),
-      });
-      if (abort.signal.aborted) return;
-      if (!executed.ok) {
-        failWith(mapSqlError(executed.error ?? ""));
-        return;
-      }
-      const rows = maskSensitiveRows((executed.rows ?? []) as Record<string, unknown>[]);
-      if (rows.length === 0) {
-        const replyText = emptyResultText(trimmedIndustry, trimmedPageContext);
-        persistSuccess(replyText, "text");
-        sendEvent("reply", {
-          sessionId: sid,
-          replyType: "text",
-          replyText,
-          clarifying: false,
-        });
-        finish("OK", { clarifying: false });
-        return;
-      }
-
-      const data = buildDataPayload(rows, trimmedIndustry, trimmedPageContext);
-
-      const summaryStartedAt = Date.now();
-      const summary = await llm.streamChat({
-        model,
-        signal,
-        messages: [
-          {
-            role: "system",
-            content:
-              "你是 DTMS 数据分析助手。基于查询结果用中文回答，2~4 句：先直接给出结论（金额用千分位、两位小数），再补充口径（时间范围、行业、模块）。不要编造数据，不要输出 SQL，不要输出 markdown，不要提及 NEW-API。",
-          },
-          {
-            role: "user",
-            content: `用户问题：${trimmedQuestion}\n\n查询结果（JSON）：${JSON.stringify(
-              data.type === "metric"
-                ? { ...data }
-                : { ...data, rows: data.rows.slice(0, SUMMARY_MAX_ROWS) },
-            )}`,
-          },
-        ],
-        callbacks: {
-          onDelta: (delta: string) => {
-            sendEvent("delta", { text: delta });
-          },
-        },
-      });
-      logDebugDuration("ai_query.stage.summary", summaryStartedAt, {
-        traceId,
-        replyType: data.type,
-        contentLength: summary.content.length,
-      });
-      if (abort.signal.aborted) return;
-
-      const replyText =
-        data.type === "table" && data.truncated
-          ? `${summary.content.trim()}\n${TRUNCATED_HINT}`
-          : summary.content;
-      persistSuccess(replyText, data.type);
-      sendEvent("reply", {
-        sessionId: sid,
-        replyType: data.type,
-        replyText,
-        data,
-        clarifying: false,
-      });
-      logTrace("ai_query.done", {
-        sessionId: sid,
-        replyType: data.type,
-        rows: rows.length,
-        durationMs: Date.now() - startedAt,
-      });
-      finish("OK", { clarifying: false });
-    } catch (error) {
-      if (abort.signal.aborted) return;
-      logTrace(
-        "ai_query.llm_error",
-        {
-          sessionId: sid,
-          error: truncate(error instanceof Error ? error.message : String(error), 300),
-          durationMs: Date.now() - startedAt,
-        },
-        "error",
-      );
-      failWith("AI_SERVICE_UNAVAILABLE");
-    }
-  });
+    },
+  );
 });

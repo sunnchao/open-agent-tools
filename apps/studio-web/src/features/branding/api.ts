@@ -1,4 +1,5 @@
 import { studioFetch } from "../../lib/client.js";
+import { parseHttpError as parseError } from "@open-agent-tools/studio-client";
 
 export interface BrandingConfig {
   productName: string;
@@ -25,11 +26,6 @@ export const DEFAULT_BRANDING: BrandingConfig = {
   partnerCode: null,
   hideVendorBrand: false,
 };
-
-async function parseError(response: Response): Promise<string> {
-  const body = (await response.json().catch(() => ({}))) as { error?: string };
-  return body.error ?? `HTTP ${response.status}`;
-}
 
 /** 公开品牌信息:员工入口与 Studio 启动都要读,因此走免鉴权端点。 */
 export async function fetchPublicBranding(): Promise<BrandingConfig> {

@@ -285,6 +285,67 @@ export function migrateLegacyGraphNodes<T extends LegacyGraphNodeLike>(nodes: re
   return nodes.map((node) => migrateLegacyGraphNode(node));
 }
 
+export interface WorkflowRunNodeInput {
+  id: string;
+  kind: NodeKind;
+  label?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface WorkflowCanvasNodeLike {
+  id: string;
+  data: {
+    kind: string;
+    label?: string;
+    config?: Record<string, unknown>;
+  };
+}
+
+export interface LabeledWorkflowCanvasNodeLike {
+  id: string;
+  data: {
+    kind: string;
+    label: string;
+    config?: Record<string, unknown>;
+  };
+}
+
+export interface ExecutableWorkflowCanvasNodeLike {
+  id: string;
+  data: {
+    kind: string;
+    label: string;
+    config: Record<string, unknown>;
+  };
+}
+
+/**
+ * Convert persisted/editor canvas nodes to the executor shape.
+ *
+ * Historical graph nodes are migrated at this boundary so every client and the server
+ * apply the same compatibility rule before starting a run.
+ */
+export function graphToRunNodes(graph: {
+  nodes: readonly ExecutableWorkflowCanvasNodeLike[];
+}): Array<WorkflowRunNodeInput & { label: string; config: Record<string, unknown> }>;
+export function graphToRunNodes(graph: {
+  nodes: readonly LabeledWorkflowCanvasNodeLike[];
+}): Array<WorkflowRunNodeInput & { label: string }>;
+export function graphToRunNodes(graph: {
+  nodes: readonly WorkflowCanvasNodeLike[];
+}): WorkflowRunNodeInput[];
+export function graphToRunNodes(graph: {
+  nodes: readonly WorkflowCanvasNodeLike[];
+}): WorkflowRunNodeInput[] {
+  const nodes = graph.nodes.map((node) => ({
+    id: node.id,
+    kind: node.data.kind,
+    label: node.data.label,
+    config: node.data.config,
+  }));
+  return migrateLegacyGraphNodes(nodes) as WorkflowRunNodeInput[];
+}
+
 /** Fill editor defaults before comparing a legacy snapshot with the hydrated draft. */
 export function effectiveNodeConfig(
   kind: NodeKind,

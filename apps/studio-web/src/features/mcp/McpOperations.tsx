@@ -64,13 +64,10 @@ import {
   type GrantCapabilities,
 } from "./grantCapabilities.js";
 import { AuditEventDetails } from "./AuditEventDetails.js";
+import { errorMessage as messageFrom } from "@open-agent-tools/api-contracts/values";
 
 export type McpManagementView =
   "services" | "marketplace" | "builds" | "clients" | "audit" | "sla" | "sandbox";
-
-function messageFrom(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason);
-}
 
 function formatDate(value: string | null): string {
   if (!value) return "从未";

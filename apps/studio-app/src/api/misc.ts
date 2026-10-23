@@ -1,4 +1,11 @@
+import type { ResourceCatalog } from "@open-agent-tools/api-contracts/resources";
+export type { ResourceCatalog } from "@open-agent-tools/api-contracts/resources";
 import { agentFetch, parseError } from "../lib/http";
+export {
+  connectorStatusLabel as statusLabel,
+  linesToPatterns,
+  patternsToText,
+} from "@open-agent-tools/studio-client";
 
 // ---- connectors ----
 export type ConnectorType = "http" | "local-dir" | "feishu" | "yuque" | "confluence";
@@ -54,25 +61,6 @@ export const CONNECTOR_TYPE_LABELS: Record<ConnectorType, string> = {
   yuque: "语雀",
   confluence: "Confluence",
 };
-export function linesToPatterns(text: string): string[] {
-  return [
-    ...new Set(
-      text
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
-export function patternsToText(patterns: string[]): string {
-  return patterns.join("\n");
-}
-export function statusLabel(status: ConnectorSyncStatus | null): string {
-  if (status === "success") return "成功";
-  if (status === "partial") return "部分成功";
-  if (status === "error") return "失败";
-  return "未同步";
-}
 async function adminRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await agentFetch(path, init);
   if (!r.ok) throw new Error(await parseError(r));
@@ -395,33 +383,7 @@ export async function fetchImStatus(): Promise<ImStatus> {
 }
 
 // ---- resources ----
-export interface ResourceCatalog {
-  mcp: {
-    configured: boolean;
-    services: Array<{
-      serviceSlug: string;
-      serviceStatus: string;
-      versionStatus: string;
-      tools: Array<{
-        serviceSlug: string;
-        name: string;
-        description?: string;
-        inputSchema: Record<string, unknown>;
-      }>;
-    }>;
-    error?: string;
-  };
-  rag: { sources: Array<{ source: string; chunks: number }>; error?: string };
-  sql?: {
-    sources: Array<{
-      id: string;
-      name: string;
-      connector: "mysql" | "postgresql";
-      isDefault: boolean;
-    }>;
-    error?: string;
-  };
-}
+
 export async function fetchResourceCatalog(): Promise<ResourceCatalog> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12000);

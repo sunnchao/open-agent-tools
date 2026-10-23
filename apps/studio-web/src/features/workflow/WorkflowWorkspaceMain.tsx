@@ -1,14 +1,25 @@
 import {
+  graphToRunNodes,
   runVariables,
   validVariableName,
-  cachedNodesFromEvents,
-  prepareResumeCheckpoint,
   type WorkflowResumeCheckpoint,
 } from "@open-agent-tools/workflow-contracts";
 import { variableNodes, renameVariable, repairVariableReference } from "./variables.js";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Alert, Badge, Button, Empty, Flex, Input, Segmented, Spin, Tag, Tooltip, Typography } from "antd";
+import {
+  Alert,
+  Badge,
+  Button,
+  Empty,
+  Flex,
+  Input,
+  Segmented,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
 import "./workflow-panels.css";
 import {
   addEdge,
@@ -82,6 +93,7 @@ import { NodePicker } from "./NodePicker.js";
 import { NodeInspector } from "./NodeInspector.js";
 import { RunPreview } from "./RunPreview.js";
 import { RunHistoryPanel } from "./RunHistoryPanel.js";
+import { createResumeCheckpoint } from "./runHistory.js";
 import { decorateRunEdges, updateRunEdges, type EdgeRunStates } from "./runEdges.js";
 import { RunInputDialog } from "./RunInputDialog.js";
 import { PublishDialog } from "./PublishDialog.js";
@@ -1180,23 +1192,10 @@ function WorkflowCanvas({
   const beginResume = (history: WorkflowRunHistory, nodeId: string) => {
     if (running || nodeTestPendingId) return;
     try {
-      const checkpoint = prepareResumeCheckpoint(
-        {
-          nodes: variableNodes(nodesRef.current),
-          edges: edgesRef.current.map((edge) => ({
-            ...edge,
-            label: typeof edge.label === "string" ? edge.label : undefined,
-          })),
-        },
-        {
-          nodes: variableNodes(history.graph.nodes),
-          edges: history.graph.edges.map((edge) => ({
-            ...edge,
-            label: typeof edge.label === "string" ? edge.label : undefined,
-          })),
-        },
+      const checkpoint = createResumeCheckpoint(
+        { name: "", nodes: nodesRef.current, edges: edgesRef.current },
+        history,
         nodeId,
-        cachedNodesFromEvents(history.events),
       );
       setPendingResume({ history, checkpoint });
     } catch (reason) {
@@ -1230,12 +1229,7 @@ function WorkflowCanvas({
       {
         workflowId,
         resume,
-        nodes: nodes.map((node) => ({
-          id: node.id,
-          kind: node.data.kind,
-          label: node.data.label,
-          config: node.data.config,
-        })),
+        nodes: graphToRunNodes({ nodes }),
         edges: edges.map((edge) => ({
           id: edge.id,
           source: edge.source,
@@ -1417,10 +1411,22 @@ function WorkflowCanvas({
           ) : null}
           <Flex gap={4} aria-label="编辑历史">
             <Tooltip title="撤销">
-              <Button type="text" icon={<UndoOutlined />} aria-label="撤销" disabled={!canUndo} onClick={undo} />
+              <Button
+                type="text"
+                icon={<UndoOutlined />}
+                aria-label="撤销"
+                disabled={!canUndo}
+                onClick={undo}
+              />
             </Tooltip>
             <Tooltip title="重做">
-              <Button type="text" icon={<RedoOutlined />} aria-label="重做" disabled={!canRedo} onClick={redo} />
+              <Button
+                type="text"
+                icon={<RedoOutlined />}
+                aria-label="重做"
+                disabled={!canRedo}
+                onClick={redo}
+              />
             </Tooltip>
           </Flex>
           <Button icon={<PlusOutlined />} onClick={openNodePicker}>
@@ -1514,13 +1520,21 @@ function WorkflowCanvas({
                             onClick={() => focusIssue(issue)}
                             aria-label={`定位问题：${issue.message}`}
                           >
-                            <span className="workflow-validation-issue__severity" aria-hidden="true">
+                            <span
+                              className="workflow-validation-issue__severity"
+                              aria-hidden="true"
+                            >
                               <CloseCircleOutlined />
                             </span>
                             <span className="workflow-validation-issue__body">
-                              <span className="workflow-validation-issue__message">{issue.message}</span>
+                              <span className="workflow-validation-issue__message">
+                                {issue.message}
+                              </span>
                               {nodeChip ? (
-                                <span className="workflow-validation-issue__node" title={issue.nodeId}>
+                                <span
+                                  className="workflow-validation-issue__node"
+                                  title={issue.nodeId}
+                                >
                                   {nodeChip}
                                 </span>
                               ) : null}
@@ -1553,9 +1567,15 @@ function WorkflowCanvas({
             ) : null}
           </div>
           <Typography.Text type={saveState === "error" ? "danger" : "secondary"}>
-            {saveState === "error" ? "保存失败" : saveState === "saving" || dirty ? "自动保存中" : "已自动保存"}
+            {saveState === "error"
+              ? "保存失败"
+              : saveState === "saving" || dirty
+                ? "自动保存中"
+                : "已自动保存"}
           </Typography.Text>
-          <Button onClick={() => (validationIssues.length ? setConfirmExport(true) : exportGraph())}>
+          <Button
+            onClick={() => (validationIssues.length ? setConfirmExport(true) : exportGraph())}
+          >
             导出 JSON
           </Button>
           <Button disabled={running} onClick={arrangeGraph}>
@@ -1563,7 +1583,11 @@ function WorkflowCanvas({
           </Button>
           <Flex gap={4} align="center">
             <Tooltip title="复制节点 ⌘C / Ctrl+C">
-              <Button size="small" disabled={!selectedIds.length} onClick={() => void copySelection()}>
+              <Button
+                size="small"
+                disabled={!selectedIds.length}
+                onClick={() => void copySelection()}
+              >
                 复制
               </Button>
             </Tooltip>
@@ -1577,7 +1601,12 @@ function WorkflowCanvas({
             保存
           </Button>
           <Tooltip title="API 与版本">
-            <Button icon={<ApiOutlined />} onClick={() => void persistDraft().then((revision) => revision !== null && onOpenAccess())}>
+            <Button
+              icon={<ApiOutlined />}
+              onClick={() =>
+                void persistDraft().then((revision) => revision !== null && onOpenAccess())
+              }
+            >
               访问点
             </Button>
           </Tooltip>
@@ -1616,7 +1645,11 @@ function WorkflowCanvas({
         options={[
           { value: "palette", label: "节点库", icon: <PlusOutlined /> },
           { value: "canvas", label: "画布", icon: <BranchesOutlined /> },
-          { value: "inspector", label: selectedNode ? "配置" : "运行", icon: <ExperimentOutlined /> },
+          {
+            value: "inspector",
+            label: selectedNode ? "配置" : "运行",
+            icon: <ExperimentOutlined />,
+          },
         ]}
         style={{ margin: "8px 12px 0" }}
       />
@@ -1780,7 +1813,13 @@ function WorkflowCanvas({
             </WorkflowEdgeActionsContext.Provider>
           </WorkflowBranchActionsContext.Provider>
           {selectedNodes.length > 1 ? (
-            <Flex gap={8} align="center" role="toolbar" aria-label="批量操作" style={{ padding: 8 }}>
+            <Flex
+              gap={8}
+              align="center"
+              role="toolbar"
+              aria-label="批量操作"
+              style={{ padding: 8 }}
+            >
               <Tag>已选 {selectedNodes.length} 个节点</Tag>
               <Button size="small" disabled={running} onClick={duplicateSelected}>
                 复制

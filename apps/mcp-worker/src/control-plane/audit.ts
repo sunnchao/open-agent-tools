@@ -99,4 +99,18 @@ export class AuditService {
   async flush(): Promise<void> {
     await this.#pending;
   }
+
+  async getMany(ids: readonly string[], actor: Actor): Promise<AuditEventRecord[]> {
+    if (actor.role === "operator") {
+      throw new ManagementError("FORBIDDEN", "Audit events require admin or auditor access");
+    }
+    await this.#pending;
+    try {
+      return await this.#repository.getMany(ids);
+    } catch {
+      // 批量读取失败时保留原有逐条尽力读取语义；单条缺失/失败不影响其他事件。
+      const events = await Promise.all(ids.map((id) => this.#repository.get(id).catch(() => null)));
+      return events.filter((event): event is AuditEventRecord => event !== null);
+    }
+  }
 }
