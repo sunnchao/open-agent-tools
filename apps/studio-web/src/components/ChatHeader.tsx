@@ -7,12 +7,15 @@ import {
   PanelLeftCloseOutlined,
   PanelLeftOpenOutlined,
 } from "../lib/icons.js";
+import { ContextMeter } from "./ContextMeter.js";
+import type { ChatCompactReport } from "@open-agent-tools/studio-client";
 
 const { Text } = Typography;
 
 interface ChatHeaderProps {
   title: string;
   messageCount: number;
+  compact: ChatCompactReport | null;
   sessionsOpen: boolean;
   overlayMode: boolean;
   providers: ProviderMetadata[];
@@ -26,6 +29,7 @@ interface ChatHeaderProps {
 export function ChatHeader({
   title,
   messageCount,
+  compact,
   sessionsOpen,
   overlayMode,
   providers,
@@ -83,6 +87,7 @@ export function ChatHeader({
           </span>
         </div>
         <div className="chat-header__actions">
+          <ContextMeter compact={compact} onOpen={onOpenContext} />
           {routingOptions.length > 0 ? (
             <Select
               aria-label="选择模型"

@@ -47,3 +47,4 @@ docs/**
 schema-catalog*.json
 
 output
+exports

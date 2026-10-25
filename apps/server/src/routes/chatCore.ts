@@ -35,6 +35,15 @@ import {
   slimValue,
   type ObservationHandle,
 } from "@open-agent-tools/observability";
+import {
+  buildCompactReport,
+  capText,
+  compactConversation,
+  estimateMessageTokens,
+  estimateTokens,
+  resolveCompactionBudget,
+} from "../compaction.js";
+import type { ChatCompactReport } from "@open-agent-tools/studio-client";
 
 // 启发式评估器无状态，跨请求复用同一控制器；LLM 评估器依赖每请求的 provider，单独构造。
 let cragSingleton: ReturnType<typeof createChatCragController> | null = null;
@@ -60,6 +69,8 @@ export interface ChatStreamParams {
   viewerGroups?: string[];
   resolvedSessionId: string | null | undefined;
   send: (data: Record<string, unknown>) => void;
+  /** 上下文快照回调：预算裁剪完成后触发一次，调用方（如 chat 路由）可记入 done 帧。 */
+  onCompact?: (report: ChatCompactReport) => void;
   span: ObservationHandle;
   schemaSources: SqlQuestionSource[];
   usageSource?: UsageSource;
@@ -111,9 +122,14 @@ async function streamChatTurnCore(
   let awaitingSqlClarification = false;
   const usage = currentUsage();
   params.onUsage?.({ ...usage }, currentUsageModels());
+  // 本轮输入预算（环境变量覆盖，见 .env.example）：RAG/工具/历史三处共用。
+  const budget = resolveCompactionBudget();
+  // RAG 注入段实测值（注入点计量，供 compact 构成拆分；无 RAG 时为 0）。
+  let ragTokens = 0;
+  let ragTruncated = false;
 
   // 历史会话中的 tool 行缺少 OpenAI 要求的 assistant tool_calls 上下文，统一丢弃。
-  const completionMessages: LlmMessage[] = messages
+  let completionMessages: LlmMessage[] = messages
     .filter((message) => message.role !== "tool")
     .map((message) => ({ role: message.role, content: message.content }));
 
@@ -237,14 +253,15 @@ async function streamChatTurnCore(
         })),
       });
       if (result.formatted) {
-        completionMessages.unshift({
-          role: "system",
-          content:
-            "优先基于以下挂载文档回答，并用【来源】标注引用；资料未覆盖时如实说明。\n\n" +
-            result.formatted,
-        });
+        // RAG 注入文本设上限，超限截断并明示；引用数组走 SSE，不占模型上下文。
+        const cappedRag = capText(result.formatted, budget.ragMaxChars, "\n\n[注：引用资料过长，已截断]");
+        const ragContent =
+          "优先基于以下挂载文档回答，并用【来源】标注引用；资料未覆盖时如实说明。\n\n" +
+          cappedRag.text;
+        ragTokens = estimateMessageTokens("system", ragContent);
+        ragTruncated = cappedRag.truncated;
+        completionMessages.unshift({ role: "system", content: ragContent });
       } else if (result.assessment === "incorrect") {
-        // 评估为不相关且纠正失败：不注入噪声上下文，模型将如实说明
         completionMessages.unshift({
           role: "system",
           content:
@@ -287,6 +304,38 @@ async function streamChatTurnCore(
       parameters: tool.definition.function.parameters as Record<string, unknown>,
     })),
   ];
+
+  // 上下文预算强制：RAG/工具定义/历史三者全貌在此处首次齐备，超限从旧往新裁。
+  // system 消息永不裁；原文在 DB 全量保留，这里只决定送什么给模型。
+  const compactStartedAt = Date.now();
+  let completionToolsTokens = 0;
+  for (const tool of completionTools) {
+    completionToolsTokens +=
+      estimateTokens(tool.name) +
+      estimateTokens(tool.description) +
+      estimateTokens(JSON.stringify(tool.parameters));
+  }
+  const compacted = compactConversation(completionMessages, budget, {
+    reservedTokens: completionToolsTokens,
+  });
+  completionMessages = compacted.messages;
+
+  const compactReport = buildCompactReport({
+    compacted,
+    budget,
+    toolsTokens: completionToolsTokens,
+    ragTokens,
+    ragTruncated,
+  });
+  params.onCompact?.(compactReport);
+  // 上下文快照帧：前端 meter 的唯一数据源；IM 等旧客户端忽略未知帧。
+  send({ compact: compactReport });
+  logDuration("chat.compact", compactStartedAt, {
+    estimatedTokens: compacted.estimatedTokens,
+    droppedMessages: compacted.droppedMessages,
+    keptUserTurns: compacted.keptUserTurns,
+    toolsTokens: completionToolsTokens,
+  });
   const sqlByName = new Map(
     schemaSources.map((source) => [sqlQuestionToolName(source.id), source]),
   );
@@ -482,7 +531,8 @@ async function streamChatTurnCore(
       completionMessages.push({
         role: "tool",
         tool_call_id: call.id,
-        content: toolContent,
+        // 回填给模型的工具结果设上限；DB 落库保持全文，证据不丢。
+        content: capText(toolContent, budget.toolResultMaxChars, "…[工具结果过长，已截断]").text,
       });
     }
   }

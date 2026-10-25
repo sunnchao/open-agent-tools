@@ -20,6 +20,7 @@ describe("parseChatSseEvent", () => {
     assert.equal(parseChatSseEvent(""), null);
     assert.equal(parseChatSseEvent("data: not-json"), null);
     assert.equal(parseChatSseEvent('data: {"foo":1}'), null);
+    assert.equal(parseChatSseEvent('data: {"compact":{"estimatedTokens":1}}'), null);
   });
 
   it("parses usage, per-model usage and model frames", () => {

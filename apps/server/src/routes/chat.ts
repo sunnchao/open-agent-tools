@@ -11,6 +11,7 @@ import { runTraced, withTraceAttributes } from "@open-agent-tools/observability"
 import { writeSseData } from "../sse.js";
 import { ChatTurnError, streamChatTurn, usageSnapshot, type ChatTurnUsage } from "./chatCore.js";
 import type { UsageModelDetail } from "../usageTracking.js";
+import type { ChatCompactReport } from "@open-agent-tools/studio-client";
 import { IM_ACTOR_HEADER, IM_CHANNEL_HEADER } from "../im/types.js";
 
 export const chatRouter: ReturnType<typeof Router> = Router();
@@ -103,6 +104,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
   let toolRounds = 0;
   let turnUsage: ChatTurnUsage | null = null;
   let turnModels: UsageModelDetail[] = [];
+  let compactReport: ChatCompactReport | null = null;
 
   const schemaSources: SqlQuestionSource[] =
     bindings.sqlSources.length > 0
@@ -217,6 +219,9 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
                 turnUsage = usage;
                 turnModels = models;
               },
+              onCompact: (report) => {
+                compactReport = report;
+              },
             });
             fullContent = result.fullContent;
             toolRounds = result.toolRounds;
@@ -282,6 +287,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
       status: outcome,
       ...(snapshot ? { usage: snapshot } : {}),
       ...(turnModels.length > 0 ? { models: turnModels } : {}),
+      ...(compactReport ? { compact: compactReport } : {}),
       model: modelInfo,
     });
     res.end();

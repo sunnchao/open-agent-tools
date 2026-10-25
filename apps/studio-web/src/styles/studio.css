@@ -5909,6 +5909,8 @@ select:focus-visible {
 }
 
 .studio-workspace__panel {
+  display: flex;
+  flex-direction: column;
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -6531,6 +6533,8 @@ select:focus-visible {
 }
 
 .settings-workspace {
+  height: 100%;
+  min-height: 0;
   padding: 26px 30px 30px !important;
   overflow-y: auto !important;
 }
@@ -8411,3 +8415,51 @@ select:focus-visible {
 
 
 
+.ctx-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--studio-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.ctx-meter:hover {
+  background: var(--studio-surface-raised);
+}
+.ctx-meter__text {
+  white-space: nowrap;
+}
+.ctx-meter__bar {
+  display: inline-block;
+  width: 48px;
+  height: 4px;
+  overflow: hidden;
+  background: var(--studio-line);
+  border-radius: 999px;
+}
+.ctx-meter__fill {
+  display: block;
+  height: 100%;
+  background: var(--studio-text);
+  opacity: 0.55;
+  border-radius: 999px;
+}
+.ctx-meter--warn .ctx-meter__fill {
+  background: #faad14;
+  opacity: 1;
+}
+.ctx-meter--over {
+  color: #ff4d4f;
+}
+.ctx-meter--over .ctx-meter__fill {
+  background: #ff4d4f;
+  opacity: 1;
+}
+.ctx-meter--idle {
+  color: var(--studio-muted);
+  cursor: default;
+}

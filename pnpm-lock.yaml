@@ -381,6 +381,9 @@ importers:
       '@open-agent-tools/schema-catalog':
         specifier: workspace:*
         version: link:../../packages/schema-catalog
+      '@open-agent-tools/studio-client':
+        specifier: workspace:*
+        version: link:../../packages/studio-client
       '@open-agent-tools/workflow-contracts':
         specifier: workspace:*
         version: link:../../packages/workflow-contracts

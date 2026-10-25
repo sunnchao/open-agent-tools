@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import type { ChatRequestMessage, ChatResourceBinding, Message, ToolCall } from "../types.js";
+import type { ChatCompactReport } from "@open-agent-tools/studio-client";
 import { newId } from "../lib/ids.js";
 import { streamChat } from "../lib/api.js";
 
@@ -15,6 +16,7 @@ interface UseChatStreamArgs {
     toolCallId: string | undefined,
     patch: Partial<ToolCall>,
   ) => void;
+  onCompactReport?: (sessionId: string, report: ChatCompactReport) => void;
 }
 
 export function useChatStream({
@@ -24,6 +26,7 @@ export function useChatStream({
   updateMessage,
   addToolCall,
   updateToolCall,
+  onCompactReport,
 }: UseChatStreamArgs) {
   const [isStreaming, setIsStreaming] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
@@ -97,12 +100,16 @@ export function useChatStream({
               ...(meta?.usage ? { usage: meta.usage } : {}),
             });
             activeRef.current = null;
+            if (meta?.compact) onCompactReport?.(sessionId, meta.compact);
             setIsStreaming(false);
             controllerRef.current = null;
           },
           onUsage: (usage) => {
             // 每轮结束先落一次，用户无需等整轮完成即可看到成本。
             updateMessage(sessionId, assistantId, { usage });
+          },
+          onCompact: (report) => {
+            onCompactReport?.(sessionId, report);
           },
           onError: (error) => {
             // 保留已收到的 partial，错误文案单独展示。
@@ -126,7 +133,7 @@ export function useChatStream({
         },
       );
     },
-    [model, addMessage, appendDelta, updateMessage, addToolCall, updateToolCall],
+    [model, addMessage, appendDelta, updateMessage, addToolCall, updateToolCall, onCompactReport],
   );
 
   const stop = useCallback(() => {

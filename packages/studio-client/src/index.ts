@@ -9,3 +9,4 @@ export * from "./observatory.js";
 export * from "./graph-client.js";
 export * from "./identity.js";
 export * from "./presentation.js";
+export * from "./context-estimate.js";

@@ -11,6 +11,7 @@ import type { ChatRequestMessage, Message } from "../../types.js";
 import { fetchProviders, type ProviderMetadata } from "../providers/api.js";
 import { useResourceCatalog } from "../resources/useResourceCatalog.js";
 import { ChatResourceDrawer } from "./ChatResourceDrawer.js";
+import { useChatContextStates } from "../../hooks/useChatContext.js";
 
 interface ChatWorkspaceProps {
   /** 路由里的会话 ID（`#/chat/<sessionId>`）。 */
@@ -38,6 +39,7 @@ export function ChatWorkspace({ sessionId, onSessionChange }: ChatWorkspaceProps
     updateSessionRouting,
   } = useChatSessions(sessionId);
   const [resourceDrawerOpen, setResourceDrawerOpen] = useState(false);
+  const contextStates = useChatContextStates();
   const resources = useResourceCatalog();
   const composerRef = useRef<ComposerHandle>(null);
   const [input, setInput] = useState("");
@@ -96,6 +98,7 @@ export function ChatWorkspace({ sessionId, onSessionChange }: ChatWorkspaceProps
     updateMessage,
     addToolCall,
     updateToolCall,
+    onCompactReport: (id, report) => contextStates.update(id, report),
   });
 
   const handleSend = useCallback(
@@ -233,6 +236,7 @@ export function ChatWorkspace({ sessionId, onSessionChange }: ChatWorkspaceProps
         <ChatHeader
           title={activeSession.title}
           messageCount={activeSession.messages.length}
+          compact={contextStates.get(activeSession.id)}
           sessionsOpen={sessionPanelOpen}
           overlayMode={compactLayout}
           providers={providers}

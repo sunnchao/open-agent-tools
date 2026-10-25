@@ -7,6 +7,7 @@ import type {
   ToolCall,
   UiBlock,
 } from "../types.js";
+import type { ChatCompactReport } from "@open-agent-tools/studio-client";
 import type { ConditionWarning } from "@open-agent-tools/workflow-contracts";
 import { studioFetch } from "./client.js";
 import { consumeSse, parseHttpError as parseError } from "@open-agent-tools/studio-client";
@@ -14,7 +15,7 @@ export { parseSseBuffer } from "@open-agent-tools/studio-client";
 
 interface StreamCallbacks {
   onDelta: (delta: string) => void;
-  onDone: (meta?: { assistantMessageId?: string; usage?: MessageUsage }) => void;
+  onDone: (meta?: { assistantMessageId?: string; usage?: MessageUsage; compact?: ChatCompactReport }) => void;
   onError: (error: string) => void;
   /** 用户主动停止。与 onError / onDone 互斥，避免停止后被标成 complete。 */
   onStopped?: () => void;
@@ -22,6 +23,8 @@ interface StreamCallbacks {
   onRagCitations?: (citations: RagCitation[]) => void;
   /** token / 工具用量（每轮结束与 done 各下发一次，后者为整轮累计）。 */
   onUsage?: (usage: MessageUsage) => void;
+  /** 上下文快照（compact 帧，先于 done 到达；done 帧亦回显）。 */
+  onCompact?: (report: ChatCompactReport) => void;
   /** 收到一次“函数调用请求”（name + arguments）。 */
   onToolCall?: (call: ToolCall) => void;
   /** 收到“函数调用结果”（result / ui / error）。 */
@@ -122,6 +125,7 @@ export function streamChat(
       }
       let assistantMessageId: string | undefined;
       let usage: MessageUsage | undefined;
+      let compact: ChatCompactReport | undefined;
       let completed = false;
       await consumeSse(res, (data) => {
         if (typeof data.assistantMessageId === "string") {
@@ -139,6 +143,10 @@ export function streamChat(
           usage = data.usage as MessageUsage;
           callbacks.onUsage?.(usage);
         }
+        if (data.compact && typeof data.compact === "object") {
+          compact = data.compact as ChatCompactReport;
+          callbacks.onCompact?.(compact);
+        }
         if (data.tool_result) {
           callbacks.onToolResult?.(
             data.tool_result as Parameters<NonNullable<StreamCallbacks["onToolResult"]>>[0],
@@ -153,7 +161,7 @@ export function streamChat(
           const finalUsage =
             data.usage && typeof data.usage === "object" ? (data.usage as MessageUsage) : usage;
           completed = true;
-          callbacks.onDone({ assistantMessageId, ...(finalUsage ? { usage: finalUsage } : {}) });
+          callbacks.onDone({ assistantMessageId, ...(finalUsage ? { usage: finalUsage } : {}), ...(compact ? { compact } : {}) });
           return true;
         }
         if (data.delta) {

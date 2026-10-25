@@ -26,6 +26,7 @@
     "@open-agent-tools/query-resolver": "workspace:*",
     "@open-agent-tools/rag": "workspace:*",
     "@open-agent-tools/schema-catalog": "workspace:*",
+    "@open-agent-tools/studio-client": "workspace:*",
     "@open-agent-tools/workflow-contracts": "workspace:*",
     "chalk": "catalog:",
     "cors": "catalog:",
