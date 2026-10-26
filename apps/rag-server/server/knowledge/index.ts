@@ -40,12 +40,22 @@ export interface SyncStatus {
   stats: { entities: number; relations: number };
 }
 
+/**
+ * 对账结果。
+ *
+ * `status` 由 `routes/graph.ts` 在返回前追加，因此在这里也是必需的 —— 契约
+ * (`@open-agent-tools/api-contracts/graph` 的 `ReconcileResult`) 与 HTTP 响应保持一致。
+ * 内部 `reconcile()` 只负责填 rebuilt/removed/failed/stats，status 由路由补。
+ */
 export interface ReconcileResult {
   rebuilt: string[];
   removed: string[];
   failed: Array<{ source: string; error: string }>;
   stats: { entities: number; relations: number };
 }
+
+/** 内部实现返回的结构；HTTP 层再补 `status` 形成完整响应。 */
+export type ReconcileOutcome = ReconcileResult;
 
 /**
  * 知识库服务：统一文档入库、图谱派生、CRAG 检索与对账。
@@ -143,7 +153,7 @@ export class KnowledgeBase {
    * 一键对账修复：清理孤儿来源，重建缺失与过期来源，并复活僵死的 building 来源。
    * 同步等待完成（前端点「同步」后需要确定性结果），因此单独走串行循环。
    */
-  async reconcile(): Promise<ReconcileResult> {
+  async reconcile(): Promise<ReconcileOutcome> {
     const status = await this.status();
     const removed: string[] = [];
     const rebuilt: string[] = [];

@@ -8,17 +8,17 @@ import { after, before, describe, it } from "node:test";
 import express from "express";
 import { Rag } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
-import { RagAnalyticsStore } from "./analytics.js";
-import { resolveRagAuth } from "./auth.js";
-import { healthRouter } from "./routes/health.js";
-import { KnowledgeBase } from "./knowledge.js";
+import { RagAnalyticsStore } from "../analytics/index.js";
+import { resolveRagAuth } from "../http/auth.js";
+import { healthRouter } from "../http/health.js";
+import { KnowledgeBase } from "../knowledge/index.js";
 import {
   buildAnswerSystemPrompt,
   buildRetrievalTrace,
   clampGraphHops,
   queryRouter,
   toRetrievalPayload,
-} from "./routes/query.js";
+} from "./query.js";
 
 let server: Server;
 let origin: string;

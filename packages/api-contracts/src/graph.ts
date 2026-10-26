@@ -65,6 +65,9 @@ export interface ReconcileResult {
   rebuilt: string[];
   removed: string[];
   failed: Array<{ source: string; error: string }>;
+  /** 对账后的图谱规模。路由在 `status` 之前返回它，前端用于刷新统计。 */
+  stats: { entities: number; relations: number };
+  /** 对账完成时的同步状态；路由追加在 `reconcile()` 结果之后。 */
   status: SyncStatus;
 }
 

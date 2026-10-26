@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { routeParam } from "../request-validation.js";
+import { routeParam } from "../http/request-validation.js";
 import type { EvalRunner } from "./runner.js";
 import type { EvalStore } from "./store.js";
 import { parseDatasetInput, parseRunOptions } from "./validation.js";

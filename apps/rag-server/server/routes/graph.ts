@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
-import type { KnowledgeBase } from "../knowledge.js";
-import { clampInt, retrievalScope, routeParam } from "../request-validation.js";
+import type { KnowledgeBase } from "../knowledge/index.js";
+import { clampInt, retrievalScope, routeParam } from "../http/request-validation.js";
 
 export function graphRouter(knowledge: KnowledgeBase): Router {
   const { rag, graph } = knowledge;

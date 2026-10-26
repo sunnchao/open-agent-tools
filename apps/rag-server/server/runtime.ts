@@ -8,12 +8,12 @@ import {
   TesseractOcrProvider,
 } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
-import { RagAnalyticsStore } from "./analytics.js";
+import { RagAnalyticsStore } from "./analytics/index.js";
 import type { ServerConfig } from "./config.js";
 import { EvalRunner } from "./eval/runner.js";
 import { EvalStore } from "./eval/store.js";
-import { KnowledgeBase } from "./knowledge.js";
-import { RagUsageStore, trackRagLlm } from "./usage.js";
+import { KnowledgeBase } from "./knowledge/index.js";
+import { RagUsageStore, trackRagLlm } from "./http/usage.js";
 
 export type RagRuntime = ReturnType<typeof createRuntime>;
 

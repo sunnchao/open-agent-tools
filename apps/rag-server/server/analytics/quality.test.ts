@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { RagAnalyticsStore } from "./analytics.js";
+import { RagAnalyticsStore } from "./index.js";
 import { deriveQueryAttribution, isRefusal } from "./quality.js";
 
 function setup() {

@@ -103,14 +103,24 @@ export interface QueryChunkHit extends Omit<RetrievalChannelHit, "rank"> {
   };
 }
 
+/**
+ * 图谱增强结果：子图上下文供 prompt 使用，不参与 citation。
+ *
+ * 这是**唯一**定义。`packages/rag` 从这里 import 后原样导出为 `GraphAugmentation`，
+ * 服务端与前端共用同一份结构，避免两处各自维护。
+ */
 export interface GraphQueryAugmentation {
   enabled: boolean;
   seeds: Array<{ id: string; name: string; type: string }>;
   entities: number;
   relations: number;
   chunkHits: number;
+  /** 子图序列化文本（三元组 + 实体属性），可直接拼入 system prompt。 */
   context: string;
 }
+
+/** `packages/rag` 内部沿用的名字，指向同一份契约。 */
+export type GraphAugmentation = GraphQueryAugmentation;
 
 export interface RetrievalPayload {
   store: string;

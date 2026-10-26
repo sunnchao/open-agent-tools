@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import type { RagAnalyticsStore } from "../analytics.js";
+import type { RagAnalyticsStore } from "../analytics/index.js";
 
 export interface AnalyticsRouterOptions {
   analytics: Pick<RagAnalyticsStore, "overview" | "qualityReport">;

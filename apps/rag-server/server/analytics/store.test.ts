@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { RagAnalyticsStore } from "./analytics.js";
+import { RagAnalyticsStore } from "./index.js";
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "rag-analytics-"));

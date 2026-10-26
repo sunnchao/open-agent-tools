@@ -12,18 +12,27 @@ server/
 ├── config.ts                # 解析配置并校验存储选择，无连接副作用
 ├── runtime.ts               # 装配模型、存储、Rag、KnowledgeGraph 与运营服务
 ├── app.ts                   # 创建 Express 应用，安装中间件与路由
-├── knowledge.ts             # 统一文档生命周期、图谱队列、对账与 CRAG
-├── routes/
+├── http/                    # 横切 HTTP 设施
+│   ├── auth.ts              # runtime / admin 服务间鉴权
+│   ├── request-validation.ts # 来源、分组、元数据与路径参数校验
+│   ├── health.ts            # 部署能力状态（原 routes/health.ts）
+│   └── usage.ts             # LLM 用量 outbox、请求中间件与 trackRagLlm
+├── knowledge/               # 文档与图谱生命周期
+│   ├── index.ts             # KnowledgeBase：入库、抽取队列、对账与 CRAG
+│   └── chunk-settings.ts    # 配置与上传复用的分块设置
+├── analytics/               # 查询运营数据
+│   ├── index.ts             # RagAnalyticsStore 门面（对外类形状不变）
+│   ├── store.ts             # 事件/命中/反馈写入与补列迁移
+│   ├── dashboard.ts         # 运营概览与质量报告
+│   ├── replay.ts            # 单条查询审计回放
+│   ├── quality.ts           # 无答案归因与拒答识别（纯函数）
+│   └── types.ts             # 写入/读取契约
+├── routes/                  # HTTP 路由（全部为纯依赖注入工厂）
 │   ├── documents.ts         # 上传、目录、分块、元数据与级联删除
 │   ├── query.ts             # 混合检索、生成、审计回放与反馈
 │   ├── graph.ts             # 建图、子图浏览、检索与同步管理
-│   ├── analytics.ts         # 运营概览与质量报告
-│   └── health.ts            # 部署能力状态
-├── eval/                    # 评测路由、执行器与评测数据
-├── auth.ts                  # runtime / admin 服务间鉴权
-├── request-validation.ts    # 共用来源、分组、元数据与路径参数校验
-├── chunk-settings.ts        # 配置与上传复用的分块设置
-└── analytics.ts / quality.ts / usage.ts  # 审计、质量归因与用量
+│   └── analytics.ts         # 运营概览与质量报告端点
+└── eval/                    # 评测路由、执行器、指标与评测数据
 ```
 
 ```mermaid

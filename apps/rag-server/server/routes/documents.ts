@@ -2,10 +2,10 @@ import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
 import type { OcrDecision } from "@open-agent-tools/rag";
-import { uploadChunkSettings, type ChunkSettings } from "../chunk-settings.js";
-import type { KnowledgeBase } from "../knowledge.js";
-import { documentMetadataPatch, routeParam } from "../request-validation.js";
-import type { HealthPayloadOptions } from "./health.js";
+import { uploadChunkSettings, type ChunkSettings } from "../knowledge/chunk-settings.js";
+import type { KnowledgeBase } from "../knowledge/index.js";
+import { documentMetadataPatch, routeParam } from "../http/request-validation.js";
+import type { HealthPayloadOptions } from "../http/health.js";
 
 interface DocumentsRouterOptions {
   knowledge: KnowledgeBase;

@@ -1,15 +1,15 @@
 import cors from "cors";
 import express, { type Express } from "express";
-import { resolveRagAuth } from "./auth.js";
+import { resolveRagAuth } from "./http/auth.js";
 import type { ServerConfig } from "./config.js";
 import { evalRouter } from "./eval/router.js";
 import { analyticsRouter } from "./routes/analytics.js";
 import { documentsRouter } from "./routes/documents.js";
 import { graphRouter } from "./routes/graph.js";
-import { healthRouter } from "./routes/health.js";
+import { healthRouter } from "./http/health.js";
 import { queryRouter } from "./routes/query.js";
 import type { RagRuntime } from "./runtime.js";
-import { ragUsageMiddleware } from "./usage.js";
+import { ragUsageMiddleware } from "./http/usage.js";
 
 /** 只组装 HTTP；导入或创建应用不会加载环境、连接外部服务或监听端口。 */
 export function createApp(config: ServerConfig, runtime: RagRuntime): Express {

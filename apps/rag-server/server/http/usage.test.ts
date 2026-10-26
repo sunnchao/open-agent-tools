@@ -8,7 +8,7 @@ import { after, before, describe, it } from "node:test";
 import express from "express";
 import { Rag } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
-import { KnowledgeBase } from "./knowledge.js";
+import { KnowledgeBase } from "../knowledge/index.js";
 import { RagUsageStore, ragUsageMiddleware, trackRagLlm } from "./usage.js";
 
 let dir: string;

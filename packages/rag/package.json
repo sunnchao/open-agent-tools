@@ -39,6 +39,7 @@
     "@langchain/community": "catalog:",
     "@langchain/core": "catalog:",
     "@langchain/textsplitters": "catalog:",
+    "@open-agent-tools/api-contracts": "workspace:*",
     "pg": "catalog:"
   },
   "devDependencies": {

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Rag } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
-import { KnowledgeBase } from "./knowledge.js";
+import { KnowledgeBase } from "./index.js";
 
 const silent = { log: () => {}, error: () => {} };
 

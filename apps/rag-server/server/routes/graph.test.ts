@@ -8,9 +8,9 @@ import { after, before, describe, it } from "node:test";
 import express from "express";
 import { Rag } from "@open-agent-tools/rag";
 import { KnowledgeGraph } from "@open-agent-tools/rag/graph";
-import { graphRouter } from "./routes/graph.js";
-import { KnowledgeBase } from "./knowledge.js";
-import { resolveRagAuth } from "./auth.js";
+import { graphRouter } from "./graph.js";
+import { KnowledgeBase } from "../knowledge/index.js";
+import { resolveRagAuth } from "../http/auth.js";
 
 let server: Server;
 let origin: string;

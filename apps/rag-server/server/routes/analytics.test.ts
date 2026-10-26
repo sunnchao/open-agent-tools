@@ -3,7 +3,7 @@ import { once } from "node:events";
 import type { Server } from "node:http";
 import test from "node:test";
 import express from "express";
-import { parseQualityReportDays, analyticsRouter } from "./routes/analytics.js";
+import { parseQualityReportDays, analyticsRouter } from "./analytics.js";
 
 async function startServer(report: (days: 7 | 30) => unknown) {
   const app = express();

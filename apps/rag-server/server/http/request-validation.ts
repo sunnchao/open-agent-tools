@@ -1,5 +1,5 @@
 import type { DocumentMetadataPatch } from "@open-agent-tools/rag";
-import type { QueryFeedbackRating } from "./analytics.js";
+import type { QueryFeedbackRating } from "../analytics/index.js";
 
 /** Express 已解码路径参数；再次 decodeURIComponent 会破坏含 % 的来源名。 */
 export function routeParam(raw: unknown): string {

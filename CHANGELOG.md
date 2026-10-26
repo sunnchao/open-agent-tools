@@ -9,6 +9,10 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
+- Regroup `apps/rag-server/server` into `http/`, `knowledge/`, `analytics/`, `routes/` and `eval/`. `index.ts`, `app.ts`, `runtime.ts` and `config.ts` stay at the top level because they are startup/assembly/config, and moving them would change the `import.meta.dirname` depth that resolves `.env`, `rag.db` and `rag-graph.db`. No HTTP path, middleware order or runtime behavior changed.
+- Split the 631-line `analytics.ts` into `analytics/{types,store,dashboard,replay}.ts` behind an unchanged `RagAnalyticsStore` facade, so every caller keeps its existing method surface. Each extracted method body was diffed statement-by-statement against the original.
+- Widen the rag-server test glob from `server/*.test.ts` to `server/**/*.test.ts`. The old single-level glob would have silently skipped every test after the regroup (87 tests would have reported 0 with exit code 0).
+
 - Reorganized `apps/server/src` from layer-first (`routes/`, loose root modules) to feature-first: `features/*` (chat, workflow, query, im, apps, resources, providers, connectors, reports, memory, branding, audit, rag, mcpGateway), `platform/*` (db, auth, usage, workspace, export, crypto, trace, config), and `http/*` (health, sse, errors). All 231 source files were moved with history preserved and 646 relative imports rewritten. No HTTP path, middleware order, table schema, or runtime behavior changed.
 - Split workflow code into `features/workflow/runtime` (execution engine) and `features/workflow/library` (drafts, versions, API keys, run history), removing the `workflow/` vs `workflows/` naming ambiguity.
 - Renamed the shared text-to-SQL engine from `oneapiDemo/` to `features/query/text2sql/` and the DTMS vertical from `aiQuery/` to `features/query/dtms/`, so directory names match responsibility.

@@ -52,17 +52,13 @@ export interface GraphChannelHit extends ChannelHit {
   seeds: string[];
 }
 
-/** 图谱增强结果：子图上下文供 prompt 使用，不参与 citation。 */
-export interface GraphAugmentation {
-  enabled: boolean;
-  seeds: Array<{ id: string; name: string; type: string }>;
-  /** 子图序列化文本（三元组 + 实体属性），可直接拼入 system prompt。 */
-  context: string;
-  entities: number;
-  relations: number;
-  /** 回溯到真实分块并进入 RRF 的候选数。 */
-  chunkHits: number;
-}
+/**
+ * 图谱增强结果：子图上下文供 prompt 使用，不参与 citation。
+ *
+ * 结构定义在 `@open-agent-tools/api-contracts/rag`，这里只做名字适配，
+ * 保证服务端、前端与检索库读的是同一份契约。
+ */
+export type { GraphAugmentation } from "@open-agent-tools/api-contracts/rag";
 
 /** 混合检索链路明细：审计与前端“区分向量/关键词/图谱”展示的数据源。 */
 export interface RetrievalDebug {

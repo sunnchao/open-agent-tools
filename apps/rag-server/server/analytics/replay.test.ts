@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RagAnalyticsStore } from "./analytics.js";
+import { RagAnalyticsStore } from "./index.js";
 
 test("审计链路：recordQuery 持久化 trace，getQueryDetail 可回放", () => {
   const dir = mkdtempSync(join(tmpdir(), "rag-trace-"));

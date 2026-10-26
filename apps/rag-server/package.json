@@ -12,7 +12,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "tsx --test server/*.test.ts",
+    "test": "tsx --test \"server/**/*.test.ts\"",
     "test:e2e": "node scripts/e2e-lifecycle.mjs",
     "clean": "rm -rf dist"
   },

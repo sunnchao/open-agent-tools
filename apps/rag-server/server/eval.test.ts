@@ -19,7 +19,7 @@ import type {
   RetrievedChunk,
 } from "./eval/types.js";
 import { parseDatasetInput, parseRunOptions } from "./eval/validation.js";
-import { resolveRagAuth } from "./auth.js";
+import { resolveRagAuth } from "./http/auth.js";
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "rag-eval-"));

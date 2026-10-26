@@ -11,7 +11,7 @@ import {
   parseSemanticThreshold,
   parseSeparators,
   type ChunkSettings,
-} from "./chunk-settings.js";
+} from "./knowledge/chunk-settings.js";
 
 export type StoreKind = "sqlite" | "pgvector" | "elasticsearch";
 export type ServerConfig = ReturnType<typeof readServerConfig>;

@@ -2,7 +2,7 @@ import { config as loadEnv } from "dotenv";
 import { resolve } from "node:path";
 import { initLangfuse } from "@open-agent-tools/observability";
 import { createApp } from "./app.js";
-import { assertRagAuthConfigured } from "./auth.js";
+import { assertRagAuthConfigured } from "./http/auth.js";
 import { readServerConfig } from "./config.js";
 import { createRuntime } from "./runtime.js";
 

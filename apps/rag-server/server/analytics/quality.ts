@@ -84,7 +84,8 @@ export interface QualityReportDaily {
 export type QualityReportAttribution = Record<QueryEventAttribution, number>;
 
 export interface QualityReport {
-  periodDays: number;
+  /** 只接受产品约定的 7/30 天窗口，与 `api-contracts/rag` 的 `QualityReport` 一致。 */
+  periodDays: 7 | 30;
   generatedAt: string;
   totals: {
     queries: number;

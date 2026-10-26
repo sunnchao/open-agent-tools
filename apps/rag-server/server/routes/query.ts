@@ -4,10 +4,14 @@ import type { ChatOpenAI } from "@langchain/openai";
 import type { ChannelHit, GraphAugmentation, Rag } from "@open-agent-tools/rag";
 import type { CragController } from "@open-agent-tools/rag/crag";
 import { runTraced, withTraceAttributes } from "@open-agent-tools/observability";
-import { RagAnalyticsStore, type QueryEventInput, type RetrievalTrace } from "../analytics.js";
+import {
+  RagAnalyticsStore,
+  type QueryEventInput,
+  type RetrievalTrace,
+} from "../analytics/index.js";
 import type { StoreKind } from "../config.js";
-import { clampInt, queryFeedback, retrievalScope, routeParam } from "../request-validation.js";
-import { trackRagLlm } from "../usage.js";
+import { clampInt, queryFeedback, retrievalScope, routeParam } from "../http/request-validation.js";
+import { trackRagLlm } from "../http/usage.js";
 
 const DEFAULT_GRAPH_HOPS = 2;
 const MAX_GRAPH_HOPS = 4;
