@@ -5,8 +5,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
-import { closeDb } from "./db.js";
-import { createProvider, setDefaultProvider } from "./providers/store.js";
+import { closeDb } from "./platform/db.js";
+import { createProvider, setDefaultProvider } from "./features/providers/store.js";
 
 let server: Server;
 let origin: string;

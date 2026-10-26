@@ -94,6 +94,9 @@ apps/
     src/control-plane/    Control Plane 源码与管理 API 入口 index.ts
     drizzle/              PostgreSQL 迁移 SQL 与 journal
   server/                  Agent Server：对话、工作流、问数、IM 渠道与设置
+    src/features/          按业务域组织（chat / workflow / query / im / apps / ...）
+    src/platform/          跨域基础设施（db / auth / usage / workspace / trace）
+    src/http/              HTTP 通用件（health / sse / errors）
   studio-web/              统一 React 工作台
   rag-server/              RAG HTTP API 与 SQLite 数据
 packages/
