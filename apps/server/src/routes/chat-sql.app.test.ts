@@ -174,7 +174,8 @@ before(async () => {
     "complete",
     async (request: Parameters<LlmClient["complete"]>[0]) => {
       const prompt = request.messages.map((message) => message.content).join("\n");
-      sqlPrompts.push(prompt);
+      // 记忆抽取也走 llm.complete；这里只统计 SQL 问数提示，避免把抽取算进来。
+      if (!prompt.includes("你是记忆抽取器")) sqlPrompts.push(prompt);
       return {
         tokenUsage: { inputTokens: 50, outputTokens: 10 },
         content: JSON.stringify({

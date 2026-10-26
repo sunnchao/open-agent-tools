@@ -112,7 +112,15 @@ async function fetchIdentityStatus(): Promise<IdentityStatus> {
 }
 
 type SettingsSection =
-  "providers" | "schema-sources" | "mcp-gateway" | "im" | "apps" | "identity" | "branding";
+  | "providers"
+  | "schema-sources"
+  | "mcp-gateway"
+  | "im"
+  | "apps"
+  | "workspace"
+  | "usage"
+  | "identity"
+  | "branding";
 
 const sectionCopy: Record<SettingsSection, { title: string; subtitle: string }> = {
   providers: { title: "模型 Provider", subtitle: "集中管理模型服务、接入协议和路由。" },
@@ -123,9 +131,11 @@ const sectionCopy: Record<SettingsSection, { title: string; subtitle: string }> 
   },
   im: { title: "IM 渠道", subtitle: "接入飞书 / 钉钉机器人，配置知识库绑定与群聊响应规则。" },
   apps: { title: "员工入口", subtitle: "把知识库与工具打包成独立问答入口，员工打开链接即可使用。" },
+  workspace: { title: "工作空间", subtitle: "按部门 / 项目归集会话与用量；切换后需刷新页面生效。" },
+  usage: { title: "用量统计", subtitle: "查看近 30 天模型与工具调用消耗，支持导出明细。" },
   identity: {
     title: "企业身份",
-    subtitle: "查看 OIDC / LDAP 网关接入状态；密钥只在服务端配置。",
+    subtitle: "配置部署访问 Token，查看 OIDC / LDAP 网关接入状态；密钥只在服务端配置。",
   },
   branding: {
     title: "品牌与渠道",
@@ -139,8 +149,10 @@ const sectionMenuItems = [
   { key: "mcp-gateway", label: "03 · MCP Gateway" },
   { key: "im", label: "04 · IM 渠道" },
   { key: "apps", label: "05 · 员工入口" },
-  { key: "identity", label: "06 · 企业身份" },
-  { key: "branding", label: "07 · 品牌与渠道" },
+  { key: "workspace", label: "06 · 工作空间" },
+  { key: "usage", label: "07 · 用量统计" },
+  { key: "identity", label: "08 · 企业身份" },
+  { key: "branding", label: "09 · 品牌与渠道" },
 ];
 
 function initialSection(): SettingsSection {
@@ -149,6 +161,8 @@ function initialSection(): SettingsSection {
     stored === "mcp-gateway" ||
     stored === "im" ||
     stored === "apps" ||
+    stored === "workspace" ||
+    stored === "usage" ||
     stored === "identity" ||
     stored === "branding"
     ? stored
@@ -627,37 +641,30 @@ export function SettingsWorkspace() {
               {error ? <Alert type="error" showIcon message={error} /> : null}
               <Card
                 size="small"
-                title="部署访问 Token"
-                extra={<Tag>{studioToken ? "已配置" : "未配置"}</Tag>}
+                title="服务商目录"
+                extra={<Tag>{providers.length}</Tag>}
+                styles={{ body: { padding: 0 } }}
               >
-                <Form layout="vertical">
-                  <Form.Item label="主服务 Token" extra="与服务端 STUDIO_API_TOKEN 保持一致；本地未配置时留空">
-                    <Input.Password
-                      aria-label="主服务 Token"
-                      value={studioToken}
-                      onChange={(event) => {
-                        setStudioToken(event.target.value);
-                        setTokenSaved(false);
-                      }}
-                      autoComplete="new-password"
-                      placeholder="部署环境配置后在此填写"
-                    />
-                  </Form.Item>
-                  <Flex gap={8} align="center">
-                    <Button
-                      icon={<SaveOutlined />}
-                      onClick={() => {
-                        setStudioApiToken(studioToken);
-                        setTokenSaved(true);
-                        void refresh();
-                      }}
-                    >
-                      保存并验证
-                    </Button>
-                    {tokenSaved ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>已保存，Provider 列表已刷新验证。</Typography.Text> : null}
-                  </Flex>
-                </Form>
+                <Table<ProviderMetadata>
+                  size="small"
+                  rowKey="id"
+                  columns={providerColumns}
+                  dataSource={providers}
+                  loading={loading}
+                  pagination={providers.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
+                  scroll={{ x: "max-content" }}
+                  locale={{ emptyText: <Empty description={loading ? "正在加载 Provider..." : "还没有 Provider"} /> }}
+                />
               </Card>
+            </Flex>
+          ) : activeSection === "schema-sources" ? (
+            <SchemaSourcesSection />
+          ) : activeSection === "mcp-gateway" ? (
+            <McpGatewaySection />
+          ) : activeSection === "apps" ? (
+            <PublishedAppsSection />
+          ) : activeSection === "workspace" ? (
+            <Flex vertical gap={12}>
               <Card
                 size="small"
                 title="工作空间归属"
@@ -712,6 +719,9 @@ export function SettingsWorkspace() {
                   </Form.Item>
                 </Form>
               </Card>
+            </Flex>
+          ) : activeSection === "usage" ? (
+            <Flex vertical gap={12}>
               <Card
                 size="small"
                 title="近 30 天用量"
@@ -783,37 +793,49 @@ export function SettingsWorkspace() {
                   <Empty description="用量数据暂不可用（可能未配置部署 Token 或接口未就绪）。" />
                 )}
               </Card>
+            </Flex>
+          ) : activeSection === "identity" ? (
+            <Flex vertical gap={12}>
               <Card
                 size="small"
-                title="服务商目录"
-                extra={<Tag>{providers.length}</Tag>}
-                styles={{ body: { padding: 0 } }}
+                title="部署访问 Token"
+                extra={<Tag>{studioToken ? "已配置" : "未配置"}</Tag>}
               >
-                <Table<ProviderMetadata>
-                  size="small"
-                  rowKey="id"
-                  columns={providerColumns}
-                  dataSource={providers}
-                  loading={loading}
-                  pagination={providers.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
-                  scroll={{ x: "max-content" }}
-                  locale={{ emptyText: <Empty description={loading ? "正在加载 Provider..." : "还没有 Provider"} /> }}
-                />
+                <Form layout="vertical">
+                  <Form.Item label="主服务 Token" extra="与服务端 STUDIO_API_TOKEN 保持一致；本地未配置时留空">
+                    <Input.Password
+                      aria-label="主服务 Token"
+                      value={studioToken}
+                      onChange={(event) => {
+                        setStudioToken(event.target.value);
+                        setTokenSaved(false);
+                      }}
+                      autoComplete="new-password"
+                      placeholder="部署环境配置后在此填写"
+                    />
+                  </Form.Item>
+                  <Flex gap={8} align="center">
+                    <Button
+                      icon={<SaveOutlined />}
+                      onClick={() => {
+                        setStudioApiToken(studioToken);
+                        setTokenSaved(true);
+                        void refreshIdentity();
+                      }}
+                    >
+                      保存并验证
+                    </Button>
+                    {tokenSaved ? <Typography.Text type="secondary" style={{ fontSize: 12 }}>已保存，身份状态已刷新验证。</Typography.Text> : null}
+                  </Flex>
+                </Form>
               </Card>
-            </Flex>
-          ) : activeSection === "schema-sources" ? (
-            <SchemaSourcesSection />
-          ) : activeSection === "mcp-gateway" ? (
-            <McpGatewaySection />
-          ) : activeSection === "apps" ? (
-            <PublishedAppsSection />
-          ) : activeSection === "identity" ? (
             <IdentitySection
               status={identityStatus}
               loading={identityLoading}
               error={identityError}
               onRefresh={() => void refreshIdentity()}
             />
+            </Flex>
           ) : activeSection === "branding" ? (
             <BrandingSection />
           ) : (

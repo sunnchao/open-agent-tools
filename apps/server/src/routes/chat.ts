@@ -12,7 +12,16 @@ import { writeSseData } from "../sse.js";
 import { ChatTurnError, streamChatTurn, usageSnapshot, type ChatTurnUsage } from "./chatCore.js";
 import type { UsageModelDetail } from "../usageTracking.js";
 import type { ChatCompactReport } from "@open-agent-tools/studio-client";
-import { IM_ACTOR_HEADER, IM_CHANNEL_HEADER } from "../im/types.js";
+import { IM_ACTOR_HEADER, IM_CHANNEL_HEADER, IM_CHAT_TYPE_HEADER } from "../im/types.js";
+import { loadSessionHistory } from "../memory/history.js";
+import { buildMemoryContext } from "../memory/recall.js";
+import { parseImSessionScope } from "../memory/scope.js";
+import { extractAndStoreMemory } from "../memory/extract.js";
+
+/** 历史回读默认窗口（可被 CHAT_KEEP_RECENT_TURNS 之外的独立上限覆盖）。 */
+const CHAT_HISTORY_TURNS = Number.parseInt(process.env.CHAT_HISTORY_TURNS ?? "", 10) || 20;
+const CHAT_HISTORY_MAX_CHARS =
+  Number.parseInt(process.env.CHAT_HISTORY_MAX_CHARS ?? "", 10) || 12_000;
 
 export const chatRouter: ReturnType<typeof Router> = Router();
 
@@ -105,6 +114,9 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
   let turnUsage: ChatTurnUsage | null = null;
   let turnModels: UsageModelDetail[] = [];
   let compactReport: ChatCompactReport | null = null;
+  // 抽取所需的上下文：在 finally 里异步使用，必须活过 if 块。
+  let imRequestScope = false;
+  let lastUserQueryForMemory: string | null = null;
 
   const schemaSources: SqlQuestionSource[] =
     bindings.sqlSources.length > 0
@@ -131,6 +143,7 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
     // **归属标注**（把会话标成 source='im' 并记录 actor/channel），不是强安全隔离。
     const imChannel = req.header(IM_CHANNEL_HEADER)?.trim();
     const imActor = req.header(IM_ACTOR_HEADER)?.trim();
+    const imChatType = req.header(IM_CHAT_TYPE_HEADER)?.trim();
     const isImRequest = Boolean(imChannel);
     ensureSession(resolvedSessionId, workspaceId, {
       ...(isImRequest
@@ -142,11 +155,17 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
         : {}),
     });
 
-    if (userMessage?.content) {
+    // 用户轮必须落库：IM 只发当前一句话且不带 userMessage，此前用户问句会丢失。
+    // 以 messages 里最后一条 user 为准（客户端可能已经带了自己的历史）。
+    const lastUserContent = [...messages].reverse().find((m) => m.role === "user")?.content;
+    const userContent = userMessage?.content ?? lastUserContent;
+    lastUserQueryForMemory = userContent ?? null;
+    imRequestScope = isImRequest;
+    if (userContent?.trim()) {
       addMessage(resolvedSessionId, {
-        id: userMessage.id,
+        ...(userMessage?.id ? { id: userMessage.id } : {}),
         role: "user",
-        content: userMessage.content,
+        content: userContent,
         status: "complete",
       });
     }
@@ -157,6 +176,42 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
       status: "streaming",
     });
     assistantMessageId = assistant?.id ?? null;
+
+    // 历史与记忆都以 DB 为准：客户端只用来定位本轮问题，避免长会话重复膨胀。
+    const history = loadSessionHistory(resolvedSessionId, {
+      turns: CHAT_HISTORY_TURNS,
+      maxChars: CHAT_HISTORY_MAX_CHARS,
+      ...(userMessage?.id ? { excludeMessageIds: [userMessage.id] } : {}),
+    });
+    const imScope = isImRequest
+      ? parseImSessionScope(resolvedSessionId, imActor, imChatType ?? null)
+      : null;
+    const memoryContext = buildMemoryContext({
+      workspaceId,
+      ...(imScope?.personKey ? { personId: imScope.personKey } : {}),
+      query: userContent ?? "",
+    });
+
+    // 顺序：系统提示 → 记忆 → 摘要 → 历史窗口 → 本轮问题。
+    const rebuilt: Array<{ role: Role; content: string }> = [];
+    if (memoryContext) rebuilt.push({ role: "system", content: memoryContext });
+    if (history.summary) {
+      rebuilt.push({
+        role: "system",
+        content: `## 会话摘要（早前对话）\n${history.summary}`,
+      });
+    }
+    rebuilt.push(...history.turns);
+    if (userContent?.trim()) rebuilt.push({ role: "user", content: userContent });
+    messages.splice(0, messages.length, ...rebuilt);
+
+    logTrace("chat.history", {
+      sessionId: resolvedSessionId,
+      turns: history.turns.length,
+      omittedTurns: history.omittedTurns,
+      hasSummary: Boolean(history.summary),
+      memoryChars: memoryContext.length,
+    });
   }
 
   res.writeHead(200, {
@@ -282,6 +337,37 @@ chatRouter.post("/api/chat", async (req: Request, res: Response) => {
       status: outcome,
       totalTokens: snapshot?.totalTokens ?? 0,
     });
+
+    // 事实抽取：仅成功轮、异步执行，失败只记 trace，绝不影响回复。
+    if (
+      resolvedSessionId &&
+      outcome === "complete" &&
+      fullContent.trim() &&
+      process.env.MEMORY_EXTRACT !== "off"
+    ) {
+      const scope = imRequestScope
+        ? parseImSessionScope(
+            resolvedSessionId,
+            req.header(IM_ACTOR_HEADER)?.trim(),
+            req.header(IM_CHAT_TYPE_HEADER)?.trim(),
+          )
+        : null;
+      void extractAndStoreMemory({
+        llm,
+        model: selectedModel,
+        workspaceId,
+        sessionId: resolvedSessionId,
+        channelId: req.header(IM_CHANNEL_HEADER)?.trim() ?? null,
+        personId: scope?.personKey ?? null,
+        groupScopeKey: scope?.groupKey ?? null,
+        question: lastUserQueryForMemory ?? "",
+        answer: fullContent,
+        actor: req.header(IM_ACTOR_HEADER)?.trim() ?? null,
+      }).catch((error: unknown) => {
+        logTrace("memory.extract_error", { error: truncate(String(error), 200) }, "warn");
+      });
+    }
+
     send({
       done: true,
       status: outcome,
