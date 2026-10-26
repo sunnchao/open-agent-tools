@@ -3,9 +3,14 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { closeDb, openDb } from "../db.js";
 import {
   forgetMemory,
+  getMemoryStats,
   getSummary,
   isForgottenSession,
+  listFactHistory,
   listFacts,
+  listFactsPage,
+  listRecentFacts,
+  locateForgetTargets,
   recordLineage,
   resolvePersonId,
   searchFacts,
@@ -34,6 +39,13 @@ function write(overrides: Partial<Parameters<typeof writeFact>[0]> = {}) {
     confidence: "high",
     ...overrides,
   });
+}
+
+/** 写入并立即审核通过：多数用例只关心“已生效”的事实。 */
+function accepted(overrides: Partial<Parameters<typeof writeFact>[0]> = {}) {
+  const fact = write(overrides);
+  setFactReview(fact.id, true);
+  return fact;
 }
 
 describe("fact lifecycle", () => {
@@ -121,6 +133,81 @@ describe("person links", () => {
     });
     assert.equal(first, again);
     assert.notEqual(first, other);
+  });
+});
+
+describe("fact paging and history", () => {
+  it("pages with a total that ignores limit/offset", () => {
+    for (let index = 0; index < 5; index += 1) {
+      write({ slug: `p-${index}`, body: `分页事实${index}` });
+    }
+    const first = listFactsPage({ workspaceId: "w1", limit: 2, offset: 0, includeUnreviewed: true });
+    assert.equal(first.facts.length, 2);
+    assert.equal(first.total, 5);
+
+    const second = listFactsPage({ workspaceId: "w1", limit: 2, offset: 2, includeUnreviewed: true });
+    assert.equal(second.facts.length, 2);
+    assert.equal(second.total, 5);
+    assert.notEqual(first.facts[0]!.id, second.facts[0]!.id);
+  });
+
+  it("filters by keyword across slug, subject and body", () => {
+    write({ slug: "lang", body: "偏好 TypeScript" });
+    write({ slug: "timezone", body: "时区是东八区" });
+    const page = listFactsPage({ workspaceId: "w1", keyword: "typescript", includeUnreviewed: true });
+    assert.equal(page.total, 1);
+    assert.equal(page.facts[0]!.slug, "lang");
+  });
+
+  it("returns every version of the same fact, oldest first", () => {
+    const first = write({ body: "旧值", recordedAt: 1_000 });
+    const second = write({ body: "新值", recordedAt: 2_000 });
+    const history = listFactHistory(second);
+    assert.deepEqual(history.map((fact) => fact.body), ["旧值", "新值"]);
+    assert.equal(history[0]!.id, first.id);
+    assert.equal(history[1]!.status, "active");
+  });
+});
+
+describe("stats and forget preview", () => {
+  it("aggregates counts by status, kind and scope", () => {
+    const first = accepted({ slug: "a", kind: "preference" });
+    accepted({ slug: "b", kind: "constraint" });
+    write({ slug: "pending", body: "待审核事实" });
+    write({ slug: "c", body: "旧值" });
+    write({ slug: "c", body: "新值" });
+    assert.ok(first.id);
+
+    const stats = getMemoryStats("w1");
+    assert.equal(stats.active, 4);
+    assert.equal(stats.unreviewed, 3);
+    assert.equal(stats.superseded, 1);
+    assert.equal(stats.persons, 1);
+    assert.equal(stats.groups, 0);
+    assert.equal(stats.byKind.preference, 3);
+    assert.equal(stats.byKind.constraint, 1);
+    assert.equal(stats.byKind.fact, undefined);
+    assert.equal(stats.byScope.person, 4);
+  });
+
+  it("previews exactly what forget removes", () => {
+    const fact = write();
+    recordLineage({ factId: fact.id, sessionId: "s9" });
+    upsertSummary({ sessionId: "s9", summary: "摘要", coveredThroughPosition: 2 });
+
+    const preview = locateForgetTargets({ workspaceId: "w1", sessionId: "s9" });
+    const result = forgetMemory({ workspaceId: "w1", sessionId: "s9" });
+    assert.equal(preview.factIds.length, result.facts);
+    assert.equal(preview.summaries, result.summaries);
+    assert.equal(preview.lineage, result.lineage);
+  });
+
+  it("lists recent facts newest first including unreviewed", () => {
+    write({ slug: "old", recordedAt: 1_000 });
+    write({ slug: "new", recordedAt: 5_000 });
+    const recent = listRecentFacts("w1", 10);
+    assert.equal(recent[0]!.slug, "new");
+    assert.equal(recent.length, 2);
   });
 });
 

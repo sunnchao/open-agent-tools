@@ -1,0 +1,15 @@
+/* 记忆工作区局部样式：只补 Studio 通用样式缺失的部分。 */
+.memory-workspace .ant-table-cell {
+  vertical-align: top;
+}
+
+/* 统计卡与分布卡等宽铺排，窄屏自动换行。 */
+.memory-stat {
+  min-width: 132px;
+  flex: 1 1 132px;
+}
+
+.memory-dist {
+  min-width: 260px;
+  flex: 1 1 260px;
+}

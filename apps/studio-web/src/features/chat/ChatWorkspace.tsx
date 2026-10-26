@@ -244,6 +244,9 @@ export function ChatWorkspace({ sessionId, onSessionChange }: ChatWorkspaceProps
           model={activeSession.model}
           onToggleSessions={() => setSessionPanelOpen((open) => !open)}
           onOpenContext={() => setResourceDrawerOpen(true)}
+          onOpenMemory={() => {
+            window.location.hash = "#/memory";
+          }}
           onRoutingChange={(routing) => updateSessionRouting(activeSession.id, routing)}
         />
         <MessageList

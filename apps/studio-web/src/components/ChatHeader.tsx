@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button, Select, Tooltip, Typography } from "antd";
 import type { ProviderMetadata } from "../features/providers/api.js";
 import {
+  BrainOutlined,
   LayersOutlined,
   MoreOutlined,
   PanelLeftCloseOutlined,
@@ -23,6 +24,8 @@ interface ChatHeaderProps {
   model?: string;
   onToggleSessions: () => void;
   onOpenContext: () => void;
+  /** 打开记忆工作区（长期事实审核/追溯）。 */
+  onOpenMemory: () => void;
   onRoutingChange: (routing: { providerId?: string; model?: string }) => void;
 }
 
@@ -37,6 +40,7 @@ export function ChatHeader({
   model,
   onToggleSessions,
   onOpenContext,
+  onOpenMemory,
   onRoutingChange,
 }: ChatHeaderProps) {
   const [tooltipOpen, setTooltipOpen] = useState(false);
@@ -106,6 +110,15 @@ export function ChatHeader({
               }}
             />
           ) : null}
+          <Tooltip title="长期记忆">
+            <Button
+              type="text"
+              className="chat-header__action"
+              icon={<BrainOutlined />}
+              aria-label="打开长期记忆"
+              onClick={onOpenMemory}
+            />
+          </Tooltip>
           <Tooltip title="对话上下文">
             <Button
               type="text"

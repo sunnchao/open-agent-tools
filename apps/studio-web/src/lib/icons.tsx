@@ -15,6 +15,7 @@ import {
   Bell,
   Webhook,
   Boxes,
+  Brain,
   Building2,
   Check,
   CheckCircle2,
@@ -167,6 +168,7 @@ export const BuildOutlined = adapt(Hammer);
 export const HistoryOutlined = adapt(History);
 export const Building2Outlined = adapt(Building2);
 export const BarChartOutlined = adapt(BarChart3);
+export const BrainOutlined = adapt(Brain);
 export const TagOutlined = adapt(Tag);
 export const PauseCircleOutlined = adapt(CirclePause);
 export const PlayCircleOutlined = adapt(CirclePlay);

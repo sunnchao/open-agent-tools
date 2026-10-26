@@ -153,14 +153,23 @@ export function getFact(id: string): MemoryFact | null {
   return row ? toFact(row) : null;
 }
 
-export function listFacts(options: {
+export interface FactPage {
+  facts: MemoryFact[];
+  /** 满足筛选条件的总条数（不受 limit/offset 限制）。 */
+  total: number;
+}
+
+export function listFactsPage(options: {
   workspaceId: string;
   scopeKind?: MemoryScopeKind;
   scopeKey?: string;
   status?: "active" | "superseded" | "all";
   includeUnreviewed?: boolean;
+  /** 关键词：走 FTS + 子串兜底，与召回同一套匹配规则。 */
+  keyword?: string;
   limit?: number;
-}): MemoryFact[] {
+  offset?: number;
+}): FactPage {
   const conditions = ["workspace_id = ?"];
   const params: Array<string | number> = [options.workspaceId];
   if (options.scopeKind) {
@@ -176,13 +185,58 @@ export function listFacts(options: {
     params.push(options.status ?? "active");
   }
   if (!options.includeUnreviewed) conditions.push("unreviewed = 0");
+  const keyword = options.keyword?.trim().toLowerCase();
+  if (keyword) {
+    conditions.push("(lower(slug) LIKE ? OR lower(subject) LIKE ? OR lower(body) LIKE ?)");
+    const pattern = `%${keyword.replace(/[%_]/g, "")}%`;
+    params.push(pattern, pattern, pattern);
+  }
+  const where = conditions.join(" AND ");
+  const database = openDb();
+  const total = Number(
+    (database.prepare(`SELECT COUNT(*) AS n FROM im_memory_facts WHERE ${where}`).get(...params) as {
+      n: number;
+    }).n,
+  );
+  const rows = database
+    .prepare(
+      `SELECT ${FACT_COLUMNS} FROM im_memory_facts WHERE ${where}
+       ORDER BY updated_at DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, options.limit ?? 200, options.offset ?? 0) as unknown as FactRow[];
+  return { facts: rows.map(toFact), total };
+}
+
+/**
+ * 版本链：同一 (workspace, scope, subject, slug) 的全部版本，按记录时间升序。
+ * supersede 只做逻辑失效，因此这里能看到“以前是怎样”。
+ */
+export function listFactHistory(fact: MemoryFact): MemoryFact[] {
   const rows = openDb()
     .prepare(
-      `SELECT ${FACT_COLUMNS} FROM im_memory_facts WHERE ${conditions.join(" AND ")}
-       ORDER BY updated_at DESC LIMIT ?`,
+      `SELECT ${FACT_COLUMNS} FROM im_memory_facts
+       WHERE workspace_id = ? AND scope_kind = ? AND scope_key = ? AND subject = ? AND slug = ?
+       ORDER BY recorded_at ASC`,
     )
-    .all(...params, options.limit ?? 200) as unknown as FactRow[];
+    .all(
+      fact.workspaceId,
+      fact.scopeKind,
+      fact.scopeKey,
+      fact.subject,
+      fact.slug,
+    ) as unknown as FactRow[];
   return rows.map(toFact);
+}
+
+export function listFacts(options: {
+  workspaceId: string;
+  scopeKind?: MemoryScopeKind;
+  scopeKey?: string;
+  status?: "active" | "superseded" | "all";
+  includeUnreviewed?: boolean;
+  limit?: number;
+}): MemoryFact[] {
+  return listFactsPage({ ...options, offset: 0 }).facts;
 }
 
 export function setFactReview(id: string, accepted: boolean): MemoryFact | null {
@@ -348,16 +402,22 @@ export function resolvePersonId(input: {
   return personId;
 }
 
+export interface ForgetTargets {
+  factIds: string[];
+  /** 将随会话一起删除的摘要条数（仅 sessionId 选择器）。 */
+  summaries: number;
+  /** 将随会话一起删除的血缘行数（仅 sessionId 选择器）。 */
+  lineage: number;
+}
+
 /**
- * 遗忘：按会话或按人清除事实、摘要、FTS 与血缘，并登记 forgotten 防再摄入。
- * 返回各表删除计数，便于审计与 UI 展示。
+ * 定位遗忘目标。预览与实际删除共用同一函数，避免“看到的”和“删掉的”不一致。
  */
-export function forgetMemory(input: {
+export function locateForgetTargets(input: {
   workspaceId: string;
   sessionId?: string;
   personId?: string;
-  reason?: string;
-}): { facts: number; summaries: number; lineage: number } {
+}): ForgetTargets {
   const database = openDb();
   const factIds = new Set<string>();
   if (input.sessionId) {
@@ -375,27 +435,123 @@ export function forgetMemory(input: {
       .all(input.workspaceId, input.personId) as Array<{ id: string }>;
     for (const row of rows) factIds.add(row.id);
   }
+  const count = (sql: string, ...params: Array<string>): number =>
+    Number((database.prepare(sql).get(...params) as { n: number }).n);
+  return {
+    factIds: [...factIds],
+    summaries: input.sessionId
+      ? count(`SELECT COUNT(*) AS n FROM im_memory_summaries WHERE session_id = ?`, input.sessionId)
+      : 0,
+    lineage: input.sessionId
+      ? count(`SELECT COUNT(*) AS n FROM im_memory_lineage WHERE session_id = ?`, input.sessionId)
+      : 0,
+  };
+}
+
+export interface MemoryStats {
+  active: number;
+  unreviewed: number;
+  superseded: number;
+  expired: number;
+  persons: number;
+  groups: number;
+  byKind: Record<string, number>;
+  byScope: Record<string, number>;
+}
+
+/** 总览统计：一次事务内多条 COUNT，不把全表拉到应用层。 */
+export function getMemoryStats(workspaceId: string): MemoryStats {
+  const database = openDb();
+  const scalar = (sql: string, ...params: Array<string>): number =>
+    Number((database.prepare(sql).get(...params) as { n: number }).n);
+  const byKind: Record<string, number> = {};
+  for (const row of database
+    .prepare(
+      `SELECT kind, COUNT(*) AS n FROM im_memory_facts
+       WHERE workspace_id = ? AND status = 'active' GROUP BY kind`,
+    )
+    .all(workspaceId) as Array<{ kind: string; n: number }>) {
+    byKind[row.kind] = Number(row.n);
+  }
+  const byScope: Record<string, number> = {};
+  for (const row of database
+    .prepare(
+      `SELECT scope_kind AS scope, COUNT(*) AS n FROM im_memory_facts
+       WHERE workspace_id = ? AND status = 'active' GROUP BY scope_kind`,
+    )
+    .all(workspaceId) as Array<{ scope: string; n: number }>) {
+    byScope[row.scope] = Number(row.n);
+  }
+  return {
+    active: scalar(
+      `SELECT COUNT(*) AS n FROM im_memory_facts WHERE workspace_id = ? AND status = 'active'`,
+      workspaceId,
+    ),
+    unreviewed: scalar(
+      `SELECT COUNT(*) AS n FROM im_memory_facts WHERE workspace_id = ? AND unreviewed = 1`,
+      workspaceId,
+    ),
+    superseded: scalar(
+      `SELECT COUNT(*) AS n FROM im_memory_facts WHERE workspace_id = ? AND status = 'superseded'`,
+      workspaceId,
+    ),
+    expired: scalar(
+      `SELECT COUNT(*) AS n FROM im_memory_facts WHERE workspace_id = ? AND status = 'expired'`,
+      workspaceId,
+    ),
+    persons: scalar(
+      `SELECT COUNT(DISTINCT scope_key) AS n FROM im_memory_facts
+       WHERE workspace_id = ? AND scope_kind = 'person' AND status = 'active'`,
+      workspaceId,
+    ),
+    groups: scalar(
+      `SELECT COUNT(DISTINCT scope_key) AS n FROM im_memory_facts
+       WHERE workspace_id = ? AND scope_kind = 'group' AND status = 'active'`,
+      workspaceId,
+    ),
+    byKind,
+    byScope,
+  };
+}
+
+/** 近期变更流：按更新时间倒序，供总览展示“谁 · 什么 · 何时”。 */
+export function listRecentFacts(workspaceId: string, limit = 20): MemoryFact[] {
+  return listFactsPage({
+    workspaceId,
+    status: "all",
+    includeUnreviewed: true,
+    limit,
+    offset: 0,
+  }).facts;
+}
+
+/**
+ * 遗忘：按会话或按人清除事实、摘要、FTS 与血缘，并登记 forgotten 防再摄入。
+ * 返回各表删除计数，便于审计与 UI 展示。
+ */
+export function forgetMemory(input: {
+  workspaceId: string;
+  sessionId?: string;
+  personId?: string;
+  reason?: string;
+}): { facts: number; summaries: number; lineage: number } {
+  const database = openDb();
+  const targets = locateForgetTargets(input);
 
   database.exec("BEGIN IMMEDIATE");
   try {
-    for (const id of factIds) {
+    // 先按会话清血缘：否则按 factId 删完后，按 sessionId 统计会变成 0，
+    // 与预览数字对不上（预览用的是事务前的定位结果）。
+    if (input.sessionId) {
+      database.prepare(`DELETE FROM im_memory_lineage WHERE session_id = ?`).run(input.sessionId);
+      database.prepare(`DELETE FROM im_memory_summaries WHERE session_id = ?`).run(input.sessionId);
+    }
+    for (const id of targets.factIds) {
       database.prepare(`DELETE FROM im_memory_facts_fts WHERE fact_id = ?`).run(id);
       database.prepare(`DELETE FROM im_memory_facts WHERE id = ?`).run(id);
       database.prepare(`DELETE FROM im_memory_lineage WHERE fact_id = ?`).run(id);
     }
-    let summaries = 0;
-    let lineage = 0;
     if (input.sessionId) {
-      summaries = Number(
-        database
-          .prepare(`DELETE FROM im_memory_summaries WHERE session_id = ?`)
-          .run(input.sessionId).changes,
-      );
-      lineage = Number(
-        database
-          .prepare(`DELETE FROM im_memory_lineage WHERE session_id = ?`)
-          .run(input.sessionId).changes,
-      );
       database
         .prepare(
           `INSERT INTO im_forgotten_sessions (workspace_id, session_id, forgotten_at, reason)
@@ -406,7 +562,12 @@ export function forgetMemory(input: {
         .run(input.workspaceId, input.sessionId, Date.now(), input.reason ?? "manual");
     }
     database.exec("COMMIT");
-    return { facts: factIds.size, summaries, lineage };
+    // 计数一律取事务前的定位结果，保证与预览逐项相等。
+    return {
+      facts: targets.factIds.length,
+      summaries: targets.summaries,
+      lineage: targets.lineage,
+    };
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;

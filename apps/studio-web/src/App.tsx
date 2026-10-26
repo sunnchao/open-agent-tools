@@ -9,6 +9,7 @@ import {
   AuditOutlined,
   BarChartOutlined,
   BellOutlined,
+  BrainOutlined,
   BranchesOutlined,
   CommandOutlined,
   DatabaseOutlined,
@@ -24,6 +25,11 @@ import "./styles/studio.css";
 const ChatWorkspace = lazy(() =>
   import("./features/chat/ChatWorkspace.js").then((module) => ({
     default: module.ChatWorkspace,
+  })),
+);
+const MemoryWorkspace = lazy(() =>
+  import("./features/memory/MemoryWorkspace.js").then((module) => ({
+    default: module.MemoryWorkspace,
   })),
 );
 const McpWorkspace = lazy(() =>
@@ -69,6 +75,7 @@ const ReportsWorkspace = lazy(() =>
 
 type Workspace =
   | "chat"
+  | "memory"
   | "mcp"
   | "rag"
   | "connectors"
@@ -86,6 +93,7 @@ const workspaces: Array<{
   icon: React.ReactNode;
 }> = [
   { id: "chat", label: "对话", en: "Chat", badge: "AI", icon: <MessageOutlined /> },
+  { id: "memory", label: "记忆", en: "Memory", badge: "MEM", icon: <BrainOutlined /> },
   { id: "mcp", label: "MCP", en: "Toolkit", badge: "API", icon: <ApiOutlined /> },
   { id: "rag", label: "知识库", en: "Knowledge", badge: "RAG+KG", icon: <DatabaseOutlined /> },
   {
@@ -438,6 +446,14 @@ export function App({ branding = DEFAULT_BRANDING }: { branding?: BrandingConfig
                 <ChatWorkspace
                   sessionId={route.segments[0] ?? null}
                   onSessionChange={handleChatSessionChange}
+                />
+              ) : null}
+              {workspace === "memory" ? (
+                <MemoryWorkspace
+                  factId={route.segments[1] ?? null}
+                  onOpenFact={(id) =>
+                    navigateTo("memory", id ? ["fact", id] : [])
+                  }
                 />
               ) : null}
               {workspace === "mcp" ? <McpWorkspace /> : null}
